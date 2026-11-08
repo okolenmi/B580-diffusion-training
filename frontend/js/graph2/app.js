@@ -11,7 +11,9 @@ import { subscribeEvents } from "../lib/events.js";
 import { log, logError } from "../lib/log.js";
 import { Canvas } from "./canvas.js";
 import { DraftSaver, readDraft } from "./draft.js";
-import { GraphDoc } from "./doc.js";
+import { FileIO } from "./file_io.js";
+import { arrange, isUnplaced } from "./layout.js";
+import { GraphDoc, endpointHost } from "./doc.js";
 import { Inspector } from "./inspector.js";
 import { Library } from "./library.js";
 import { Palette, QuickAdd, compatibleClasses } from "./palette.js";
@@ -149,6 +151,21 @@ async function boot() {
     doc,
     { onNote: log, onLoaded: () => canvas.fit() },
   );
+
+  const arrangeAll = () => {
+    const wires = [...doc.edges, ...doc.eventEdges].map((e) => [endpointHost(e.from_node), endpointHost(e.to_node)]);
+    const place = arrange([...doc.nodes.keys()], wires, (uid) => canvas.views.get(uid)?.el.offsetHeight || 240);
+    for (const [uid, at] of place) doc.moveNode(uid, at.x, at.y);
+    canvas.fit();
+  };
+  // A graph from the command line has no positions: place it when it arrives.
+  doc.on("reset", () => { if (isUnplaced([...doc.nodes.values()])) arrangeAll(); });
+  new FileIO(
+    { importBtn: el("file-import"), exportBtn: el("file-export"), input: el("file-input"), nameInput: el("lib-name") },
+    doc,
+    { onNote: log, onLoaded: () => canvas.fit() },
+  );
+  el("btn-arrange").addEventListener("click", arrangeAll);
 
   // A class with dynamic ports is asked for its shape when it appears, when the document is replaced,
   // and (debounced) when one of the params it depends on changes.

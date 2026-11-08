@@ -28,6 +28,12 @@ def get_catalog(refresh: bool = Query(False), services: ApplicationServices = De
     return services.graphs.node_catalog.execute(refresh=refresh)
 
 
+@router.get("/catalog/models/{scope}")
+def list_model_files(scope: str, services: ApplicationServices = Depends(get_services)) -> dict:
+    """The files a model node's picker offers for one scope (``checkpoints``, ``loras``, ...)."""
+    return {"scope": scope, "files": services.graphs.model_files.execute(scope)}
+
+
 @router.post("/graphs/nodes/{class_name}/resolve", responses={404: {"description": "unknown node class"}})
 def resolve_node(class_name: str, body: ResolveIn, services: ApplicationServices = Depends(get_services)) -> dict:
     return services.graphs.resolve_node.execute(class_name, body.params, body.settings)

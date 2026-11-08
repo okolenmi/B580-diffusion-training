@@ -111,6 +111,7 @@ from backend.application.use_cases import (
     MakeAssetFolder,
     GetNodeCatalog,
     NodeDiagnostics,
+    ListModelFiles,
     ResolveNode,
     PreviewGraphMemory,
     ReadConfigRaw,
@@ -965,6 +966,7 @@ def build_services(
         graphs=GraphServices(
             node_catalog=GetNodeCatalog(catalog=contract_catalog),
             resolve_node=ResolveNode(catalog=contract_catalog),
+            model_files=ListModelFiles(catalog=contract_catalog),
             preview_memory=PreviewGraphMemory(
                 memory_ledger=memory_ledger,
                 peak_source=fixture_peak_source.observed,

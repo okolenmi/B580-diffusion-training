@@ -1,4 +1,4 @@
-"""GetNodeCatalog and ResolveNode -- the editor's read side over the node tree (contracts ``catalog.md`` and ``resolve.md``)."""
+"""GetNodeCatalog, ListModelFiles and ResolveNode -- the editor's read side over the node tree (contracts ``catalog.md`` and ``resolve.md``)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,14 @@ class GetNodeCatalog:
 
     def execute(self, *, refresh: bool = False) -> dict:
         return self._catalog.catalog(refresh=refresh)
+
+
+class ListModelFiles:
+    def __init__(self, catalog: NodeCatalog) -> None:
+        self._catalog = catalog
+
+    def execute(self, scope: str) -> list[str]:
+        return self._catalog.model_files(scope)
 
 
 class ResolveNode:

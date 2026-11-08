@@ -42,4 +42,9 @@ check(status == 200 and shape["state"] == "ready", "a node with a static shape r
 status, _, body = asgi_request(app, "/api/v1/graphs/nodes/NoSuchNode/resolve", method="POST", json_body={"params": {}})
 check(status == 404 and body["error"]["code"] == "node_class_not_found", "an unknown class is a 404 in the one error envelope")
 
+status, _, files = asgi_request(app, "/api/v1/catalog/models/checkpoints")
+check(status == 200 and files["scope"] == "checkpoints" and isinstance(files["files"], list), "the model picker lists a scope's files")
+status, _, files = asgi_request(app, "/api/v1/catalog/models/nowhere")
+check(status == 200 and files["files"] == [], "a scope the machine lacks lists nothing")
+
 finish()

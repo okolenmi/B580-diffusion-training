@@ -47,7 +47,7 @@ from .list_graph_executions import ListGraphExecutions
 from .list_graphs import ListGraphs
 from .make_asset_folder import MakeAssetFolder
 from .node_diagnostics import NodeDiagnostics
-from .node_shapes import GetNodeCatalog, ResolveNode
+from .node_shapes import GetNodeCatalog, ListModelFiles, ResolveNode
 from .read_config_raw import ReadConfigRaw
 from .read_dataset_file import ReadDatasetFile
 from .reconcile_dataset_tasks import ReconcileDatasetTasks
@@ -111,6 +111,7 @@ __all__ = [
     "NodeDiagnostics",
     "GetNodeCatalog",
     "ResolveNode",
+    "ListModelFiles",
     "ReadConfigRaw",
     "ReadDatasetFile",
     "ReconcileDatasetTasks",

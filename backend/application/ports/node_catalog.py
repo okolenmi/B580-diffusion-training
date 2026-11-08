@@ -24,6 +24,11 @@ class NodeCatalog(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def model_files(self, scope: str) -> list[str]:
+        """Relative names of the model files under one scope's folders (the file picker of a model node); empty for a scope the machine lacks."""
+        raise NotImplementedError
+
+    @abstractmethod
     def diagnostics(self, class_name: str, params: dict) -> dict[str, list[str]]:
         """One node's advice about the params being edited, keyed by input name (``Node.diagnostics``).
 

@@ -47,4 +47,17 @@ check(status == 200 and files["scope"] == "checkpoints" and isinstance(files["fi
 status, _, files = asgi_request(app, "/api/v1/catalog/models/nowhere")
 check(status == 200 and files["files"] == [], "a scope the machine lacks lists nothing")
 
+
+status, _, listed = asgi_request(app, "/api/v1/starters")
+starter = listed["starters"][0] if status == 200 and listed["starters"] else {}
+check(starter.get("name") == "sdxl-lora" and {"model", "dataset", "output"} <= {o["name"] for o in starter.get("options", []) if o["required"]}, "a starter lists its options, three of them required")
+status, _, built = asgi_request(app, "/api/v1/starters/sdxl-lora", method="POST", json_body={"options": {"model": "m.safetensors", "dataset": "d", "output": "/tmp/o", "steps": 50, "rank": 8}})
+check(status == 200 and built["format"] == 3 and any(n["class_name"] == "DiffusionTrainerNode" for n in built["nodes"]), "a starter builds a format-3 document")
+status, _, _ = asgi_request(app, "/api/v1/starters/sdxl-lora", method="POST", json_body={"options": {"steps": 50}})
+check(status == 422, "missing model, dataset and output are refused")
+status, _, _ = asgi_request(app, "/api/v1/starters/sdxl-lora", method="POST", json_body={"options": {"model": "m", "dataset": "d", "output": "o", "warp": 1}})
+check(status == 422, "an option the form does not have is refused")
+status, _, _ = asgi_request(app, "/api/v1/starters/none", method="POST", json_body={"options": {}})
+check(status == 404, "an unknown starter is a 404")
+
 finish()

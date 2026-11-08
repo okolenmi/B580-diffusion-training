@@ -147,6 +147,8 @@ from backend.infrastructure.dataset_tasks import SqliteDatasetTasks
 from backend.infrastructure.events.callback_event_bus import CallbackEventBus
 from backend.infrastructure.file_asset_store import FileSystemAssetStore
 from backend.infrastructure.graph.contract_catalog import ContractNodeCatalog
+from backend.infrastructure.graph.next_starters import NextStarters
+from backend.application.use_cases.starters import BuildStarter, ListStarters
 from backend.infrastructure.graph.memory_fields import memory_fields_resolver
 from backend.domain.graph import GraphDefinition
 from backend.infrastructure.graph.runtime import ContractGraphRuntime
@@ -967,6 +969,8 @@ def build_services(
             node_catalog=GetNodeCatalog(catalog=contract_catalog),
             resolve_node=ResolveNode(catalog=contract_catalog),
             model_files=ListModelFiles(catalog=contract_catalog),
+            list_starters=ListStarters(starters=NextStarters()),
+            build_starter=BuildStarter(starters=NextStarters()),
             preview_memory=PreviewGraphMemory(
                 memory_ledger=memory_ledger,
                 peak_source=fixture_peak_source.observed,

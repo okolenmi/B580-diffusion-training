@@ -64,6 +64,7 @@ from .use_cases.list_graphs import ListGraphs
 from .use_cases.make_asset_folder import MakeAssetFolder
 from .use_cases.node_diagnostics import NodeDiagnostics
 from .use_cases.node_shapes import GetNodeCatalog, ListModelFiles, ResolveNode
+from .use_cases.starters import BuildStarter, ListStarters
 from .use_cases.read_config_raw import ReadConfigRaw
 from .use_cases.read_dataset_file import ReadDatasetFile
 from .use_cases.reconcile_dataset_tasks import ReconcileDatasetTasks
@@ -171,6 +172,8 @@ class GraphServices:
     node_catalog: GetNodeCatalog
     resolve_node: ResolveNode
     model_files: ListModelFiles
+    list_starters: ListStarters
+    build_starter: BuildStarter
     diagnostics: NodeDiagnostics
     validate: ValidateGraph
     #: MEM-07: what a run of this graph would need, before it runs.

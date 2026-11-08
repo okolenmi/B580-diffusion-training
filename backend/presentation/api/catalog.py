@@ -1,6 +1,7 @@
 """Node catalog endpoints -- what the editor learns about node classes (rework/contracts/catalog.md, resolve.md).
 
 * ``GET /api/v1/catalog`` -- nodes, settings, handle types, families, load errors; ``refresh=true`` scans the node packages again;
+* ``GET /api/v1/starters`` and ``POST /api/v1/starters/{name}`` -- ready-made graph documents (``starters.md``);
 * ``POST /api/v1/graphs/nodes/{class_name}/resolve`` -- one node's shape for the params being edited (404 unknown class; bad
   params are an ``error`` state in a 200 answer).
 
@@ -32,6 +33,21 @@ def get_catalog(refresh: bool = Query(False), services: ApplicationServices = De
 def list_model_files(scope: str, services: ApplicationServices = Depends(get_services)) -> dict:
     """The files a model node's picker offers for one scope (``checkpoints``, ``loras``, ...)."""
     return {"scope": scope, "files": services.graphs.model_files.execute(scope)}
+
+
+class StarterIn(BaseModel):
+    options: dict = Field(default_factory=dict)
+
+
+@router.get("/starters")
+def list_starters(services: ApplicationServices = Depends(get_services)) -> dict:
+    return {"starters": services.graphs.list_starters.execute()}
+
+
+@router.post("/starters/{name}", responses={404: {"description": "unknown starter"}, 422: {"description": "missing or refused option"}})
+def build_starter(name: str, body: StarterIn, services: ApplicationServices = Depends(get_services)) -> dict:
+    """The format-3 document of the starter for these options; the editor loads it as it is."""
+    return services.graphs.build_starter.execute(name, body.options)
 
 
 @router.post("/graphs/nodes/{class_name}/resolve", responses={404: {"description": "unknown node class"}})

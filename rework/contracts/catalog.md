@@ -73,3 +73,10 @@ Rules:
 5. A port with `picker: "model_file"` lists the files of the node's `scope` value (`checkpoints`, `loras`, ...) from
    `GET /api/v1/catalog/models/{scope}` -> `{scope, files: [relative names]}`; `picker: "dataset"` lists the dataset names
    of `GET /api/v1/assets/dataset`.
+
+## Starters
+
+`GET /api/v1/starters` -> `{ "starters": [{ name, label, doc, options: [{ name, label, type, default, doc, required, advanced, choices?, picker?, scope? }] }] }`.
+`POST /api/v1/starters/{name}` with `{ "options": {...} }` -> the format-3 document, to be loaded as it is (nodes carry no layout: the editor arranges them).
+404 `starter_not_found`; 422 `invalid_query` for a missing required option, an option the form does not have, or a value the starter refuses.
+The form holds only the choices made before a graph exists; every other option is a parameter of a node.

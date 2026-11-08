@@ -286,6 +286,13 @@ class NodeClassNotFoundError(ApplicationError):
     status_code = 404
 
 
+class StarterNotFoundError(ApplicationError):
+    """No starter graph answers to the requested name."""
+
+    code = "starter_not_found"
+    status_code = 404
+
+
 class NodeDiagnosticsError(ApplicationError):
     """The node's own diagnostics() raised for these params.
 

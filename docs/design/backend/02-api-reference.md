@@ -70,7 +70,7 @@ the other processes it talks to. That is this document.
   | `dataset_exists`, `dataset_not_migrated`, `dataset_task_active`, `dataset_task_not_active`, `dataset_directory_conflict` | 409 | datasets (`dataset_directory_conflict`: the name is taken by a directory that is not a dataset — it is never deleted, docs 07 F-10) |
   | `dataset_task_launch_failed` | 500 | datasets |
   | `graph_invalid` | 422 | graphs |
-  | `graph_not_found`, `graph_execution_not_found`, `node_class_not_found` | 404 | graphs |
+  | `graph_not_found`, `graph_execution_not_found`, `node_class_not_found`, `starter_not_found` | 404 | graphs |
   | `graph_execution_active`, `graph_execution_not_active` | 409 | graphs |
   | `template_invalid` | 422 | templates (the page document's shape, or a value submitted to run one that the page does not expose / that is fed by another node — `details` lists every problem) |
   | `template_not_found` | 404 | templates |

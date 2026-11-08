@@ -106,17 +106,15 @@ class ArmTraining:
             self._read(log_path.read_text(encoding="utf8", errors="replace").splitlines(), steps, probes)
             say(f"  {self.arm.name}: continuing an earlier session ({len(steps)} steps in its log)")
         started = time.monotonic()
+        stop_at = self.arm.cut + 1 if self.arm.cut and not resumed else 0  # the line of the step after the cut proves the cut step's state was written
         with log_path.open("a" if resumed else "w", encoding="utf8") as log:
             log.write(("\n--- resumed ---\n" if resumed else "") + "$ " + " ".join(command) + "\n")
-            process = subprocess.Popen(command, cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf8", errors="replace")
-            for line in process.stdout:
-                log.write(line)
-                log.flush()
-                found = self._read([line.rstrip("\n")], steps, probes)
-                if found is not None and found % WINDOW == 0:
-                    window = [steps[i][0] for i in range(found - WINDOW + 1, found + 1) if i in steps]
-                    say(f"  {self.arm.name}: mean loss of steps {found - WINDOW + 1}-{found} {LossWindows.mean(window):.4f}")
-            process.wait()
+            process = self._launch(command, log, steps, probes, say, stop_at)
+            if stop_at and process.returncode != 0 and max(steps, default=0) >= stop_at:
+                say(f"  {self.arm.name}: stopped after step {stop_at}; starting again from the saved state")
+                log.write("\n--- resumed ---\n$ " + " ".join(command) + "\n")
+                process = self._launch(command, log, steps, probes, say, 0)
+                resumed = True
         windows = LossWindows()
         for step in sorted(steps):
             windows.add(steps[step][0], steps[step][1])
@@ -127,6 +125,22 @@ class ArmTraining:
         if process.returncode == 0 and lora:
             shutil.rmtree(output / "resume", ignore_errors=True)  # the result is safe; the states were only for a cut
         return result
+
+    def _launch(self, command: list[str], log, steps: dict, probes: dict, say: Callable[[str], None], stop_at: int) -> subprocess.Popen:
+        """Runs the training command to its end, or, with ``stop_at``, kills it as soon as that step's line appears."""
+        process = subprocess.Popen(command, cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf8", errors="replace")
+        for line in process.stdout:
+            log.write(line)
+            log.flush()
+            found = self._read([line.rstrip("\n")], steps, probes)
+            if found is not None and found % WINDOW == 0:
+                window = [steps[i][0] for i in range(found - WINDOW + 1, found + 1) if i in steps]
+                say(f"  {self.arm.name}: mean loss of steps {found - WINDOW + 1}-{found} {LossWindows.mean(window):.4f}")
+            if stop_at and found == stop_at:
+                process.kill()
+                break
+        process.wait()
+        return process
 
     @staticmethod
     def _read(lines: list[str], steps: dict, probes: dict) -> int | None:

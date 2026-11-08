@@ -22,9 +22,10 @@ class Arm:
     reuse: str = ""  # the name of an earlier arm whose trained adapter this arm renders instead of training its own
     lora: str = ""  # an adapter file made earlier: rendered as it is, nothing is trained
     ema: float = 0.0  # with `reuse`: render the averaged copy of that arm's adapter (the trainer's `--ema` width) instead of the adapter itself
+    cut: int = 0  # the lab stops this arm's training process once that step's state is on disk and starts it again, as a power cut would (a multiple of resume_every)
 
     def describe(self) -> str:
-        parts = [*self.args, *([f"adapter {Path(self.lora).name}"] if self.lora else []), *([f"reuse {self.reuse}"] if self.reuse else []), *([f"ema {self.ema:g}"] if self.ema else []), *([f"eps_scale {self.eps_scale:g}"] if self.eps_scale != 1.0 else [])]
+        parts = [*self.args, *([f"adapter {Path(self.lora).name}"] if self.lora else []), *([f"reuse {self.reuse}"] if self.reuse else []), *([f"cut after step {self.cut}"] if self.cut else []), *([f"ema {self.ema:g}"] if self.ema else []), *([f"eps_scale {self.eps_scale:g}"] if self.eps_scale != 1.0 else [])]
         return " ".join(parts) or "-"
 
 
@@ -60,7 +61,7 @@ class Experiment:
     @staticmethod
     def expand(arms: list[dict], product: list[list[dict]]) -> tuple[Arm, ...]:
         """The listed arms, then every combination of one choice from each group of ``product`` (names joined with ``+``, arguments in order)."""
-        out = [Arm(a["name"], tuple(a.get("args", ())), a.get("note", ""), float(a.get("eps_scale", 1.0)), a.get("reuse", ""), a.get("lora", ""), float(a.get("ema", 0.0))) for a in arms]
+        out = [Arm(a["name"], tuple(a.get("args", ())), a.get("note", ""), float(a.get("eps_scale", 1.0)), a.get("reuse", ""), a.get("lora", ""), float(a.get("ema", 0.0)), int(a.get("cut", 0))) for a in arms]
         if product:
             for combo in itertools.product(*product):
                 out.append(Arm("+".join(c["name"] for c in combo), tuple(x for c in combo for x in c.get("args", ())), " ".join(c.get("note", "") for c in combo).strip()))
@@ -70,6 +71,8 @@ class Experiment:
         for i, arm in enumerate(out):
             if arm.eps_scale <= 0 or (arm.reuse and (arm.reuse not in names[:i] or arm.args or arm.lora)) or (arm.lora and arm.args) or arm.ema < 0 or (arm.ema and not arm.reuse):
                 raise ValueError(f"arm {arm.name!r}: eps_scale must be positive, `reuse` names an earlier arm and comes without training arguments, and `ema` needs `reuse`")
+            if arm.cut and (arm.cut < 0 or arm.reuse or arm.lora):
+                raise ValueError(f"arm {arm.name!r}: `cut` is a step number of an arm that trains")
         return tuple(out)
 
     @staticmethod

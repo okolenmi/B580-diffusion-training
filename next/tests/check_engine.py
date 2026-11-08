@@ -14,6 +14,8 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+import zlib
+
 import torch
 
 from ..data.batcher import Batcher
@@ -55,7 +57,7 @@ class FakeKit:
     def encode_text(self, prompts):
         out = []
         for p in prompts:
-            g = torch.Generator().manual_seed(abs(hash(p)) % 2**31)
+            g = torch.Generator().manual_seed(zlib.crc32(p.encode()))
             out.append(TextEncoding(torch.randn(1, 5, 48, generator=g), torch.randn(1, 40, generator=g)))
         return out
 

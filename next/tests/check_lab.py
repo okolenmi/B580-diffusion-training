@@ -205,6 +205,64 @@ def experiment_run() -> None:
         check(archive.exists() and archive.stat().st_size < 25e6, "the share archive is made and small")
 
 
+def cut_arm() -> None:
+    """An arm with ``cut`` is stopped by the lab once the next step's line appears and started again in a second process; the report's adapter table says whether the weights are the same."""
+    import tempfile
+    from pathlib import Path
+
+    import torch
+    from safetensors.torch import save_file
+
+    from ..lab.experiment import Arm, Experiment
+    from ..lab.report import Report
+    from ..lab.runner import ArmTraining
+
+    script = (
+        "import sys, pathlib\n"
+        "out, first = pathlib.Path(sys.argv[1]), int(sys.argv[2])\n"
+        "(out / 'resume').mkdir(parents=True, exist_ok=True)\n"
+        "for s in range(first, 41):\n"
+        "    print(f'step {s}/40  loss {1.0 / s:.4f}  100 ms  by t low 0.5 mid 0.4 high 0.3', flush=True)\n"
+        "    if s == 20 and first == 1:\n"
+        "        (out / 'resume' / 'resume_00000020.json').write_text('{}')\n"
+        "    if s == 21 and first == 1:\n"
+        "        import time\n"
+        "        time.sleep(30)\n"
+        "(out / 'lora_step000040.safetensors').write_bytes(b'x')\n")
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        (tmp / "fake.py").write_text(script)
+        starts = iter([1, 21])
+
+        def command(arm, output, python):
+            return [python, str(tmp / "fake.py"), str(output), str(next(starts))]
+
+        said: list[str] = []
+        done = ArmTraining(None, Arm("c", cut=20), tmp / "arm", command=command).run(said.append)
+        log = (tmp / "arm" / "train.log").read_text()
+        check(done.returncode == 0 and done.steps == 40 and log.count("--- resumed ---") == 1 and any("starting again" in line for line in said),
+              f"the lab stops the arm after step 21's line and starts it again ({done.steps} steps, log {log.count('$ ')} sessions)")
+        check(not (tmp / "arm" / "train" / "resume").exists(), "the states are removed when the second session finishes")
+    try:
+        Experiment.expand([{"name": "x", "reuse": "y", "cut": 5}], [])
+    except ValueError:
+        check(True, "a cut needs an arm that trains")
+    else:
+        check(False, "a cut needs an arm that trains")
+
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        experiment = Experiment.from_dict({"name": "e", "models": "/m", "datasets": "/d", "dataset": "s", "checkpoint": "c", "output": str(root),
+                                           "arms": [{"name": "a"}, {"name": "b", "cut": 5}, {"name": "c", "cut": 5}], "grid": {}})
+        weights = {"adapter/x/lora_A": torch.ones(2, 2), "adapter/x/lora_B": torch.zeros(2, 2)}
+        for name, nudge in (("a", 0.0), ("b", 0.0), ("c", 0.5)):
+            folder = root / "e" / name / "train"
+            folder.mkdir(parents=True)
+            save_file({k: v + nudge for k, v in weights.items()}, str(folder / "lora_step000040.safetensors"), metadata={"step": "40", "rank": "2", "alpha": "2", "scheme": "lora"})
+        rows = Report(experiment).adapter_table()
+        check(rows[2].endswith("| yes |") and rows[3].endswith("| no |"), f"the adapter table tells an identical adapter from a changed one ({rows[2:]})")
+
+
 def interrupted_arm() -> None:
     """An arm whose first session was cut continues in a second one: the console is appended to, repeated steps count once, the states are removed when it succeeds."""
     import json
@@ -396,4 +454,4 @@ def ema_arms() -> None:
 
 
 if __name__ == "__main__":
-    run(samplers, rendering, tiled_decoding, detail_metrics, timestep_loss, experiment_run, interrupted_arm, lab_warnings, adapter_reuse, setup_file, ema_arms)
+    run(samplers, rendering, tiled_decoding, detail_metrics, timestep_loss, experiment_run, interrupted_arm, cut_arm, lab_warnings, adapter_reuse, setup_file, ema_arms)

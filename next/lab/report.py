@@ -15,6 +15,8 @@ from ..accept.visual import ImageSheet
 from .experiment import Experiment
 from .metrics import Change, Detail, mean
 from .render import Recipe
+from .runner import newest_adapter
+from ..families.general.adapters.schemes import read_adapter
 
 DETAIL_FIELDS = ("slope", "fine_share", "sharpness")
 CHANGE_FIELDS = ("coarse", "fine", "fine_to_coarse", "top_band_ratio", "sharpness_ratio")
@@ -81,6 +83,24 @@ class Report:
             rows.append(f"| {arm.name} | `{arm.describe()}` | {train.get('steps', '-')} | {train.get('seconds', 0) / 60:.1f} | {recent.get('loss', float('nan')):.4f} | "
                         f"{recent.get('low', float('nan')):.4f} / {recent.get('mid', float('nan')):.4f} / {recent.get('high', float('nan')):.4f} |" if train
                         else f"| {arm.name} | `{arm.describe()}` | - | - | - | - |")
+        return rows
+
+    def adapter_table(self) -> list[str]:
+        """Weight-by-weight distance of every trained arm's adapter from the first arm's: what a cut arm must not change."""
+        found = [(a.name, newest_adapter(self.root / a.name / "train")) for a in self.experiment.arms if not a.reuse and not a.lora]
+        found = [(name, path) for name, path in found if path]
+        if len(found) < 2:
+            return []
+        first, rows = read_adapter(str(found[0][1]))[0], ["| arm | largest weight difference | relative to the adapter's size | identical files |", "|---|---|---|---|"]
+        for name, path in found[1:]:
+            other = read_adapter(str(path))[0]
+            if other.keys() != first.keys():
+                rows.append(f"| {name} | different layers | - | no |")
+                continue
+            diff = max(float((first[k].float() - other[k].float()).abs().max()) for k in first)
+            size = sum(float(first[k].float().pow(2).sum()) for k in first) ** 0.5
+            gap = sum(float((first[k].float() - other[k].float()).pow(2).sum()) for k in first) ** 0.5
+            rows.append(f"| {name} | {diff:.3e} | {gap / size:.3e} | {'yes' if diff == 0 else 'no'} |")
         return rows
 
     def detail_table(self, strength: float) -> list[str]:
@@ -174,6 +194,8 @@ class Report:
         loss = self.loss_table()
         if loss:
             lines += ["## Loss by timestep: adapter loss / base loss", "", "Below 1: better than the base model at that timestep; above 1: worse. `train` images were in the training set; `holdout` images were not.", "", *loss, ""]
+        if any(a.cut for a in exp.arms) and (adapters := self.adapter_table()):
+            lines += [f"## Adapters against `{exp.arms[0].name}`", "", "Zero means the two runs ended with exactly the same weights.", "", *adapters, ""]
         probe = self.probe_table()
         if probe:
             lines += ["## Probe at the end of training (training images)", "", *probe, ""]

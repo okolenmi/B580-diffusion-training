@@ -195,6 +195,15 @@ export class Canvas {
     this.select([]);
   }
 
+  /** Shows a run result on a node (`state`: done | error | running | idle, with a short text). */
+  setNodeStatus(uid, state, text = "", title = "") {
+    this.views.get(uid)?.setStatus({ state, text, title });
+  }
+
+  clearStatuses() {
+    for (const view of this.views.values()) view.setStatus({ state: "idle" });
+  }
+
   /** Selects a node and brings it to the middle of the view (an issue chip names it). */
   focusNode(uid) {
     const node = this.doc.nodes.get(uid);

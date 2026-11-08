@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Graph Editor (new)</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/ui/css/style.css">
+    <link rel="stylesheet" href="/ui/css/shell.css">
+    <link rel="stylesheet" href="/ui/css/editor.css">
+    <link rel="stylesheet" href="/ui/css/graph2.css">
+</head>
+<body class="editor-body">
+    <aside class="ed-palette">
+        <div class="ed-topbar">
+            <a class="btn btn-secondary btn-small" href="/">&#8592; System tracker</a>
+            <span class="ed-brand">Graph Editor</span>
+        </div>
+        <input id="palette-search" class="cfg-input ed-search" type="search" placeholder="Search nodes&hellip;">
+        <div id="palette" class="ed-scroll"><div class="console-line info">Loading catalog&hellip;</div></div>
+        <div class="ed-section">
+            <div class="ed-section-head"><span>Library</span></div>
+            <div class="ed-save-row">
+                <input id="lib-name" class="cfg-input" type="text" placeholder="graph name" maxlength="120">
+                <button id="lib-save" class="btn btn-small">Save</button>
+            </div>
+            <div id="lib-list" class="ed-list"><div class="console-line info">Loading&hellip;</div></div>
+        </div>
+    </aside>
+
+    <main class="ed-main">
+        <div class="ed-toolbar">
+            <button id="btn-toggle-left" class="btn btn-secondary btn-small" aria-pressed="true" title="Show or hide the node palette">Nodes</button>
+            <button id="btn-validate" class="btn btn-secondary btn-small">Validate</button>
+            <button id="btn-run" class="btn btn-small">&#9654; Run</button>
+            <button id="btn-stop" class="btn btn-danger btn-small" hidden>&#9632; Stop</button>
+            <button id="btn-fit" class="btn btn-secondary btn-small" title="Fit the whole graph in view">Fit</button>
+            <span id="ed-selection" class="ed-hint"></span>
+            <span class="ed-spacer"></span>
+            <button id="btn-toggle-right" class="btn btn-secondary btn-small" aria-pressed="true" title="Show or hide the right panel">Inspector</button>
+            <button id="btn-clear" class="btn btn-secondary btn-small">Clear canvas</button>
+        </div>
+        <div id="g2-canvas" class="ed-canvas g2-canvas"></div>
+        <details class="ed-section ed-executions" id="exec-section">
+            <summary class="ed-section-head"><span>Runs</span></summary>
+            <button id="btn-wipe-exec" class="btn btn-secondary btn-small ed-exec-wipe">Wipe history</button>
+            <div id="exec-list" class="ed-list"><div class="console-line info">No runs yet.</div></div>
+        </details>
+    </main>
+
+    <aside class="ed-right">
+        <div class="ed-section">
+            <div class="ed-section-head"><span>Issues</span></div>
+            <div id="issues" class="ed-list"><div class="console-line info">Not validated yet.</div></div>
+        </div>
+        <div class="ed-section">
+            <div class="ed-section-head"><span>Memory</span></div>
+            <div id="memory" class="ed-list"><div class="console-line info">Not checked yet.</div></div>
+        </div>
+        <div class="ed-section">
+            <div class="ed-section-head"><span>Graph settings</span></div>
+            <div id="graph-settings" class="gs-list"><div class="console-line info">Loading&hellip;</div></div>
+        </div>
+        <div class="ed-section ed-inspector-section">
+            <div class="ed-section-head"><span>Inspector</span></div>
+            <div id="inspector" class="ed-inspector"><div class="console-line info">Select a node.</div></div>
+        </div>
+    </aside>
+
+    <script type="module" src="/ui/js/shell.js"></script>
+    <script type="module" src="/ui/js/graph2/app.js"></script>
+</body>
+</html>

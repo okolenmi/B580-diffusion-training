@@ -1,0 +1,115 @@
+/* ---------------------------------------------------------------------------
+   graph2.css -- the new graph editor's canvas, nodes, wires and panels.
+   The three-column layout and the shared panel classes come from editor.css;
+   tokens from style.css. Sockets are positioned by the nodes' own flow, and
+   wires are measured from their rectangles, so nothing here is coordinates.
+   --------------------------------------------------------------------------- */
+
+.g2-canvas { position: relative; overflow: hidden; flex: 1; min-height: 0; background: var(--bg); outline: none; touch-action: none; }
+.g2-canvas::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background-image: radial-gradient(var(--border) 1px, transparent 1px);
+    background-size: 24px 24px;
+}
+.g2-inner { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; }
+.g2-edges { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
+.g2-nodes { position: absolute; left: 0; top: 0; }
+.g2-band { position: absolute; border: 1px dashed var(--accent); background: var(--accent-soft); pointer-events: none; z-index: 5; }
+
+/* ---- wires ---- */
+.g2-edge { fill: none; stroke: var(--text-dim); stroke-width: 2; pointer-events: none; }
+.g2-edge.event { stroke: var(--accent); stroke-dasharray: 5 4; }
+.g2-edge.dangling { stroke: var(--red); stroke-dasharray: 3 3; }
+.g2-edge.ghost { opacity: 0.7; }
+.g2-edge-hit { fill: none; stroke: transparent; stroke-width: 12; pointer-events: stroke; cursor: pointer; }
+g.selected > .g2-edge, .g2-edge.selected { stroke: var(--accent); stroke-width: 3; }
+
+/* ---- nodes ---- */
+.g2-node {
+    position: absolute; box-sizing: border-box; display: flex; flex-direction: column;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); font-size: 0.74rem; user-select: none;
+}
+.g2-node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+.g2-node.unknown { border-style: dashed; border-color: var(--red); }
+.g2-node[data-resolve="error"] { border-color: var(--red); }
+.g2-node[data-resolve="needs_choice"] { border-color: #f59e0b; }
+.g2-node[data-state="running"] { border-color: var(--accent); }
+.g2-node[data-state="done"] .g2-badge { color: var(--green); }
+.g2-node[data-state="error"] .g2-badge { color: var(--red); }
+.g2-node[data-state="stale"] .g2-badge, .g2-node[data-state="blocked"] .g2-badge { color: #f59e0b; }
+
+.g2-head { display: flex; align-items: center; gap: 0.35rem; padding: 0.3rem 0.5rem; background: var(--surface-alt); border-radius: var(--radius) var(--radius) 0 0; cursor: grab; }
+.g2-fold { background: none; border: 0; color: var(--text-dim); cursor: pointer; padding: 0 0.2rem; font-size: 0.8rem; }
+.g2-title { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.g2-title-edit { position: absolute; z-index: 6; }
+.g2-badge { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-dim); }
+.g2-unknown { padding: 0.5rem; color: var(--red); user-select: text; }
+
+.g2-body { padding: 0.3rem 0.5rem; overflow: auto; max-height: 520px; }
+.g2-note { padding: 0.25rem 0.4rem; margin-bottom: 0.3rem; border-radius: var(--radius-sm); background: var(--surface-alt); color: var(--text-dim); }
+.g2-note.error { color: var(--red); }
+.g2-note.needs_choice { color: #f59e0b; }
+.g2-group + .g2-group { margin-top: 0.25rem; }
+.g2-group-head { display: flex; align-items: center; gap: 0.35rem; padding: 0.15rem 0; color: var(--text-dim); cursor: pointer; border-top: 1px solid var(--border); }
+.g2-group-label { flex: 1; font-weight: 600; text-transform: uppercase; font-size: 0.64rem; letter-spacing: 0.04em; }
+.g2-count { font-family: var(--font-mono); font-size: 0.64rem; }
+.g2-strip { display: inline-flex; gap: 0.3rem; align-items: center; }
+.g2-more { font-size: 0.64rem; }
+.g2-advanced { margin-top: 0.3rem; background: none; border: 0; color: var(--accent); cursor: pointer; font-size: 0.68rem; padding: 0; }
+
+.g2-row { position: relative; display: flex; align-items: center; gap: 0.4rem; min-height: 1.7rem; }
+.g2-row.focus { outline: 1px solid #f59e0b; border-radius: var(--radius-sm); }
+.g2-row > .g2-socket { margin-left: -0.9rem; }
+.g2-label { flex: 0 0 34%; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.g2-row .cfg-input, .g2-row .prow { flex: 1; min-width: 0; }
+.g2-row .cfg-input { padding: 0.15rem 0.3rem; font-size: 0.72rem; }
+.g2-wired { color: var(--accent); font-size: 0.68rem; }
+.g2-slider { flex: 1; min-width: 0; }
+.prow { display: flex; align-items: center; gap: 0.35rem; }
+
+.g2-outs { padding: 0.2rem 0.5rem 0.3rem; border-top: 1px solid var(--border); }
+.g2-out { display: flex; justify-content: flex-end; align-items: center; gap: 0.4rem; min-height: 1.5rem; }
+.g2-out > .g2-label { flex: 0 1 auto; text-align: right; }
+.g2-out > .g2-socket { margin-right: -0.9rem; }
+
+.g2-events { display: flex; justify-content: center; gap: 0.7rem; height: 0; position: relative; }
+.g2-events.top > .g2-socket { position: relative; top: -0.4rem; }
+.g2-events.bottom > .g2-socket { position: relative; top: -0.1rem; }
+
+/* ---- sockets ---- */
+.g2-socket {
+    flex: none; width: 0.8rem; height: 0.8rem; box-sizing: border-box; border-radius: 50%;
+    background: var(--surface); border: 2px solid var(--text-dim); cursor: crosshair; z-index: 2;
+}
+.g2-socket.wired { background: var(--text-dim); }
+.g2-socket.event { border-radius: 2px; transform: rotate(45deg); border-color: var(--accent); width: 0.7rem; height: 0.7rem; }
+.g2-socket.event.wired { background: var(--accent); }
+.g2-socket.ok { border-color: var(--green); background: var(--green); transform: scale(1.3); }
+.g2-socket.bad { opacity: 0.25; }
+
+.g2-node.collapsed .g2-pins { position: relative; min-width: 100%; }
+.g2-pins > .g2-socket { position: absolute; }
+.g2-pins > .g2-socket[data-side="in"] { left: -0.4rem; }
+.g2-pins > .g2-socket[data-side="out"] { right: -0.4rem; }
+.g2-pin-label { position: absolute; top: -0.2rem; font-size: 0.64rem; color: var(--text-dim); white-space: nowrap; pointer-events: none; }
+.g2-socket[data-side="in"] > .g2-pin-label { left: 1rem; }
+.g2-socket[data-side="out"] > .g2-pin-label { right: 1rem; }
+
+/* ---- quick add ---- */
+.g2-quick { position: absolute; z-index: 20; width: 240px; max-height: 280px; display: flex; flex-direction: column; gap: 0.3rem; padding: 0.4rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-pop); }
+.g2-quick[hidden] { display: none; }
+.g2-quick-title { font-size: 0.68rem; color: var(--text-dim); text-transform: uppercase; }
+.g2-quick-list { overflow: auto; }
+
+/* ---- side panels ---- */
+.g2-setting-group { border-top: 1px solid var(--border); padding: 0.2rem 0.6rem; }
+.g2-setting-group > summary { cursor: pointer; font-weight: 600; font-size: 0.74rem; padding: 0.25rem 0; }
+.gs-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.25rem 0; }
+.gs-label { flex: 0 0 42%; font-size: 0.7rem; color: var(--text-dim); }
+.gs-row .cfg-input, .gs-row .prow { flex: 1; min-width: 0; }
+.gs-adv { margin: 0.4rem 0.6rem; }
+.gs-list { overflow: auto; max-height: 300px; }
+.g2-insp-title { font-weight: 600; padding: 0.4rem 0.6rem 0; }
+.g2-insp-uid { padding: 0 0.6rem; font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-dim); }
+.g2-insp-doc { padding: 0.3rem 0.6rem; font-size: 0.72rem; color: var(--text-dim); white-space: pre-wrap; }

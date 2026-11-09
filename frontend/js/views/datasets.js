@@ -325,6 +325,7 @@ async function openDetail(name) {
   renderItems();
   renderSets();
   renderTasks();
+  if (tasks.some((t) => t.status === "pending" || t.status === "running")) showDatasetTab("tasks");
   startPoll();
   log(`Opened dataset '${name}'.`, "info");
 }
@@ -957,7 +958,23 @@ async function loadTasks() {
   tasks = res.tasks;
 }
 
+/* The running task, on every tab: what is being made and how far it is. */
+function renderTaskStrip() {
+  const strip = el("task-strip");
+  const task = tasks.find((t) => t.status === "pending" || t.status === "running");
+  strip.hidden = !task;
+  if (!task) return;
+  const pct = task.total > 0 ? Math.min(100, Math.round((task.current / task.total) * 100)) : 0;
+  strip.replaceChildren(
+    h("span", { text: `${TASK_KIND_LABEL[task.kind] || task.kind} #${task.id}` }),
+    h("div", { class: "task-bar" }, h("i", { style: `width: ${pct}%` })),
+    h("span", { text: task.total > 0 ? `${task.current} / ${task.total}` : "starting…" }),
+    h("button", { class: "btn btn-secondary btn-small", text: "Details", onclick: () => showDatasetTab("tasks") }),
+  );
+}
+
 function renderTasks() {
+  renderTaskStrip();
   const list = el("tasks-list");
   list.replaceChildren();
   if (!tasks.length) {

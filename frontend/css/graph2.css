@@ -46,16 +46,35 @@ g.selected > .g2-edge, .g2-edge.selected { stroke: var(--accent); stroke-width: 
 .g2-badge { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-dim); }
 .g2-unknown { padding: 0.5rem; color: var(--red); user-select: text; }
 
-.g2-body { padding: 0.3rem 0.5rem; }
+.g2-body { padding: 0.4rem 0.5rem; }
+
+/* ---- tabs: like a browser's, the active one is part of the body below it ---- */
+.g2-tabs { display: flex; align-items: flex-end; gap: 2px; padding: 0.25rem 0.4rem 0; background: var(--surface-alt); border-bottom: 1px solid var(--border); }
+.g2-tab { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.2rem 0.65rem; margin-bottom: -1px; font: inherit; font-size: 0.7rem; color: var(--text-dim); cursor: pointer; background: var(--bg); border: 1px solid var(--border); border-bottom-color: var(--border); border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
+.g2-tab:hover { color: var(--text); }
+.g2-tab.active { color: var(--text); background: var(--surface); border-bottom-color: var(--surface); font-weight: 600; }
+.g2-tab-count { min-width: 1.1em; padding: 0 0.25em; border-radius: 1em; background: var(--accent-soft); color: var(--accent); font-size: 0.62rem; text-align: center; }
+
+/* ---- optional inputs tab and addons tab ---- */
+.g2-opt { display: flex; align-items: center; gap: 0.45rem; min-height: 1.6rem; cursor: pointer; }
+.g2-opt-name { flex: 1; }
+.g2-opt-type { color: var(--text-dim); font-size: 0.66rem; }
+.g2-addon { margin-bottom: 0.4rem; padding: 0.25rem 0.4rem; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.g2-addon.off > :not(.g2-addon-head) { opacity: 0.45; }
+.g2-addon-head { display: flex; align-items: center; gap: 0.4rem; }
+.g2-addon-name { flex: 1; font-weight: 600; }
+.g2-addon-id { font-family: var(--font-mono); font-size: 0.62rem; color: var(--text-dim); }
+.g2-addon-remove { background: none; border: 0; color: var(--text-dim); cursor: pointer; }
+.g2-addon-remove:hover { color: var(--red); }
+.g2-add-addon { width: 100%; padding: 0.2rem 0.3rem; font-size: 0.72rem; }
+
+/* ---- the hub: where wires to ports that are not drawn arrive ---- */
+.g2-hub { position: absolute; left: -0.6rem; top: 2.2rem; width: 1.2rem; height: 1.2rem; padding: 0; border-radius: 50%; border: 2px solid var(--accent); background: var(--surface); color: var(--text); font-size: 0.6rem; line-height: 1; cursor: pointer; z-index: 2; }
 .g2-note { padding: 0.25rem 0.4rem; margin-bottom: 0.3rem; border-radius: var(--radius-sm); background: var(--surface-alt); color: var(--text-dim); }
 .g2-note.error { color: var(--red); }
 .g2-note.needs_choice { color: #f59e0b; }
 .g2-group + .g2-group { margin-top: 0.25rem; }
-.g2-group-head { display: flex; align-items: center; gap: 0.35rem; padding: 0.15rem 0; color: var(--text-dim); cursor: pointer; border-top: 1px solid var(--border); }
-.g2-group-label { flex: 1; font-weight: 600; text-transform: uppercase; font-size: 0.64rem; letter-spacing: 0.04em; }
-.g2-count { font-family: var(--font-mono); font-size: 0.64rem; }
-.g2-strip { display: inline-flex; gap: 0.3rem; align-items: center; }
-.g2-more { font-size: 0.64rem; }
+.g2-group-label { margin-top: 0.3rem; padding-top: 0.2rem; border-top: 1px solid var(--border); font-weight: 600; text-transform: uppercase; font-size: 0.64rem; letter-spacing: 0.04em; }
 .g2-advanced { margin-top: 0.3rem; background: none; border: 0; color: var(--accent); cursor: pointer; font-size: 0.68rem; padding: 0; }
 
 .g2-row { position: relative; display: flex; align-items: center; gap: 0.4rem; min-height: 1.7rem; }
@@ -117,6 +136,6 @@ g.selected > .g2-edge, .g2-edge.selected { stroke: var(--accent); stroke-width: 
 .g2-dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.8rem; }
 .g2-dialog { margin: auto; }
 
-/* An optional port's socket shows when the pointer is over its row, while a wire is dragged, or when it is wired. */
+/* A value field's socket shows when the pointer is over its row, while a wire is dragged, or when it is wired. */
 .g2-row.optional > .g2-socket:not(.wired) { opacity: 0; transition: opacity 0.12s; }
 .g2-row.optional:hover > .g2-socket, .g2-wiring .g2-row.optional > .g2-socket { opacity: 1; }

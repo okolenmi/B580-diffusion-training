@@ -328,6 +328,17 @@ export class GraphDoc {
     this._emit({ type: host === "graph" ? "graph:addons" : "node:addons", uid: host });
   }
 
+  /** One parameter of an addon; `undefined` removes it. Announced as a param of the host named `id.param`, so a view being typed in is not rebuilt. */
+  setAddonParam(host, id, name, value, origin = null) {
+    const addon = (this._addonList(host) || []).find((a) => a.id === id);
+    if (!addon) return;
+    const had = Object.prototype.hasOwnProperty.call(addon.params, name);
+    if (value === undefined ? !had : had && JSON.stringify(addon.params[name]) === JSON.stringify(value)) return;
+    if (value === undefined) delete addon.params[name];
+    else addon.params[name] = clone(value);
+    this._emit({ type: host === "graph" ? "graph:addons" : "node:params", uid: host, name: `${id}.${name}`, origin });
+  }
+
   removeAddon(host, id) {
     const list = this._addonList(host);
     if (!list) return;

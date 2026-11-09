@@ -7,6 +7,7 @@ Implements plans 30 section 13, 41 section 7, 20, 40. Python: `next/graph/catalo
 {
   "catalog_format": 1,
   "nodes": [ NodeInfo ],
+  "addon_kinds": [ {kind, name, doc, slot, fits, requires, conflicts, inputs: [PortInfo], groups, events_in, events_out} ],
   "settings": [ SettingSpec ],            // core + contributed (see settings.md)
   "handle_types": { "ClipLPart": ["ClipLPart", "ModelPart", "object"] },
   "families": [ { "id": "sdxl", "label": "SDXL" } ],
@@ -24,6 +25,7 @@ Implements plans 30 section 13, 41 section 7, 20, 40. Python: `next/graph/catalo
   "doc": "...",
   "inputs":  [ PortInfo ],
   "outputs": [ PortInfo ],
+  "addon_slots": [ {name, socket, many, doc} ],   // where addons fit; every host has "events"
   "possible_inputs": [ PortInfo ],    // dynamic nodes only: connectors the node may have once its params are set;
   "possible_outputs": [ PortInfo ],   //   the editor lists them in their own section when it suggests nodes for a wire
   "groups":  [ { "id": "main", "label": "Source", "collapsed": false,

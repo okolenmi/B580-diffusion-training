@@ -22,6 +22,7 @@ export class ShapeStore {
     this._settings = settings;
     this._timers = timers;
     this.classes = new Map(); // class_name -> NodeInfo
+    this.addonKinds = new Map(); // kind -> AddonInfo
     this.catalog = null;
     this._state = new Map(); // uid -> {state, shape, info, message, focus, choices, detail, seq, timer}
     this._handlers = new Set();
@@ -36,6 +37,7 @@ export class ShapeStore {
   setCatalog(catalog) {
     this.catalog = catalog;
     this.classes = new Map(catalog.nodes.map((n) => [n.class_name, n]));
+    this.addonKinds = new Map((catalog.addon_kinds || []).map((k) => [k.kind, k]));
   }
 
   info(className) {

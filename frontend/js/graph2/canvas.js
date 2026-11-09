@@ -340,12 +340,6 @@ export class Canvas {
     const node = this.doc.nodes.get(uid);
     if (action.dataset.action === "fold") this.doc.setLayout(uid, { collapsed: !node.layout.collapsed });
     else if (action.dataset.action === "advanced") this.doc.setLayout(uid, { advanced: !node.layout.advanced });
-    else if (action.dataset.action === "group") {
-      const id = action.dataset.group;
-      const group = (this.shapes.info(node.class_name)?.groups || []).find((g) => g.id === id);
-      const open = node.layout.groups && id in node.layout.groups ? node.layout.groups[id] : !(group && group.collapsed);
-      this.doc.setGroupOpen(uid, id, !open);
-    }
   }
 
   /* ----- wiring ----- */
@@ -398,18 +392,18 @@ export class Canvas {
       const [a, b] = drag.reverse ? [here, anchor] : [anchor, here];
       this.edges.drag((drag.events ? eventPath : wirePath)(a.x, a.y, b.x, b.y), drag.events ? "event" : "data");
     }
-    const head = document.elementFromPoint(e.clientX, e.clientY)?.closest?.(".g2-group-head");
-    const key = head ? `${this._uidOf(head)}|${head.dataset.group}` : null;
+    const tab = document.elementFromPoint(e.clientX, e.clientY)?.closest?.(".g2-tab");
+    const key = tab ? `${this._uidOf(tab)}|${tab.dataset.tab}` : null;
     if (key === drag.hover) return;
     clearTimeout(drag.timer);
     drag.hover = key;
-    if (!head) return;
-    const uid = this._uidOf(head), group = head.dataset.group;
+    if (!tab || tab.classList.contains("active")) return;
+    const uid = this._uidOf(tab), id = tab.dataset.tab;
     drag.timer = setTimeout(() => {
-      if (head.querySelector(".g2-chev")?.textContent !== "▸") return;
-      const groups = this.doc.nodes.get(uid)?.layout.groups;
-      drag.spring.push({ uid, group, was: groups && group in groups ? groups[group] : undefined });
-      this.doc.setGroupOpen(uid, group, true);
+      const node = this.doc.nodes.get(uid);
+      if (!node) return;
+      drag.spring.push({ uid, was: node.layout.tab });
+      this.doc.setLayout(uid, { tab: id });
       this._lightSockets();
     }, SPRING_MS);
   }
@@ -429,15 +423,7 @@ export class Canvas {
     } else if (!target && !under?.closest?.(".g2-node") && !drag.picked) {
       this.hooks.onDropEmpty?.({ from: drag.from, reverse: drag.reverse, events: drag.events, point: this.point(e), client: { x: e.clientX, y: e.clientY } });
     }
-    for (const { uid, group, was } of drag.spring.reverse()) {
-      const node = this.doc.nodes.get(uid);
-      if (!node) continue;
-      if (was === undefined) {
-        const groups = { ...(node.layout.groups || {}) };
-        delete groups[group];
-        this.doc.setLayout(uid, { groups });
-      } else this.doc.setGroupOpen(uid, group, was);
-    }
+    for (const { uid, was } of drag.spring.reverse()) this.doc.setLayout(uid, { tab: was });
     for (const el of this.root.querySelectorAll(".g2-socket.ok, .g2-socket.bad")) el.classList.remove("ok", "bad");
   }
 

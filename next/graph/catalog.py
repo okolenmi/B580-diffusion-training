@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 from collections.abc import Iterable
 
+from .addons import Addon, slots_of
 from .node import Node, is_field
 from .ports import EventIn, EventOut, Port, type_mro_names, type_name
 from .registry import NodeRegistry
@@ -73,6 +74,7 @@ def node_info(cls: type[Node]) -> dict:
                     "doc": g.doc} for g in cls.GROUPS],
         "events_in": [event_port_info(n, p) for n, p in cls.EVENTS_IN.items()],
         "events_out": [event_port_info(n, p) for n, p in cls.EVENTS_OUT.items()],
+        "addon_slots": [{"name": s.name, "socket": s.socket, "many": s.many, "doc": s.doc} for s in slots_of(cls)],
         "modules": [m.as_dict() for m in cls.MODULES],
         "reads_settings": list(cls.READS_SETTINGS),
         "settings": [s.as_dict() for s in cls.SETTINGS],
@@ -96,6 +98,20 @@ def handle_types(classes: Iterable[type[Node]]) -> dict[str, list[str]]:
     return seen
 
 
+def addon_info(kind: str, cls: type[Addon]) -> dict:
+    return {
+        "kind": kind, "name": cls.DISPLAY_NAME or _auto_display_name(kind), "slot": cls.SLOT,
+        "doc": (cls.__doc__ or "").strip().split("\n\n")[0],
+        "fits": list(cls.FITS), "requires": list(cls.REQUIRES), "conflicts": list(cls.CONFLICTS),
+        "inputs": [port_info(p) for p in cls.INPUTS.values()],
+        "groups": [{"id": g.id, "label": g.label, "collapsed": g.collapsed, "advanced": g.advanced,
+                    "visible_when": [g.visible_when[0], _json_value(g.visible_when[1])] if g.visible_when else None,
+                    "doc": g.doc} for g in cls.GROUPS],
+        "events_in": [event_port_info(n, p) for n, p in cls.EVENTS_IN.items()],
+        "events_out": [event_port_info(n, p) for n, p in cls.EVENTS_OUT.items()],
+    }
+
+
 def build_catalog(registry: NodeRegistry, settings: SettingsRegistry | None = None,
                   families: list[dict] | None = None) -> dict:
     classes, errors = registry.load()
@@ -104,6 +120,7 @@ def build_catalog(registry: NodeRegistry, settings: SettingsRegistry | None = No
     return {
         "catalog_format": CATALOG_FORMAT,
         "nodes": [node_info(c) for c in ordered],
+        "addon_kinds": [addon_info(k, c) for k, c in sorted(registry.addons().items())],
         "settings": [s.as_dict() for s in settings.specs()],
         "handle_types": handle_types(ordered),
         "families": families or [],

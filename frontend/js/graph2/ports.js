@@ -76,9 +76,9 @@ export function groupPorts(inputs, groups) {
   return order.map((id) => byId.get(id)).filter((entry) => entry.ports.length || entry.group.id !== "main");
 }
 
-/** A group is shown when its own `visible_when` holds; `advanced` groups and ports also need the node's "show advanced". */
+/** A group is shown when its own `visible_when` holds; `advanced` and `collapsed` (rarely needed) groups and `advanced` ports also need the node's "show more". */
 export function groupVisible(group, values, showAdvanced) {
-  if (group.advanced && !showAdvanced) return false;
+  if ((group.advanced || group.collapsed) && !showAdvanced) return false;
   return isVisible(group, values);
 }
 

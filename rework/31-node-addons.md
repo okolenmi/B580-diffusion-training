@@ -291,8 +291,10 @@ new class, not an edit of a 350-line node.
    Resume both use the object it makes), Time Balance (Noiser and Trainer share one). Also done: Self-perceptual loss and the gradient-aligned start
    (Trainer slots `perceptual` and `initializer`; their addons return a part that the trainer attaches to its model and batches, since both exist only when
    it is built). Also done: the gradient policy (Trainer slot `gradient_policy`; its four settings `gradient_policy`, `policy_normalize`, `policy_floor`, `policy_calibrate_every` are now the addon's parameters, and the command line has `--gradient-policy` and the `--policy-*` flags). Still to convert: the others. The starter and the command line follow.
-3. Editor (phase 6, with the owner's go-ahead): tabs, Addons tab, hub circle, optional inputs; the catalog (`NodeInfo`) gains
-   `addon_slots`, `addons` and `optional` fields so the editor needs no per-node code.
+3. Editor (phase 6): **built in `/graph2`** (`node_tabs.js`, `node_view.js`): tabs Main / Optional / Addons (a tab shows only when it has content; event-only
+   addons do not add an Addons tab by themselves), the hub circle on the left edge for wires to ports that are not drawn, and a held wire opens a tab. The catalog
+   carries `addon_slots` per node and `addon_kinds` at the top, so the editor has no per-node code. Collapsed/advanced groups sit behind "Show more" (no
+   foldable groups any more). Not built yet: dropping a wire on the hub (a chooser of the hidden ports), addons of the graph itself, event wires of addons.
 
 Until step 1 exists, new optional features continue as in `next/` now (a node or a native port), written so the conversion stays
 mechanical: the collaborator is a class with a small interface, built from plain parameters.

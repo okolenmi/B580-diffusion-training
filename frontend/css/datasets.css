@@ -27,18 +27,7 @@
     padding: 14px 18px;
     flex-wrap: wrap;
 }
-.create-form input[type="text"] {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    color: var(--text);
-    padding: 0.55rem 0.7rem;
-    font-family: inherit;
-    font-size: 13.5px;
-    min-width: 220px;
-    flex: 1;
-}
-.create-form input:focus { outline: none; border-color: var(--accent); }
+.create-form input[type="text"] { min-width: 220px; flex: 1; }
 .create-form .error-box { margin: 0; align-self: center; }
 
 /* ---- dataset cards ---- */
@@ -229,28 +218,9 @@
     min-width: 90px;
 }
 #btn-clear-sel { margin-left: auto; }
-.ds-bulk input[type="text"],
-.ds-bulk input[type="number"] {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    color: var(--text);
-    padding: 0.45rem 0.65rem;
-    font-family: inherit;
-    font-size: 13px;
-    flex: 1;
-    min-width: 160px;
-}
-.ds-bulk input:focus { outline: none; border-color: var(--accent); }
-.ds-bulk select {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    color: var(--text);
-    font-size: 13px;
-    padding: 0.4rem 0.5rem;
-    width: auto;
-}
+.ds-bulk { --ctl-pad: 0.45rem 0.65rem; --ctl-font: 13px; }
+.ds-bulk input[type="text"], .ds-bulk input[type="number"] { flex: 1; min-width: 160px; }
+.ds-bulk select { width: auto; padding: 0.4rem 0.5rem; }
 .bulk-row {
     display: flex;
     align-items: center;
@@ -437,18 +407,8 @@
 .task-form { padding: 16px 18px; display: flex; flex-direction: column; gap: 13px; }
 .tf-field { display: flex; flex-direction: column; gap: 6px; }
 .tf-field > span { font-size: 12.5px; font-weight: 700; }
-.tf-field input {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    color: var(--text);
-    padding: 0.55rem 0.7rem;
-    font-family: var(--font-mono);
-    font-size: 13px;
-    max-width: 560px;
-}
-.tf-field input:focus { outline: none; border-color: var(--accent); }
-.tf-row { display: flex; gap: 22px; align-items: flex-end; flex-wrap: wrap; }
+.tf-field { --ctl-family: var(--font-mono); --ctl-font: 13px; }
+.tf-field input { max-width: 560px; }
 .tf-small input { max-width: 140px; }
 .tf-check {
     display: flex;
@@ -459,7 +419,6 @@
     padding-bottom: 8px;
     cursor: pointer;
 }
-.tf-check input { width: 16px; height: 16px; accent-color: var(--accent); }
 .tf-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
 
 .ds-tasks { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
@@ -602,10 +561,6 @@
 .dlg .tf-field select {
     width: 100%;
     max-width: none;
-}
-.dlg .tf-field textarea {
-    font-family: var(--font-mono);
-    font-size: 13px;
 }
 .num-pair { display: flex; gap: 8px; }
 .num-pair input { min-width: 0; }

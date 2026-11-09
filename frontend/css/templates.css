@@ -25,7 +25,6 @@
 }
 .tpl-field { display: flex; flex-direction: column; gap: 4px; min-width: 200px; font-size: 12px; color: var(--text-dim); }
 .tpl-field-grow { flex: 1; min-width: 220px; }
-.tpl-field select, .tpl-field input[type="text"] { padding: 0.55rem 0.7rem; font-size: 13.5px; }
 .tpl-new-hint { padding: 4px 18px 14px; color: var(--text-dim); font-size: 12.5px; max-width: 80ch; }
 #new-card .error-box { margin: 0 18px 14px; }
 
@@ -146,7 +145,7 @@
 /* ---- 4. block contents ---- */
 
 .bd-field { display: flex; flex-direction: column; gap: 6px; }
-.bd-field .cfg-input, .bd-field select { padding: 0.45rem 0.6rem; font-size: 13.5px; }
+.bd-field { --ctl-pad: 0.45rem 0.6rem; }
 .bd-field.is-inactive .bd-control { opacity: 0.45; }
 .bd-hint { font-size: 11.5px; color: var(--text-dim); }
 .bd-bool { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
@@ -222,7 +221,6 @@
 .tpl-tray[hidden] { display: none; }
 .tpl-tray-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
 .tpl-adv { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); cursor: pointer; }
-.tpl-adv input { width: 1.1rem; height: 1.1rem; }
 #tray-search { padding: 0.45rem 0.6rem; font-size: 13px; }
 #tray-list { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; min-height: 0; flex: 1; }
 #tray-list details { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
@@ -239,7 +237,8 @@
 .tpl-tray-tag { color: var(--text-dim); font-size: 11px; flex: none; }
 .tpl-tray-empty { color: var(--text-dim); font-size: 12.5px; padding: 8px 2px; }
 .tpl-tray-foot { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); }
-.tpl-tray-foot input { width: 70px; padding: 0.3rem 0.5rem; font-size: 12.5px; }
+.tpl-tray-foot { --ctl-pad: 0.3rem 0.5rem; --ctl-font: 12.5px; }
+.tpl-tray-foot input { width: 70px; }
 
 /* ---- 6. narrow + pop-out ---- */
 

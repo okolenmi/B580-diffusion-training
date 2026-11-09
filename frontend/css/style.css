@@ -33,7 +33,7 @@
 /* The `hidden` attribute must beat class display rules (.btn,
    .ed-palette-item, ...). The UA sheet's [hidden]{display:none} loses to
    any author class rule at equal specificity, so bump ours with an
-   element prefix (0,1,1 > 0,1,0) -- position-independent, no !important (and the rest of the sheets now follow the same rule).
+   element prefix (0,1,1 > 0,1,0) -- position-independent, no !important (none anywhere in the sheets).
    Legacy avoided this by toggling inline style.display instead; the
    clean-room port standardized on the attribute, so the design system
    has to honor it. */
@@ -120,30 +120,40 @@ body {
     display: block;
 }
 
-/* Input Polishing */
-select, input[type="text"], input[type="number"], .cfg-input {
-    width: 100%;
-    background: #161b22;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text);
-    padding: 0.8rem 1rem;
-    font-size: 0.9rem;
-    font-family: inherit;
-    transition: all 0.2s;
-    outline: none;
+/* Controls: ONE skin. The element rules sit in :where() (specificity 0), so a page can
+   override anything with a single class, and the skin reads variables that a container sets
+   (`.ds-bulk { --ctl-pad: ... }`): a page never restates the skin, only its size and layout. */
+:root {
+    --ctl-pad: 0.55rem 0.7rem;
+    --ctl-font: 13.5px;
+    --ctl-family: inherit;
+    --ctl-bg: var(--bg);
+    --ctl-radius: var(--radius-sm);
+    --check-size: 1.1rem;
 }
-
-select:hover, input:hover { border-color: var(--text-dim); }
-select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15); }
+:where(select, textarea, .cfg-input,
+       input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"])) {
+    width: 100%;
+    padding: var(--ctl-pad);
+    font-family: var(--ctl-family);
+    font-size: var(--ctl-font);
+    color: var(--text);
+    background: var(--ctl-bg);
+    border: 1px solid var(--border);
+    border-radius: var(--ctl-radius);
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+:where(select, textarea, input, .cfg-input):hover { border-color: var(--text-dim); }
+:where(select, textarea, input, .cfg-input):focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15); }
 
 /* Custom Checkbox Styling */
 input[type="checkbox"] {
     appearance: none;
-    width: 1.1rem;
-    height: 1.1rem;
+    width: var(--check-size);
+    height: var(--check-size);
     flex: none;
-    background: #161b22;
+    background: var(--ctl-bg);
     border: 1px solid var(--border);
     border-radius: 4px;
     cursor: pointer;
@@ -220,23 +230,6 @@ input[type="checkbox"]:checked::after {
     box-shadow: none;
 }
 .btn:disabled:hover { box-shadow: none; }
-
-.cfg-input, select, textarea {
-    width: 100%;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    color: var(--text);
-    padding: 0.85rem;
-    font-size: 0.95rem;
-    transition: all 0.2s;
-}
-
-.cfg-input:focus, select:focus, textarea:focus {
-    outline: none;
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
-}
 
 /* Utilities */
 .text-dim { color: var(--text-dim); }
@@ -326,25 +319,6 @@ input[type="checkbox"]:checked::after {
     white-space: pre-wrap;
 }
 .toolbar-hint { font-size: 12.5px; }
-
-/* Log tail pane: shared by the training page (quick log) and the run
-   detail page; pre-wrap keeps line structure honest. */
-.log-pane {
-    flex: 1;
-    min-height: 320px;
-    overflow-y: auto;
-    background: #000;
-    padding: 14px 16px;
-    font-family: var(--font-mono);
-    font-size: 12.5px;
-    line-height: 1.55;
-    white-space: pre-wrap;
-    word-break: break-word;
-    color: #c9d1d9;
-    /* sit flush in the card without spilling square corners */
-    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-}
-.log-pane:empty::before { content: attr(data-empty); color: var(--text-dim); }
 
 @media (max-width: 1000px) {
     .content-area { padding: 1.5rem; }

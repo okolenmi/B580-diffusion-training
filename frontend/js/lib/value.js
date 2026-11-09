@@ -8,7 +8,7 @@
    One shared definition so the dashboard, the history table and the
    monitor page all say the same thing.
 
-   `value-bad` is styled per module (training.css / monitor.css) so each
+   `value-bad` is styled per module (monitor.css) so each
    stylesheet keeps ownership of its own components.
    --------------------------------------------------------------------------- */
 

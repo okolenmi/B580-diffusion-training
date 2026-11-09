@@ -182,22 +182,7 @@
     font-size: 11px;
     margin-top: 4px;
 }
-.setup-input {
-    width: 100%;
-    box-sizing: border-box;
-    padding: 9px 12px;
-    font-family: var(--font-mono);
-    font-size: 13px;
-    color: var(--text);
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-}
-.setup-input:focus {
-    outline: none;
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
-}
+.setup-input { --ctl-pad: 9px 12px; --ctl-family: var(--font-mono); --ctl-font: 13px; --ctl-bg: var(--surface); --ctl-radius: var(--radius); }
 
 /* ---- 7. Actions ---------------------------------------------------------- */
 
@@ -361,7 +346,6 @@
     color: var(--text-dim);
 }
 .setup-conflict-list li { margin-bottom: 4px; }
-.setup-conflict-list li.is-conflict { color: var(--text); }
 
 /* ---- 10. The install progress ------------------------------------------- */
 

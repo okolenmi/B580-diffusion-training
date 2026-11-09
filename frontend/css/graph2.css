@@ -81,7 +81,7 @@ g.selected > .g2-edge, .g2-edge.selected { stroke: var(--accent); stroke-width: 
 .g2-row.focus { outline: 1px solid #f59e0b; border-radius: var(--radius-sm); }
 .g2-row > .g2-socket { margin-left: -0.9rem; }
 .g2-label { flex: 0 0 34%; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.g2-row .cfg-input, .g2-row .g2-row .cfg-input { padding: 0.15rem 0.3rem; font-size: 0.72rem; }
+.g2-node { --ctl-pad: 0.15rem 0.3rem; --ctl-font: 0.72rem; }
 .g2-wired { color: var(--accent); font-size: 0.68rem; }
 .g2-slider { flex: 1; min-width: 0; }
 

@@ -378,13 +378,7 @@ body.editor-body {
 
 /* editable widgets inside node bodies -- same builders as the inspector
    (editor/widgets.js), just sized for the 230px card */
-.gnode .cfg-input,
-.gnode select,
-.gnode textarea {
-    padding: 2px 4px;
-    font-size: 0.68rem;
-    border-radius: var(--radius-sm);
-}
+.gnode { --ctl-pad: 2px 4px; --ctl-font: 0.68rem; }
 .gnode .param-label {
     display: flex;
     align-items: center;
@@ -576,7 +570,7 @@ body.editor-body.ed-right-off .ed-right { border-left-width: 0; }
 .gs-list { display: flex; flex-direction: column; gap: 10px; padding: 8px 4px 4px; }
 .gs-row { display: flex; flex-direction: column; gap: 4px; }
 .gs-label { font-size: 12px; color: var(--text-dim); font-weight: 600; }
-.gs-list .cfg-input, .gs-list select { padding: 0.4rem 0.55rem; font-size: 13px; }
+.gs-list { --ctl-pad: 0.4rem 0.55rem; --ctl-font: 13px; }
 .gs-list .bd-auto, .gs-list .bd-bool { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .gs-list .bd-auto .cfg-input { flex: 1; min-width: 0; }
 .gs-list .bd-unit { color: var(--text-dim); font-size: 12px; }

@@ -101,7 +101,7 @@ ROLE_CLASSES: dict[str, type[ModelPart]] = {
     cls.ROLE: cls for cls in (DenoiserPart, ClipLPart, ClipGPart, Qwen3Part, VAEPart, AdapterPart)
 }
 
-ROLE_LABELS = {"denoiser": "denoiser", "clip_l": "CLIP_L", "clip_g": "CLIP_G", "qwen3": "Qwen3",
+ROLE_LABELS = {"denoiser": "Denoiser", "clip_l": "CLIP_L", "clip_g": "CLIP_G", "qwen3": "Qwen3",
                "vae": "VAE", "adapter": "LLM adapter"}
 
 

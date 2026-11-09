@@ -11,7 +11,7 @@ from typing import Any
 
 from ...families.api.detection import Detection
 from ...families.api.library import SCOPES
-from ...families.api.parts import ROLE_CLASSES, make_part
+from ...families.api.parts import ROLE_CLASSES, ROLE_LABELS, make_part
 from ...families.registry import FAMILY_IDS, detect_file
 from ...graph import DynamicShape, Environment, Node, Port, Resolution
 
@@ -67,6 +67,7 @@ class LoadModelNode(Node):
                       doc="Requested compute dtype. auto follows the graph setting, then the file."),
     }
     OUTPUTS: dict[str, Port] = {}
+    POSSIBLE_OUTPUTS = {role: Port(role, cls, label=ROLE_LABELS[role]) for role, cls in ROLE_CLASSES.items()}
 
     @classmethod
     def resolve(cls, params: dict, env: Environment | None = None) -> Resolution:

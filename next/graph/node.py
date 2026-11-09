@@ -198,6 +198,8 @@ class Node(ABC):
 
     INPUTS: ClassVar[dict[str, Port]] = {}
     OUTPUTS: ClassVar[dict[str, Port]] = {}
+    #: What a dynamic node may offer once its params are set; lets the editor suggest it for a wire before it resolves.
+    POSSIBLE_OUTPUTS: ClassVar[dict[str, Port]] = {}
     GROUPS: ClassVar[tuple[Group, ...]] = ()
     EVENTS_IN: ClassVar[dict[str, EventIn]] = {}
     EVENTS_OUT: ClassVar[dict[str, EventOut]] = {}

@@ -24,6 +24,7 @@ Implements plans 30 section 13, 41 section 7, 20, 40. Python: `next/graph/catalo
   "doc": "...",
   "inputs":  [ PortInfo ],
   "outputs": [ PortInfo ],
+  "possible_outputs": [ PortInfo ],   // a dynamic node: what it may offer once resolved (empty outputs until then)
   "groups":  [ { "id": "main", "label": "Source", "collapsed": false,
                  "advanced": false, "visible_when": null, "doc": "" } ],
   "events_in":  [ EventPortInfo ],

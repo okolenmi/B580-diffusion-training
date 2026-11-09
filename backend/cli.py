@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -85,8 +86,19 @@ def main(argv: list[str] | None = None) -> int:
 
     import uvicorn
 
+    # Discovering the node classes imports the ML stack; doing it while the server starts keeps
+    # that cost out of the first page load.
+    threading.Thread(target=warm_catalog, args=(container.services,), name="catalog-warmup", daemon=True).start()
+
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="info")
     return 0
+
+
+def warm_catalog(services: object) -> None:
+    try:
+        services.graphs.node_catalog.execute()
+    except Exception:  # noqa: BLE001 -- the first request builds it again and reports the real error
+        logging.getLogger(__name__).exception("catalog warm-up failed")
 
 
 if __name__ == "__main__":

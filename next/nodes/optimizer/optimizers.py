@@ -18,8 +18,6 @@ class OptimizerNode(Node):
     memory_fields = ("fused", "group_size", "foreach", "state_precision")
     COMMON = {
         "model": Port("model", TrainableDenoiser),
-        "lr": Port("lr", float, required=False, default=1e-4, minimum=0.0, group="rule",
-                   doc="Base learning rate. Parameter groups may multiply it (see the adapter's groups)."),
         "grad_clip": Port("grad_clip", float, required=False, default=0.0, minimum=0.0, group="rule",
                           doc="Largest total gradient norm; 0 turns clipping off (not available when fused)."),
         "fused": Port("fused", bool, required=False, default=False, group="execution",
@@ -42,7 +40,7 @@ class OptimizerNode(Node):
         cls = FusedOptimizer if fused else Optimizer
         kwargs = {"group_size": inputs.get("group_size") or 0, "store": make_store(inputs.get("state_precision") or "float32"),
                   "foreach": False if fused else inputs.get("foreach", True), "grad_clip": inputs.get("grad_clip") or None}
-        return {"optimizer": cls(self.algorithm(inputs), model.param_groups(), inputs.get("lr", 1e-4), **kwargs)}
+        return {"optimizer": cls(self.algorithm(inputs), model.param_groups(), 0.0, **kwargs)}  # the learning-rate schedule sets the rate before every step
 
 
 def _pair(value, default):

@@ -57,7 +57,7 @@ const PICKER_TTL_MS = 5000;
 const pickerAnswers = new Map();
 
 function pickerOptions(spec, values) {
-  const route = spec.picker === "dataset" ? "/assets/dataset" : spec.picker === "model_file" ? `/catalog/models/${encodeURIComponent(values.scope || spec.scope || "checkpoints")}` : null;
+  const route = spec.picker === "dataset" ? "/assets/dataset" : spec.picker === "model_file" ? `/catalog/models/${encodeURIComponent(spec.ui?.picker_scope || spec.scope || values.scope || "checkpoints")}` : null;
   if (!route) return Promise.resolve([]);
   const kept = pickerAnswers.get(route);
   if (kept && Date.now() - kept.at < PICKER_TTL_MS) return kept.answer;

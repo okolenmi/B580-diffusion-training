@@ -70,7 +70,7 @@ Rules:
    `type_mro`.
 3. Order of `inputs` and `groups` is display order.
 4. The catalog never instantiates a node and never imports torch.
-5. A port with `picker: "model_file"` lists the files of the node's `scope` value (`checkpoints`, `loras`, ...) from
+5. A port with `picker: "model_file"` lists the files of the folder named by its `ui.picker_scope`, else by the node's `scope` value (`checkpoints`, `loras`, ...) from
    `GET /api/v1/catalog/models/{scope}` -> `{scope, files: [relative names]}`; `picker: "dataset"` lists the dataset names
    of `GET /api/v1/assets/dataset`.
 

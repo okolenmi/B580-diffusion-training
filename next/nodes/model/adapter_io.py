@@ -91,7 +91,7 @@ class LoadAdapterNode(Node):
     CATEGORY = "Model"
     INPUTS = {
         "model": Port("model", TrainableDenoiser),
-        "file": Port("file", str, picker="model_file", doc="An adapter under the loras folder."),
+        "file": Port("file", str, picker="model_file", ui={"picker_scope": "loras"}, doc="An adapter under the loras folder."),
         "format": Port("format", str, required=False, default="auto",
                        doc="auto: the format the file names in its metadata, kohya when it names none."),
     }
@@ -119,7 +119,7 @@ class MergeAdapterNode(Node):
     CATEGORY = "Model"
     INPUTS = {
         "denoiser": Port("denoiser", DenoiserPart),
-        "file": Port("file", str, picker="model_file", doc="A kohya-format adapter under the loras folder."),
+        "file": Port("file", str, picker="model_file", ui={"picker_scope": "loras"}, doc="A kohya-format adapter under the loras folder."),
         "strength": Port("strength", float, required=False, default=1.0, step=0.05,
                          doc="Multiplies the adapter's own scaling; 1 merges it as saved, negative removes its effect."),
         "format": Port("format", str, required=False, default="kohya", advanced=True),

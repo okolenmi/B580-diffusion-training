@@ -140,8 +140,9 @@ select:focus, input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px r
 /* Custom Checkbox Styling */
 input[type="checkbox"] {
     appearance: none;
-    width: 1.6rem;
-    height: 1.6rem;
+    width: 1.1rem;
+    height: 1.1rem;
+    flex: none;
     background: #161b22;
     border: 1px solid var(--border);
     border-radius: 4px;
@@ -161,7 +162,7 @@ input[type="checkbox"]:checked::after {
     left: 50%;
     transform: translate(-50%, -50%);
     color: white;
-    font-size: 1rem;
+    font-size: 0.8rem;
     font-weight: 900;
 }
 
@@ -274,7 +275,6 @@ input[type="checkbox"]:checked::after {
     display: flex;
     flex-direction: column;
     gap: 20px;
-    max-width: 1480px;
     margin-top: 16px;
 }
 .page-body .card { margin-bottom: 0; }

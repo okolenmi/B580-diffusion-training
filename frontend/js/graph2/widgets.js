@@ -69,15 +69,25 @@ function boolControl(spec, { value, onCommit }) {
   return wrap;
 }
 
+/** The spinner's step for a float with no declared step: one unit of its leading digit, so 0.0002 goes to 0.0003 and 3 to 4. */
+function stepFor(value, fallback) {
+  const base = Math.abs(Number.isFinite(value) && value !== 0 ? value : fallback || 0);
+  return base ? 10 ** Math.floor(Math.log10(base) + 1e-9) : 0.1;
+}
+
 function numberControl(spec, { value, onDraft, onCommit, note }) {
   const whole = spec.type === "int";
   const parse = (raw) => (whole ? parseInt(raw, 10) : parseFloat(raw));
   const input = make("input", "cfg-input", { type: "number", title: spec.doc || specName(spec) });
-  if (!whole) input.step = "any";
+  const adaptive = !whole && !has(spec.step);
+  const fit = () => { if (adaptive) input.step = String(stepFor(parseFloat(input.value), Number(spec.default))); };
+  if (!whole && !adaptive) input.step = "any";
   for (const [attr, key] of [["min", "minimum"], ["max", "maximum"], ["step", "step"]]) if (has(spec[key])) input[attr] = String(spec[key]);
   input.value = has(value) && value !== "auto" ? String(value) : "";
   if (has(spec.default) && input.value === "") input.placeholder = String(spec.default);
+  fit();
   input.addEventListener("input", () => {
+    fit();
     const n = parse(input.value);
     if (input.value === "") onDraft(undefined);
     else if (!Number.isNaN(n)) onDraft(n);
@@ -90,6 +100,7 @@ function numberControl(spec, { value, onDraft, onCommit, note }) {
       note?.(`${specName(spec)}: not a ${spec.type}, value cleared.`, "warn");
       return onCommit(undefined);
     }
+    input.value = String(n); // 2e-4 is kept as 0.0002
     onCommit(n);
   });
   const slider = spec.ui?.widget === "slider" && has(spec.minimum) && has(spec.maximum);

@@ -181,7 +181,7 @@ class _SdxlLora:
         o, b = self.o, self.b
         b.add("adapter", "InjectAdapterNode", rank=o.rank, alpha=float(o.alpha if o.alpha is not None else o.rank), checkpointing=o.checkpointing, lora_plus=o.lora_plus,
               **({"init_adapter": o.init_adapter} if o.init_adapter else {}), **({"lr_regions": o.lr_regions} if o.lr_regions else {}))
-        b.add("optimizer", o.optimizer, lr=o.lr, fused=o.fused)
+        b.add("optimizer", o.optimizer, fused=o.fused)
         b.add("schedule", self.SCHEDULES[o.schedule], lr=o.lr)
         if o.warmup:
             b.addon("schedule", "warmup", "WarmupAddon", steps=o.warmup)

@@ -104,7 +104,7 @@ export class NodeView {
     if (layout.collapsed) {
       this._pins(shape);
     } else {
-      this.el.append(this._eventStrip("event-in", shape.events_in || [], "top"), this._body(shape, info, resolved), this._outputs(shape), this._eventStrip("event-out", shape.events_out || [], "bottom"));
+      this.el.append(this._eventStrip("event-in", shape.events_in || [], "top"), this._body(shape, info, resolved), ...this._outputs(shape), this._eventStrip("event-out", shape.events_out || [], "bottom"));
     }
     this.setStatus(this.status);
     const body = this.el.querySelector(".g2-body");
@@ -190,6 +190,7 @@ export class NodeView {
   _row(port, resolved) {
     const row = make("div", "g2-row");
     row.dataset.port = port.name;
+    row.classList.toggle("optional", !port.required || isField(port));
     const wires = this.doc.edgesInto(this.node.uid, port.name);
     if (hasSocket(port)) row.append(this._socket("in", port));
     const label = make("label", "g2-label", `${port.label || port.name}${port.required && !isField(port) ? " *" : ""}`);
@@ -214,6 +215,7 @@ export class NodeView {
   }
 
   _outputs(shape) {
+    if (!shape.outputs.length) return [];
     const outs = make("div", "g2-outs");
     for (const port of shape.outputs) {
       const row = make("div", "g2-out");
@@ -221,7 +223,7 @@ export class NodeView {
       row.title = port.doc || `${port.name}: ${port.type}`;
       outs.append(row);
     }
-    return outs;
+    return [outs];
   }
 
   _eventStrip(side, events, edge) {

@@ -82,13 +82,12 @@ export class Palette {
 
 /** The floating list shown where a wire was dropped or the canvas was double-clicked. */
 export class QuickAdd {
-  constructor(host, { shapes, onPick }) {
-    this.host = host;
+  constructor({ shapes, onPick }) {
     this.shapes = shapes;
     this.onPick = onPick;
     this.box = make("div", "g2-quick");
     this.box.hidden = true;
-    this.host.append(this.box);
+    document.body.append(this.box);
     document.addEventListener("pointerdown", (e) => { if (!this.box.contains(e.target)) this.close(); }, true);
   }
 
@@ -119,10 +118,9 @@ export class QuickAdd {
       if (e.key === "Enter") list.firstElementChild?.click();
     });
     this.box.append(input, list);
-    const box = this.host.getBoundingClientRect();
-    this.box.style.left = `${Math.max(0, Math.min(client.x - box.left, box.width - 240))}px`;
-    this.box.style.top = `${Math.max(0, Math.min(client.y - box.top, box.height - 280))}px`;
     this.box.hidden = false;
+    this.box.style.left = `${Math.max(0, Math.min(client.x, window.innerWidth - this.box.offsetWidth - 8))}px`;
+    this.box.style.top = `${Math.max(0, Math.min(client.y, window.innerHeight - this.box.offsetHeight - 8))}px`;
     draw();
     input.focus();
   }

@@ -46,7 +46,7 @@ g.selected > .g2-edge, .g2-edge.selected { stroke: var(--accent); stroke-width: 
 .g2-badge { font-family: var(--font-mono); font-size: 0.66rem; color: var(--text-dim); }
 .g2-unknown { padding: 0.5rem; color: var(--red); user-select: text; }
 
-.g2-body { padding: 0.3rem 0.5rem; overflow: auto; max-height: 520px; }
+.g2-body { padding: 0.3rem 0.5rem; }
 .g2-note { padding: 0.25rem 0.4rem; margin-bottom: 0.3rem; border-radius: var(--radius-sm); background: var(--surface-alt); color: var(--text-dim); }
 .g2-note.error { color: var(--red); }
 .g2-note.needs_choice { color: #f59e0b; }
@@ -95,7 +95,7 @@ g.selected > .g2-edge, .g2-edge.selected { stroke: var(--accent); stroke-width: 
 .g2-socket[data-side="out"] > .g2-pin-label { right: 1rem; }
 
 /* ---- quick add ---- */
-.g2-quick { position: absolute; z-index: 20; width: 240px; max-height: 280px; display: flex; flex-direction: column; gap: 0.3rem; padding: 0.4rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-pop); }
+.g2-quick { position: fixed; z-index: 1000; width: 240px; max-height: 280px; display: flex; flex-direction: column; gap: 0.3rem; padding: 0.4rem; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-pop); }
 .g2-quick[hidden] { display: none; }
 .g2-quick-title { font-size: 0.68rem; color: var(--text-dim); text-transform: uppercase; }
 .g2-quick-list { overflow: auto; }
@@ -114,3 +114,7 @@ g.selected > .g2-edge, .g2-edge.selected { stroke: var(--accent); stroke-width: 
 .g2-dialog-row .cfg-input, .g2-dialog-row .prow { flex: 1; min-width: 0; }
 .g2-dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.8rem; }
 .g2-dialog { margin: auto; }
+
+/* An optional port's socket shows when the pointer is over its row, while a wire is dragged, or when it is wired. */
+.g2-row.optional > .g2-socket:not(.wired) { opacity: 0; transition: opacity 0.12s; }
+.g2-row.optional:hover > .g2-socket, .g2-wiring .g2-row.optional > .g2-socket { opacity: 1; }

@@ -44,7 +44,8 @@ function selectControl(spec, { value, onCommit }, choices) {
 }
 
 function pickerControl(spec, ctx) {
-  const select = selectControl(spec, ctx, []);
+  const pending = has(ctx.value) && ctx.value !== "" ? [String(ctx.value)] : [];
+  const select = selectControl(spec, ctx, pending);
   Promise.resolve(ctx.options ? ctx.options() : []).then((names) => {
     const current = has(ctx.value) ? String(ctx.value) : "";
     select.replaceChildren(make("option", "", { value: "", textContent: has(spec.default) && spec.default !== "" ? `(default: ${spec.default})` : "(choose…)" }));

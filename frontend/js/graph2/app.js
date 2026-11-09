@@ -53,15 +53,18 @@ function bindLayout() {
 }
 
 /** What a picker offers: model files of the node's `scope`, or the datasets the server lists. */
-async function pickerOptions(spec, values) {
-  if (spec.picker === "dataset") {
-    const answer = await api("/assets/dataset");
-    return (answer.options || []).map((o) => o.value);
-  }
-  if (spec.picker === "model_file" && values.scope) {
-    return (await api(`/catalog/models/${encodeURIComponent(values.scope)}`)).files || [];
-  }
-  return [];
+const PICKER_TTL_MS = 5000;
+const pickerAnswers = new Map();
+
+function pickerOptions(spec, values) {
+  const route = spec.picker === "dataset" ? "/assets/dataset" : spec.picker === "model_file" ? `/catalog/models/${encodeURIComponent(values.scope || spec.scope || "checkpoints")}` : null;
+  if (!route) return Promise.resolve([]);
+  const kept = pickerAnswers.get(route);
+  if (kept && Date.now() - kept.at < PICKER_TTL_MS) return kept.answer;
+  const answer = api(route).then((reply) => (spec.picker === "dataset" ? (reply.options || []).map((o) => o.value) : reply.files || []));
+  pickerAnswers.set(route, { at: Date.now(), answer });
+  answer.catch(() => pickerAnswers.delete(route));
+  return answer;
 }
 
 async function boot() {
@@ -88,7 +91,7 @@ async function boot() {
   let quick = null;
 
   const addAt = (className, point) => {
-    const uid = doc.addNode(className, { x: point.x, y: point.y });
+    const { uid } = doc.addNode(className, { x: point.x, y: point.y });
     canvas.select([uid]);
     return uid;
   };
@@ -111,16 +114,19 @@ async function boot() {
         el("ed-selection").textContent = uids.length > 1 ? `${uids.length} nodes selected` : "";
       },
       onQuickAdd: (point, event) => quick.open({ x: event.clientX, y: event.clientY }, null, "Add node"),
-      onDropEmpty: ({ from, reverse, point, client }) => {
-        const fits = compatibleClasses(catalog.nodes, from, !reverse);
-        quick.open(client, fits, "Add and connect");
+      onDropEmpty: ({ from, reverse, events, point, client }) => {
+        if (events) return;
+        const shape = shapes.shapeOf(doc.nodes.get(from.uid));
+        const port = (reverse ? shape?.inputs : shape?.outputs)?.find((p) => p.name === from.port);
+        if (!port) return;
+        quick.open(client, compatibleClasses(catalog.nodes, port, !reverse), "Add and connect");
         quick.pending = { from, reverse, point };
       },
     },
   });
   inspector = new Inspector(el("inspector"), { doc, shapes, views: canvas.views });
 
-  quick = new QuickAdd(el("g2-canvas"), {
+  quick = new QuickAdd({
     shapes,
     onPick: (className, port) => {
       const where = quick.pending?.point || canvas.viewCenter();

@@ -31,6 +31,7 @@ export class Canvas {
    */
   constructor({ root, doc, shapes, options, note, hooks = {} }) {
     this.root = root;
+    this.root.tabIndex = -1;
     this.doc = doc;
     this.shapes = shapes;
     this.options = options;
@@ -279,6 +280,7 @@ export class Canvas {
     const socket = e.target.closest(".g2-socket");
     if (socket && e.button === 0) { this._startWire(socket, e); return; }
     if (e.target.closest("input, textarea, select, button, label, [data-action]")) return;
+    this.root.focus({ preventScroll: true });
     const uid = this._uidOf(e.target);
     if (uid) {
       if (e.shiftKey) this.select(this.selection.has(uid) ? [...this.selection].filter((u) => u !== uid) : [...this.selection, uid]);
@@ -367,6 +369,7 @@ export class Canvas {
       }
     }
     this._drag = { kind: "wire", from, reverse, picked, events, spring: [], hover: null, timer: null };
+    this.root.classList.add("g2-wiring");
     this._lightSockets();
     this.root.setPointerCapture?.(e.pointerId);
     e.preventDefault();
@@ -413,6 +416,7 @@ export class Canvas {
 
   _endWire(e, drag) {
     clearTimeout(drag.timer);
+    this.root.classList.remove("g2-wiring");
     this.edges.endDrag();
     const under = document.elementFromPoint(e.clientX, e.clientY);
     const target = under?.closest?.(".g2-socket");

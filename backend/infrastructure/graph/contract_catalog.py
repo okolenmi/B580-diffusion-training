@@ -78,6 +78,10 @@ class ContractNodeCatalog(NodeCatalog):
         models = self._environment().services.get("models")
         return models.list_files(scope) if models is not None else []
 
+    def image_libraries(self) -> list[str]:
+        store = self._environment().services.get("datasets")
+        return store.names() if store is not None else []
+
     def diagnostics(self, class_name: str, params: dict) -> dict[str, list[str]]:
         classes, _ = self._registry.load()
         if class_name not in classes:

@@ -13,7 +13,7 @@
    Order of decision: picker -> choices -> bool -> int/float (slider with the
    `ui.widget` hint) -> list/dict/tuple as JSON -> text (textarea with a hint).
    An unset bool shows its default: the node runs with that value, so an
-   unchecked box would say the opposite. A setting that allows "auto" gets an
+   unchecked box would say the opposite. The box stands alone; its state is its value. A setting that allows "auto" gets an
    "auto" choice next to its number.
    --------------------------------------------------------------------------- */
 
@@ -57,16 +57,10 @@ function pickerControl(spec, ctx) {
 }
 
 function boolControl(spec, { value, onCommit }) {
-  const wrap = make("label", "param-label");
-  const box = make("input", "", { type: "checkbox" });
+  const box = make("input", "", { type: "checkbox", title: spec.doc || specName(spec) });
   box.checked = has(value) ? value === true : spec.default === true;
-  const text = document.createTextNode(` ${box.checked}`);
-  box.addEventListener("change", () => {
-    text.textContent = ` ${box.checked}`;
-    onCommit(box.checked); // an explicit false overrides an earlier true
-  });
-  wrap.append(box, text);
-  return wrap;
+  box.addEventListener("change", () => onCommit(box.checked)); // an explicit false overrides an earlier true
+  return box;
 }
 
 /** The spinner's step for a float with no declared step: one unit of its leading digit, so 0.0002 goes to 0.0003 and 3 to 4. */

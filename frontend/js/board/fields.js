@@ -35,20 +35,13 @@ function memoryParams(doc, ref) {
 }
 
 function boolControl(descriptor, get, set) {
-  const wrap = document.createElement("label");
-  wrap.className = "param-label bd-bool";
   const box = document.createElement("input");
   box.type = "checkbox";
-  const text = document.createElement("span");
-  const show = () => {
-    const v = get();
-    box.checked = v === undefined || v === null ? descriptor.default === true : v === true;
-    text.textContent = box.checked ? "on" : "off";
-  };
-  box.addEventListener("change", () => { set(box.checked); show(); });
-  wrap.append(box, text);
-  show();
-  return wrap;
+  box.className = "bd-bool";
+  const v = get();
+  box.checked = v === undefined || v === null ? descriptor.default === true : v === true;
+  box.addEventListener("change", () => set(box.checked));
+  return box;
 }
 
 /** "auto" or a number: a checkbox for auto, and a number box that is

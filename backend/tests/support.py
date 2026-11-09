@@ -111,6 +111,7 @@ from backend.application.use_cases import (
     MakeAssetFolder,
     GetNodeCatalog,
     NodeDiagnostics,
+    ListImageLibraries,
     ListModelFiles,
     ResolveNode,
     PreviewGraphMemory,
@@ -969,6 +970,7 @@ def build_services(
             node_catalog=GetNodeCatalog(catalog=contract_catalog),
             resolve_node=ResolveNode(catalog=contract_catalog),
             model_files=ListModelFiles(catalog=contract_catalog),
+            image_libraries=ListImageLibraries(catalog=contract_catalog),
             list_starters=ListStarters(starters=NextStarters()),
             build_starter=BuildStarter(starters=NextStarters()),
             preview_memory=PreviewGraphMemory(

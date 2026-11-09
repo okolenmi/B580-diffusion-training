@@ -48,6 +48,17 @@ status, _, files = asgi_request(app, "/api/v1/catalog/models/nowhere")
 check(status == 200 and files["files"] == [], "a scope the machine lacks lists nothing")
 
 
+status, _, libs = asgi_request(app, "/api/v1/catalog/libraries")
+check(status == 200 and libs["names"] == [], "the dataset picker lists nothing on a machine without a datasets folder")
+with tempfile.TemporaryDirectory() as folders:
+    base = Path(folders)
+    for name, marker in (("mine", "library.sqlite"), ("trajectories", "metadata.db")):
+        (base / "datasets" / name).mkdir(parents=True)
+        (base / "datasets" / name / marker).write_bytes(b"")
+    from backend.infrastructure.graph.contract_catalog import ContractNodeCatalog, model_environment
+    seen = ContractNodeCatalog(environment=lambda: model_environment(base, base, base / "datasets")).image_libraries()
+    check(seen == ["mine"], "the dataset picker lists what the nodes can open (image libraries), not the page's trajectory datasets")
+
 status, _, listed = asgi_request(app, "/api/v1/starters")
 starter = listed["starters"][0] if status == 200 and listed["starters"] else {}
 check(starter.get("name") == "sdxl-lora" and {"model", "dataset", "output"} <= {o["name"] for o in starter.get("options", []) if o["required"]}, "a starter lists its options, three of them required")

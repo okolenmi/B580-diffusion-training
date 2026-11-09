@@ -35,6 +35,12 @@ def list_model_files(scope: str, services: ApplicationServices = Depends(get_ser
     return {"scope": scope, "files": services.graphs.model_files.execute(scope)}
 
 
+@router.get("/catalog/libraries")
+def list_image_libraries(services: ApplicationServices = Depends(get_services)) -> dict:
+    """The datasets a node can open (image libraries), for the dataset picker."""
+    return {"names": services.graphs.image_libraries.execute()}
+
+
 class StarterIn(BaseModel):
     options: dict = Field(default_factory=dict)
 

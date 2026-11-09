@@ -114,7 +114,7 @@ from .infrastructure.dataset_task_gateway import SubprocessDatasetTaskGateway
 from .infrastructure.dataset_tasks import SqliteDatasetTasks
 from .infrastructure.events.callback_event_bus import CallbackEventBus
 from .infrastructure.file_asset_store import FileSystemAssetStore
-from .application.use_cases.node_shapes import GetNodeCatalog, ListModelFiles, ResolveNode
+from .application.use_cases.node_shapes import GetNodeCatalog, ListImageLibraries, ListModelFiles, ResolveNode
 from .application.use_cases.starters import BuildStarter, ListStarters
 from .infrastructure.graph.contract_catalog import ContractNodeCatalog, model_environment
 from .infrastructure.graph.next_starters import NextStarters
@@ -451,6 +451,7 @@ def build_container(settings: Settings) -> Container:
             node_catalog=GetNodeCatalog(catalog=node_catalog),
             resolve_node=ResolveNode(catalog=node_catalog),
             model_files=ListModelFiles(catalog=node_catalog),
+            image_libraries=ListImageLibraries(catalog=node_catalog),
             list_starters=ListStarters(starters=NextStarters()),
             build_starter=BuildStarter(starters=NextStarters()),
             diagnostics=NodeDiagnostics(catalog=node_catalog),

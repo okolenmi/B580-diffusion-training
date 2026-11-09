@@ -29,6 +29,11 @@ class NodeCatalog(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def image_libraries(self) -> list[str]:
+        """Names of the datasets the nodes can open (image libraries); empty when the machine has no datasets folder."""
+        raise NotImplementedError
+
+    @abstractmethod
     def diagnostics(self, class_name: str, params: dict) -> dict[str, list[str]]:
         """One node's advice about the params being edited, keyed by input name (``Node.diagnostics``).
 

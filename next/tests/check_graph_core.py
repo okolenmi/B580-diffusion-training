@@ -12,6 +12,7 @@ from ..graph import (diagnose_node, Edge, EpochEnding, EventHub, EventIn, EventO
                      Node, NodeRegistry, NodeSpec, Port, build_catalog, parse, resolve_node)
 from ..graph.document import FORMAT, new_uid
 from ..graph.events import (EventDeliveryError, EventHandlerError, EventLoopError, EventThreadError, Wire)
+from ..graph.catalog import node_info
 from ..graph.settings import SettingsError, SettingsRegistry
 from ..graph.validate import topological_order
 from . import toy_nodes
@@ -65,6 +66,12 @@ def declarations():
                                      EVENTS_OUT={"e": EventOut(int)}), "payload must be an EventType")
     raises(TypeError, lambda: define(OUTPUTS={"x": Port("x", int)}, DYNAMIC=toy_nodes.DynamicNode.DYNAMIC),
            "DYNAMIC needs depends_on ports and resolve()")
+    raises(TypeError, lambda: define(OUTPUTS={"x": Port("x", int)}, POSSIBLE_OUTPUTS={"z": Port("z", int)}),
+           "possible ports on a static node", "DYNAMIC")
+    raises(TypeError, lambda: define(INPUTS={"file": Port("file", str, required=False)}, DYNAMIC=toy_nodes.DynamicNode.DYNAMIC,
+                                     POSSIBLE_INPUTS={"file": Port("file", str)}), "a possible port repeats a certain one")
+    check(toy_nodes.DynamicNode.POSSIBLE_OUTPUTS and node_info(toy_nodes.DynamicNode)["possible_outputs"][0]["name"] == "value",
+          "a dynamic node's possible outputs reach the catalog")
     raises(ValueError, lambda: Port("p", str, choices=("a",), default="b"), "default outside choices")
     raises(ValueError, lambda: Port("p", int, minimum=5, maximum=1), "min above max")
     check(toy_nodes.GroupedNode.GROUPS[1].collapsed, "a node with groups and ten fields is accepted")

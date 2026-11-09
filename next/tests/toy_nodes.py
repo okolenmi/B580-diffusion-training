@@ -162,6 +162,7 @@ class DynamicNode(Node):
 
     INPUTS = {"file": Port("file", str, required=False, default="")}
     OUTPUTS = {}
+    POSSIBLE_OUTPUTS = {"value": Port("value", int)}
     DYNAMIC = DynamicShape(depends_on=("file",))
 
     @classmethod

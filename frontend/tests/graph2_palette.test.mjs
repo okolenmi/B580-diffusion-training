@@ -25,7 +25,9 @@ test("a dynamic node without outputs is offered through its possible outputs, fl
   const found = compatibleClasses([...NODES, dynamic], NODES[1].inputs[0], false);
   assert.deepEqual(found.filter((f) => f.possible).map((f) => f.info.class_name), ["Load"]);
   assert.equal(found.find((f) => f.info.class_name === "Make").possible, false);
-  assert.deepEqual(compatibleClasses([dynamic], NODES[0].outputs[0], true), [], "an output never gains a possible partner");
+  const wantsFloat = { ...dynamic, class_name: "Wants", possible_outputs: [], possible_inputs: [port("v", "float")] };
+  const toward = compatibleClasses([wantsFloat], NODES[0].outputs[0], true);
+  assert.deepEqual(toward.map((f) => [f.info.class_name, f.possible]), [["Wants", true]], "a possible input is offered to a dragged output");
 });
 
 test("search matches name, class and category; grouping sorts both levels", () => {

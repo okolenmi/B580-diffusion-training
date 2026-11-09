@@ -198,7 +198,9 @@ class Node(ABC):
 
     INPUTS: ClassVar[dict[str, Port]] = {}
     OUTPUTS: ClassVar[dict[str, Port]] = {}
-    #: What a dynamic node may offer once its params are set; lets the editor suggest it for a wire before it resolves.
+    #: Connectors a dynamic node may have once its params are set. The editor lists them apart from the certain ones
+    #: when it suggests nodes for a wire; they cannot be wired before the node resolves.
+    POSSIBLE_INPUTS: ClassVar[dict[str, Port]] = {}
     POSSIBLE_OUTPUTS: ClassVar[dict[str, Port]] = {}
     GROUPS: ClassVar[tuple[Group, ...]] = ()
     EVENTS_IN: ClassVar[dict[str, EventIn]] = {}
@@ -289,6 +291,12 @@ def _check_declarations(cls: type[Node]) -> None:
         for key, port in ports.items():
             if not isinstance(port, Port) or port.name != key:
                 raise TypeError(f"{name}.{label}[{key!r}] must be a Port named {key!r}")
+    for label, ports, certain in (("POSSIBLE_INPUTS", cls.POSSIBLE_INPUTS, cls.INPUTS), ("POSSIBLE_OUTPUTS", cls.POSSIBLE_OUTPUTS, cls.OUTPUTS)):
+        if ports and cls.DYNAMIC is None:
+            raise TypeError(f"{name}.{label} only makes sense on a DYNAMIC node: a static node's ports are all certain")
+        for key, port in ports.items():
+            if not isinstance(port, Port) or port.name != key or key in certain:
+                raise TypeError(f"{name}.{label}[{key!r}] must be a Port named {key!r} that the node does not already declare")
     if not cls.OUTPUTS and cls.DYNAMIC is None:
         raise TypeError(f"{name} is concrete but declares no OUTPUTS (and is not DYNAMIC)")
     group_ids = [g.id for g in cls.GROUPS]

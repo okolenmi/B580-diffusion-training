@@ -66,6 +66,7 @@ def node_info(cls: type[Node]) -> dict:
         "doc": (cls.__doc__ or "").strip().split("\n\n")[0],
         "inputs": [port_info(p) for p in cls.INPUTS.values()],
         "outputs": [port_info(p) for p in cls.OUTPUTS.values()],
+        "possible_inputs": [port_info(p) for p in cls.POSSIBLE_INPUTS.values()],
         "possible_outputs": [port_info(p) for p in cls.POSSIBLE_OUTPUTS.values()],
         "groups": [{"id": g.id, "label": g.label, "collapsed": g.collapsed, "advanced": g.advanced,
                     "visible_when": [g.visible_when[0], _json_value(g.visible_when[1])] if g.visible_when else None,

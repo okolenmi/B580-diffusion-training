@@ -131,7 +131,7 @@ async function boot() {
     onPick: (className, port, possible) => {
       const where = quick.pending?.point || canvas.viewCenter();
       const uid = addAt(className, where);
-      if (possible && quick.pending) log(`${port.label || port.name} exists once the node is set up (choose its file), so it was added unconnected.`);
+      if (possible && quick.pending) log(`${port.label || port.name} exists once the node is set up, so the node was added unconnected.`);
       else if (port && quick.pending) {
         const { from, reverse } = quick.pending;
         const [source, target] = reverse ? [{ uid, port: port.name }, from] : [from, { uid, port: port.name }];

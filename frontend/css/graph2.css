@@ -99,6 +99,8 @@ g.selected > .g2-edge, .g2-edge.selected { stroke: var(--accent); stroke-width: 
 .g2-quick[hidden] { display: none; }
 .g2-quick-title { font-size: 0.68rem; color: var(--text-dim); text-transform: uppercase; }
 .g2-quick-list { overflow: auto; }
+.g2-quick-section { margin: 0.35rem 0 0.15rem; font-size: 0.66rem; color: var(--text-dim); text-align: center; letter-spacing: 0.04em; }
+.g2-quick-section::before, .g2-quick-section::after { content: "-----"; margin: 0 0.4rem; opacity: 0.5; }
 
 /* ---- side panels ---- */
 .g2-setting-group { border-top: 1px solid var(--border); padding: 0.2rem 0.6rem; }

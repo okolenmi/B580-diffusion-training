@@ -9,19 +9,18 @@ import { hasSocket, wireProblem } from "./ports.js";
 
 /**
  * The ports of a class that could be wired to `port` (an output when `fromOutput`, else an input), as `{info, port, possible}`.
- * A dynamic node with no outputs yet is offered through the outputs it may have (`possible`); it cannot be wired until it resolves.
+ * A dynamic node is also offered through the connectors it may get once set up (`possible`); those cannot be wired yet.
  */
 export function compatibleClasses(nodes, port, fromOutput) {
   const fits = (p) => (fromOutput ? wireProblem(port, p) === null : wireProblem(p, port) === null);
   const found = [];
   for (const info of nodes) {
-    const side = fromOutput ? info.inputs.filter(hasSocket) : info.outputs;
-    const match = side.find(fits);
-    if (match) {
-      found.push({ info, port: match, possible: false });
+    const certain = (fromOutput ? info.inputs.filter(hasSocket) : info.outputs).find(fits);
+    if (certain) {
+      found.push({ info, port: certain, possible: false });
       continue;
     }
-    const maybe = fromOutput ? null : (info.possible_outputs || []).find(fits);
+    const maybe = ((fromOutput ? info.possible_inputs : info.possible_outputs) || []).find(fits);
     if (maybe) found.push({ info, port: maybe, possible: true });
   }
   return found;
@@ -113,19 +112,24 @@ export class QuickAdd {
     const list = make("div", "g2-quick-list");
     const draw = () => {
       list.replaceChildren();
-      for (const { info, port, possible } of all.filter((c) => matches(c.info, input.value)).slice(0, 40)) {
-        const tag = port ? ` · ${port.label || port.name}${possible ? " (possible)" : ""}` : "";
-        const row = make("div", "ed-palette-item", `${info.display_name}${tag}`);
-        row.title = possible ? `${info.category} -- the output exists once the node is set up, so it is added unconnected` : info.category;
-        row.addEventListener("click", () => { this.close(); this.onPick(info.class_name, port, possible); });
-        list.append(row);
+      const shown = all.filter((c) => matches(c.info, input.value)).slice(0, 40);
+      const sections = [["main", shown.filter((c) => !c.possible)], ["may have this connector", shown.filter((c) => c.possible)]];
+      for (const [label, rows] of sections) {
+        if (!rows.length) continue;
+        if (all.some((c) => c.possible)) list.append(make("div", "g2-quick-section", label));
+        for (const { info, port, possible } of rows) {
+          const row = make("div", "ed-palette-item", `${info.display_name}${port ? ` · ${port.label || port.name}` : ""}`);
+          row.title = possible ? `${info.category} -- the connector exists once the node is set up, so it is added unconnected` : info.category;
+          row.addEventListener("click", () => { this.close(); this.onPick(info.class_name, port, possible); });
+          list.append(row);
+        }
       }
-      if (!list.children.length) list.append(make("div", "console-line info", "nothing fits"));
+      if (!list.querySelector(".ed-palette-item")) list.append(make("div", "console-line info", "nothing fits"));
     };
     input.addEventListener("input", draw);
     input.addEventListener("keydown", (e) => {
       if (e.key === "Escape") this.close();
-      if (e.key === "Enter") list.firstElementChild?.click();
+      if (e.key === "Enter") list.querySelector(".ed-palette-item")?.click();
     });
     this.box.append(input, list);
     this.box.hidden = false;

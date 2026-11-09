@@ -112,10 +112,7 @@
 .bd-titles { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.2; }
 .bd-title { font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bd-sub { font-size: 10.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bd-rename {
-    width: 100%; padding: 2px 6px !important; font-size: 13px !important; font-weight: 700;
-    border-radius: var(--radius-sm) !important;
-}
+.bd-head .bd-rename { width: 100%; padding: 2px 6px; font-size: 13px; font-weight: 700; border-radius: var(--radius-sm); }
 .bd-badge {
     font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;
     padding: 2px 7px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); flex: none;
@@ -255,6 +252,6 @@
 
 /* A pop-out monitor window is just the board. */
 .tpl-window .rail, .tpl-window .page-topbar, .tpl-window .tpl-toolbar, .tpl-window .tpl-tray,
-.tpl-window #console-window, .tpl-window #console-fab { display: none !important; }
+.tpl-window .fconsole, .tpl-window .fconsole-fab { display: none; }
 .tpl-window.has-rail { padding-left: 0; }
 .tpl-window .content-area { padding: 12px; }

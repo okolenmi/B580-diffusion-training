@@ -33,7 +33,7 @@
 /* The `hidden` attribute must beat class display rules (.btn,
    .ed-palette-item, ...). The UA sheet's [hidden]{display:none} loses to
    any author class rule at equal specificity, so bump ours with an
-   element prefix (0,1,1 > 0,1,0) -- position-independent, no !important.
+   element prefix (0,1,1 > 0,1,0) -- position-independent, no !important (and the rest of the sheets now follow the same rule).
    Legacy avoided this by toggling inline style.display instead; the
    clean-room port standardized on the attribute, so the design system
    has to honor it. */

@@ -21,6 +21,7 @@ export class LibraryState extends EventTarget {
     this.view = { set: "all", q: "", missing: "" };
     this.channel = CHANNELS[0];
     this.items = [];
+    this.display = null;
     this.total = 0;
     this.summary = null;
     this.loading = false;
@@ -29,7 +30,9 @@ export class LibraryState extends EventTarget {
 
   emit(type, detail) { this.dispatchEvent(new CustomEvent(type, { detail })); }
 
-  get order() { return this.items.map((i) => i.id); }
+  /** Ids as they read on screen: the mosaic may deal pictures out of import order (packing.js). */
+  get order() { return this.display ?? this.items.map((i) => i.id); }
+  shown() { return this.order.map((id) => this.find(id)).filter(Boolean); }
   find(id) { return this.items.find((i) => i.id === id) ?? null; }
   setNames() { return Object.keys(this.summary?.sets ?? {}).filter((n) => n !== "all"); }
 

@@ -5,15 +5,20 @@ import { h } from "../lib/dom.js";
 import { CHANNELS, plural } from "./client.js";
 import { icon } from "./icons.js";
 
-const ROW_KEY = "datasets.row";
-const ROW_MIN = 110;
-const ROW_MAX = 320;
-const ROW_DEFAULT = 180;
+const SIZE_MIN = 110;
+const SIZE_MAX = 320;
+const MODES = [
+  ["balanced", "Balanced", "Pictures of every shape get about the same area; the order on screen follows the import order loosely"],
+  ["rows", "Rows", "Rows of one height, strictly in import order; wide pictures come out bigger than tall ones"],
+];
 
-const store = {
-  get() { try { return Number(localStorage.getItem(ROW_KEY)) || ROW_DEFAULT; } catch { return ROW_DEFAULT; } },
-  set(v) { try { localStorage.setItem(ROW_KEY, String(v)); } catch { /* a private window: the size just is not remembered */ } },
-};
+/** A setting that survives a reload; a private window just forgets it. */
+const remembered = (key, fallback) => ({
+  get() { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } },
+  set(value) { try { localStorage.setItem(key, String(value)); } catch { /* not remembered */ } },
+});
+const sizeStore = remembered("datasets.size", "180");
+const modeStore = remembered("datasets.layout", "balanced");
 
 export class Toolbar {
   /** @param {import("./library_state.js").LibraryState} state  @param {import("./mosaic.js").Mosaic} mosaic */
@@ -27,19 +32,30 @@ export class Toolbar {
       ...CHANNELS.map((c) => h("option", { value: c, text: `Without ${c} caption` })));
     this.channels = h("div", { class: "seg", role: "group", "aria-label": "Caption shown" },
       ...CHANNELS.map((c) => h("button", { class: "seg-btn", "data-channel": c, text: c, title: `Show and edit the ${c} caption`, onclick: () => state.setChannel(c) })));
-    this.size = h("input", { type: "range", class: "tb-size", min: ROW_MIN, max: ROW_MAX, step: 10, value: store.get(), "aria-label": "Tile size", title: "Tile size" });
-    this.size.value = store.get();
-    mosaic.setRow(Number(this.size.value));
-    this.size.addEventListener("input", () => { mosaic.setRow(Number(this.size.value)); store.set(Number(this.size.value)); });
+    this.size = h("input", { type: "range", class: "tb-size", min: SIZE_MIN, max: SIZE_MAX, step: 10, "aria-label": "Tile size", title: "Tile size" });
+    this.size.value = sizeStore.get();
+    mosaic.size = Number(this.size.value);
+    this.size.addEventListener("input", () => { mosaic.setSize(Number(this.size.value)); sizeStore.set(this.size.value); });
+    this.mode = h("div", { class: "seg", role: "group", "aria-label": "Layout" },
+      ...MODES.map(([id, label, hint]) => h("button", { class: "seg-btn", "data-mode": id, text: label, title: hint, onclick: () => this.setMode(id) })));
+    this.mosaic = mosaic;
+    this.setMode(MODES.some(([id]) => id === modeStore.get()) ? modeStore.get() : "balanced", false);
     this.count = h("span", { class: "tb-count" });
     this.picked = h("span", { class: "tb-picked", hidden: true });
     root.append(
       h("div", { class: "tb-search-wrap" }, icon("search", 15), this.search),
-      this.missing, this.channels,
+      this.missing, this.channels, this.mode,
       h("label", { class: "tb-size-wrap" }, icon("image", 13), this.size, icon("image", 18)),
       h("span", { class: "tb-gap" }), this.picked, this.count);
     for (const type of ["items", "selection", "channel", "summary"]) state.addEventListener(type, () => this.sync());
     this.sync();
+  }
+
+  setMode(id, apply = true) {
+    for (const b of this.mode.children) b.classList.toggle("active", b.dataset.mode === id);
+    modeStore.set(id);
+    if (apply) this.mosaic.setMode(id);
+    else this.mosaic.mode = id;
   }
 
   sync() {

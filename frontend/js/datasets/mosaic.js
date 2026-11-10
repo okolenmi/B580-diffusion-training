@@ -5,7 +5,8 @@
 import { h } from "../lib/dom.js";
 import { CHANNELS, datasets } from "./client.js";
 import { icon } from "./icons.js";
-import { justify } from "./layout.js";
+import { rowsLayout } from "./layout.js";
+import { pack } from "./packing.js";
 
 const THUMB = 384;
 const GAP = 6;
@@ -18,8 +19,10 @@ export class Mosaic {
     this.state = state;
     this.hooks = hooks;
     this.tiles = new Map();
+    this.boxes = new Map();
     this.shown = [];
-    this.row = 180;
+    this.size = 180;
+    this.mode = "balanced";
     this.grid = h("div", { class: "mosaic", role: "listbox", "aria-multiselectable": "true" });
     this.sentinel = h("div", { class: "mosaic-end" });
     this.empty = h("div", { class: "mosaic-empty", hidden: true });
@@ -32,33 +35,46 @@ export class Mosaic {
     this.scroller.addEventListener("keydown", (e) => this.key(e));
     new IntersectionObserver((entries) => { if (entries.some((x) => x.isIntersecting)) state.loadMore(); }, { root: this.scroller, rootMargin: "800px" }).observe(this.sentinel);
 
-    new ResizeObserver(() => this.layout()).observe(this.grid);
+    let settle = null;
+    new ResizeObserver(() => { clearTimeout(settle); settle = setTimeout(() => this.layout(), 120); }).observe(this.grid);
     state.addEventListener("items", () => this.render());
     state.addEventListener("selection", () => this.paintSelection());
     state.addEventListener("channel", () => this.items().forEach((item) => this.paint(item)));
     state.addEventListener("item", (e) => { const item = state.find(e.detail.id); if (item) this.paint(item); });
   }
 
-  setRow(px) {
-    this.row = px;
+  setSize(px) {
+    this.size = px;
     this.layout();
   }
 
-  /** Size every tile so the rows fill the width (layout.js); runs on new images, a resize and a tile-size change. */
+  setMode(mode) {
+    this.mode = mode;
+    this.layout();
+  }
+
+  /** Put every tile in its place; runs on new images, a tile-size or mode change, and (debounced) a resize. */
   layout() {
     const width = this.grid.clientWidth;
     const items = this.items();
     if (!width || !items.length) return;
-    for (const row of justify(items.map((i) => i.width / i.height), width, this.row, GAP)) {
-      for (let n = row.start; n < row.start + row.count; n++) {
-        const item = items[n];
-        const tile = this.tiles.get(item.id);
-        if (!tile) continue;
-        tile.style.width = `${Math.floor((item.width / item.height) * row.height)}px`;
-        tile.style.height = `${Math.round(row.height)}px`;
-      }
-    }
+    const ratios = items.map((i) => i.width / i.height);
+    const complete = items.length >= this.state.total;
+    const result = this.mode === "rows" ? rowsLayout(ratios, width, this.size, GAP) : pack(ratios, width, this.size, GAP, complete);
+    this.boxes.clear();
+    items.forEach((item, n) => {
+      const tile = this.tiles.get(item.id);
+      const box = result.boxes[n];
+      if (!tile) return;
+      tile.hidden = !box;
+      if (!box) return;
+      this.boxes.set(item.id, box);
+      Object.assign(tile.style, { left: `${Math.round(box.x)}px`, top: `${Math.round(box.y)}px`, width: `${Math.round(box.w)}px`, height: `${Math.round(box.h)}px` });
+    });
+    this.grid.style.height = `${Math.ceil(result.height)}px`;
+    this.state.display = result.order.map((n) => items[n].id);
   }
+
   items() { return this.state.items; }
 
   /* ---- drawing ---- */
@@ -138,7 +154,7 @@ export class Mosaic {
   }
 
   openViewer(id) {
-    const items = this.items();
+    const items = this.state.shown();
     this.hooks.lightbox.open(items, Math.max(0, items.findIndex((i) => i.id === id)));
   }
 
@@ -172,35 +188,32 @@ export class Mosaic {
     if (order.length - order.indexOf(target) < 12) state.loadMore();
   }
 
-  /** The image an arrow key moves to: undefined = not a movement key, null = nowhere to go. */
+  /** The image an arrow key moves to: undefined = not a movement key, null = nowhere to go. Rows are uneven and the
+   *  balanced layout has no rows, so a move goes to the nearest tile that way; sideways, with nothing beside it, to
+   *  the next in reading order. */
   neighbour(key, order, current) {
     if (!order.length || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(key)) return undefined;
     if (key === "Home") return order[0];
     if (key === "End") return order.at(-1);
-    const at = order.indexOf(current);
-    if (at < 0) return order[0];
-    if (key === "ArrowLeft") return order[at - 1] ?? null;
-    if (key === "ArrowRight") return order[at + 1] ?? null;
-    return this.rowNeighbour(order, at, key === "ArrowDown" ? 1 : -1);
-  }
-
-  /** Rows are uneven, so "the tile below" is the one in the next row whose centre is nearest this one's. */
-  rowNeighbour(order, at, direction) {
-    const rect = (id) => this.tiles.get(id)?.getBoundingClientRect();
-    const here = rect(order[at]);
-    if (!here) return null;
-    const x = here.left + here.width / 2;
-    let rowTop = null;
+    const here = this.boxes.get(current);
+    if (!here) return order[0];
+    const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[key];
+    const cx = here.x + here.w / 2;
+    const cy = here.y + here.h / 2;
     let best = null;
-    for (let i = at + direction; i >= 0 && i < order.length; i += direction) {
-      const r = rect(order[i]);
-      if (!r) break;
-      if (Math.abs(r.top - here.top) < 4) continue;
-      rowTop ??= r.top;
-      if (Math.abs(r.top - rowTop) >= 4) break;
-      const gap = Math.abs(r.left + r.width / 2 - x);
-      if (!best || gap < best.gap) best = { id: order[i], gap };
+    for (const [id, b] of this.boxes) {
+      if (id === current) continue;
+      const dx = b.x + b.w / 2 - cx;
+      const dy = b.y + b.h / 2 - cy;
+      const along = dx * dir[0] + dy * dir[1];
+      const across = Math.abs(dx * dir[1]) + Math.abs(dy * dir[0]);
+      if (along <= 1 || (dir[0] !== 0 ? across > here.h * 0.5 + b.h * 0.25 : across > here.w + b.w)) continue;
+      const score = along + 2 * across;
+      if (!best || score < best.score) best = { id, score };
     }
-    return best ? best.id : null;
+    if (best) return best.id;
+    if (dir[0] === 0) return null;
+    const at = order.indexOf(current);
+    return order[at + dir[0]] ?? null;
   }
 }

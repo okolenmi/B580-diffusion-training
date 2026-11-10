@@ -65,7 +65,7 @@ export class ImagePanel {
   }
 
   open() {
-    const items = this.state.items;
+    const items = this.state.shown();
     this.hooks.lightbox.open(items, Math.max(0, items.findIndex((i) => i.id === this.item.id)));
   }
 

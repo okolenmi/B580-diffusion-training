@@ -46,6 +46,7 @@ ASSETS = (
     "/ui/js/datasets/library_state.js",
     "/ui/js/datasets/selection.js",
     "/ui/js/datasets/mosaic.js",
+    "/ui/js/datasets/packing.js",
     "/ui/js/datasets/toolbar.js",
     "/ui/js/datasets/set_tabs.js",
     "/ui/js/datasets/inspector.js",

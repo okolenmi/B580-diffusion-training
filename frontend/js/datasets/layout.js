@@ -30,3 +30,19 @@ export function justify(ratios, width, target, gap) {
   if (start < ratios.length) rows.push({ start, count: ratios.length - start, height: Math.min(target, heightOf(start, ratios.length)) });
   return rows;
 }
+
+/** The same rows as boxes, in the shape packing.js returns: {boxes, order, height}. */
+export function rowsLayout(ratios, width, size, gap) {
+  const boxes = new Array(ratios.length);
+  let y = 0;
+  for (const row of justify(ratios, width, size, gap)) {
+    let x = 0;
+    for (let n = row.start; n < row.start + row.count; n++) {
+      const w = Math.floor(ratios[n] * row.height);
+      boxes[n] = { x, y, w, h: Math.round(row.height) };
+      x += w + gap;
+    }
+    y += Math.round(row.height) + gap;
+  }
+  return { boxes, order: ratios.map((_, n) => n), height: Math.max(0, y - gap) };
+}

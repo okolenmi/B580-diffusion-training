@@ -149,10 +149,10 @@ body.ds-open .page-body { flex: 1; min-height: 0; margin-top: 14px; }
 .mosaic-scroll:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
 .mosaic-end { height: 1px; }
 
-/* Tile sizes come from mosaic.js (justified rows); this only lays them out. */
-.mosaic { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 6px; }
+/* Position and size of every tile come from mosaic.js (layout.js or packing.js). */
+.mosaic { position: relative; }
 .tile {
-    position: relative; flex: none; overflow: hidden; cursor: pointer; background: var(--surface-alt); border-radius: 6px;
+    position: absolute; overflow: hidden; cursor: pointer; background: var(--surface-alt); border-radius: 6px;
     transition: box-shadow var(--dur-fast);
 }
 .tile img { display: block; width: 100%; height: 100%; object-fit: cover; transition: filter var(--dur-fast); user-select: none; }
@@ -238,6 +238,8 @@ body.ds-open .page-body { flex: 1; min-height: 0; margin-top: 14px; }
 .ov-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
 .ov-key { flex: none; width: 56px; font-weight: 600; text-align: left; }
 .ov-grow { flex: 1; }
+.ov-right { text-align: right; white-space: nowrap; }
+.ov-name { flex: 0 1 auto; min-width: 0; max-width: 52%; overflow: hidden; font-size: 13px; font-weight: 600; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .ov-val { color: var(--text-dim); font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .ov-val.ok { color: var(--green); }
 .ov-note { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }

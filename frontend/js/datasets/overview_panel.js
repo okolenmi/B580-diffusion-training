@@ -116,7 +116,7 @@ export class OverviewPanel {
   setList(me) {
     const names = Object.keys(me.sets).filter((n) => n !== "all");
     const rows = names.map((n) => h("div", { class: "ov-row" },
-      h("button", { class: "link ov-key", text: n, title: "Show this set", onclick: () => this.state.setView({ set: n }) }),
+      h("button", { class: "link ov-name", text: n, title: `Show set ${n}`, onclick: () => this.state.setView({ set: n }) }),
       h("span", { class: "ov-val ov-grow", text: plural(me.sets[n], "image") }),
       h("button", { class: "icon-btn", title: `Delete set ${n}`, "aria-label": `Delete set ${n}`, onclick: () => this.removeSet(n) }, icon("trash", 14))));
     return this.section("Sets", ...(rows.length ? rows : [h("p", { class: "text-dim", text: "A set is a subset a run can train on. Select images and add them to one, or drag them onto a set tab." })]));
@@ -128,7 +128,7 @@ export class OverviewPanel {
 
   cacheList(me) {
     const rows = me.caches.map((c) => h("div", { class: "ov-row" },
-      h("span", { class: "ov-key", text: c.vae }), h("span", { class: "ov-val ov-grow", text: `${plural(c.files, "file")} · ${fmtBytes(c.bytes)}` }),
+      h("span", { class: "ov-name", text: c.vae, title: c.vae }), h("span", { class: "ov-val ov-grow ov-right", text: `${plural(c.files, "file")} · ${fmtBytes(c.bytes)}` }),
       h("button", { class: "icon-btn", title: "Delete this cache", "aria-label": `Delete cache ${c.vae}`, onclick: () => this.removeCache(c.vae) }, icon("trash", 14))));
     return this.section("Latent caches", ...(rows.length ? rows : [h("p", { class: "text-dim", text: "None yet. A run that trains on this dataset builds one per VAE." })]),
       rows.length ? h("p", { class: "text-dim ov-hint", text: "Rebuilt by the next run; delete one after changing the images or the bucket settings." }) : "");

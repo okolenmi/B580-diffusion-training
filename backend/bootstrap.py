@@ -5,10 +5,10 @@ Order of business:
 1. ``Settings`` arrive fully built (from the CLI);
 2. infrastructure objects are constructed (database + migrations,
    repository, event bus, clock, settings store, workspace layout,
-   config inspector/files/options, assets store, dataset and graph
+   config inspector/files/options, assets store, image-library and graph
    subsystems);
 3. the supervisors and use cases are constructed with those ports;
-4. ``ReconcileDatasetTasks`` / ``ReconcileGraphExecutions`` sweep rows
+4. ``ReconcileGraphExecutions`` sweeps rows
    left unfinished by a previous process (before any request can race
    them);
 5. the aggregate goes to ``presentation.create_app``.
@@ -27,10 +27,9 @@ from dataclasses import dataclass
 from .application.graph_peak_source import GraphPeakSource
 from .application.graph_supervisor import GraphExecutionSupervisor
 from .application.lifecycle_writer import ExecutionLifecycleWriter
-from .application.memory_admission import LedgerProvider, release, task_owner
+from .application.memory_admission import LedgerProvider
 from .application.project_paths import ProjectPaths
 from .application.ports.clock import Clock
-from .application.dataset_task_sweeper import DatasetTaskSweeper
 from .application.event_publisher import EventPublisher
 from .application.use_cases.graph_modules import DescribeGraphModules, ResolveTemplate
 from .application.use_cases.run_template import RunTemplate
@@ -44,7 +43,6 @@ from .application.services import (
     ApplicationServices,
     AssetServices,
     ConfigServices,
-    DatasetServices,
     GraphServices,
     LibraryServices,
     InstallerServices,
@@ -55,49 +53,33 @@ from .application.services import (
 from .application.use_cases import (
     ApplyInstallation,
     BrowseAssets,
-    BulkUpdateDatasetItems,
     CheckComfyConflicts,
     GetInstall,
     InstallJob,
     StartInstall,
     CheckRequirements,
-    CommitDatasetItems,
-    CreateDataset,
-    DeleteDataset,
     DeleteGraph,
     DeleteGraphExecutions,
     DescribeRequirements,
-    DiscardDatasetItems,
     GetConfig,
     GetConfigOptions,
-    GetDataset,
     GetGraph,
     GetGraphExecution,
     GetSettings,
     InspectAsset,
     ListAssets,
-    ListDatasetItems,
-    ListDatasetSets,
-    ListDatasetTasks,
-    ListDatasets,
     ListGraphExecutions,
     ListGraphs,
     MakeAssetFolder,
     NodeDiagnostics,
     ReadConfigRaw,
-    ReadDatasetFile,
-    ReconcileDatasetTasks,
     ReconcileGraphExecutions,
     SweepExecutionScratch,
     SaveGraph,
-    SetDatasetPreview,
-    StartDatasetTask,
     StartGraphExecution,
     SubscribeMonitor,
-    StopDatasetTask,
     StopGraphExecution,
     UpdateConfig,
-    UpdateDatasetItem,
     UpdateSettings,
     UploadAsset,
     PreviewGraphMemory,
@@ -108,12 +90,7 @@ from .config import GRAPH_EXECUTION_CHILD, Settings
 from .infrastructure.clock import SystemClock
 from .infrastructure.config_options import PydanticConfigOptions
 from .infrastructure.core_config_files import CoreConfigFiles
-from .infrastructure.dataset_files import FsDatasetFiles
-from .infrastructure.dataset_library import SqliteDatasetLibrary
 from .infrastructure.image_libraries import FsImageLibraries
-from .infrastructure.dataset_previews import SqliteDatasetPreviews
-from .infrastructure.dataset_task_gateway import SubprocessDatasetTaskGateway
-from .infrastructure.dataset_tasks import SqliteDatasetTasks
 from .infrastructure.events.callback_event_bus import CallbackEventBus
 from .infrastructure.file_asset_store import FileSystemAssetStore
 from .application.use_cases.image_libraries import (
@@ -210,18 +187,7 @@ def build_container(settings: Settings) -> Container:
     # Shared between the installer services so a job can be polled.
     install_jobs: dict[str, InstallJob] = {}
 
-    # Dataset domain (M3b): library reads each dataset's own metadata.db,
-    # task rows live in backend.db, and the fork gateway spawns children
-    # through the same layout the settings resolve. The library is built
-    # before the asset store so the catalog-only `dataset` kind can
-    # list names through the same visibility rules as the API.
-    dataset_library = SqliteDatasetLibrary(layout)
-    dataset_tasks = SqliteDatasetTasks(database, clock)
-    # Card preview pointer: backend.db row + first-item fallback read
-    # through the library (M8f) -- server view state, never dataset files.
-    dataset_previews = SqliteDatasetPreviews(database, dataset_library)
-    dataset_files = FsDatasetFiles(layout.datasets_dir)
-    assets = FileSystemAssetStore(layout, datasets=dataset_library)
+    assets = FileSystemAssetStore(layout)
 
     # Graph domain (M4): one NodeRegistry feeds both the palette and the
     # executor -- a single discovery cache, swapped atomically on
@@ -261,23 +227,8 @@ def build_container(settings: Settings) -> Container:
     memory_ledger = LedgerProvider(
         probe=device_probe,
         graph_executions=graph_executions,
-        dataset_tasks=dataset_tasks,
         foreign_reserve_mb=settings.memory_foreign_reserve_mb,
         process_overhead_mb=settings.memory_process_overhead_mb,
-    )
-    # The task child finalises its own row through the WAL, so nothing
-    # server-side would ever notice it ending: this waiter is what
-    # hands the admission claim back when the child is actually gone.
-    dataset_gateway = SubprocessDatasetTaskGateway(
-        layout,
-        database.path,
-        on_exit=lambda task_id: release(memory_ledger, task_owner(task_id)),
-    )
-    task_sweeper = DatasetTaskSweeper(
-        tasks=dataset_tasks,
-        gateway=dataset_gateway,
-        clock=clock,
-        memory_ledger=memory_ledger,
     )
     graph_library = SqliteGraphLibrary(database)
     template_library = SqliteTemplateLibrary(database)
@@ -412,48 +363,6 @@ def build_container(settings: Settings) -> Container:
             upload=UploadAsset(assets=assets),
             inspect=InspectAsset(assets=assets),
         ),
-        datasets=DatasetServices(
-            list=ListDatasets(library=dataset_library, previews=dataset_previews),
-            get=GetDataset(
-                library=dataset_library,
-                tasks=dataset_tasks,
-                previews=dataset_previews,
-            ),
-            create=CreateDataset(library=dataset_library),
-            delete=DeleteDataset(
-                library=dataset_library,
-                tasks=dataset_tasks,
-                previews=dataset_previews,
-            ),
-            items=ListDatasetItems(library=dataset_library),
-            update_item=UpdateDatasetItem(library=dataset_library),
-            bulk_update=BulkUpdateDatasetItems(library=dataset_library),
-            discard=DiscardDatasetItems(library=dataset_library),
-            sets=ListDatasetSets(library=dataset_library),
-            commit=CommitDatasetItems(library=dataset_library),
-            tasks=ListDatasetTasks(
-                library=dataset_library,
-                tasks=dataset_tasks,
-            ),
-            start_task=StartDatasetTask(
-                library=dataset_library,
-                tasks=dataset_tasks,
-                gateway=dataset_gateway,
-                # A callable, so a checkpoints_dir changed in Settings is
-                # used without a restart -- see StartDatasetTask.
-                checkpoints_dir=lambda: layout.checkpoints_dir,
-                memory_ledger=memory_ledger,
-                sweeper=task_sweeper,
-            ),
-            stop_task=StopDatasetTask(
-                tasks=dataset_tasks, gateway=dataset_gateway
-            ),
-            reconcile_tasks=ReconcileDatasetTasks(sweeper=task_sweeper),
-            read_file=ReadDatasetFile(files=dataset_files),
-            set_preview=SetDatasetPreview(
-                library=dataset_library, previews=dataset_previews
-            ),
-        ),
         libraries=LibraryServices(
             list=ListLibraries(image_libraries), create=CreateLibrary(image_libraries), delete=DeleteLibrary(image_libraries),
             images=ListImages(image_libraries), read_image=ReadImage(image_libraries), edit_captions=EditCaptions(image_libraries),
@@ -517,12 +426,6 @@ def build_container(settings: Settings) -> Container:
 
     # Startup sweep: nothing may observe an unfinished row from a dead
     # process once the server accepts requests.
-    dataset_reconciled = services.datasets.reconcile_tasks.execute()
-    if dataset_reconciled.cleaned:
-        logger.info(
-            "reconciled %d unfinished dataset task(s) at startup",
-            dataset_reconciled.cleaned,
-        )
     graph_reconciled = services.graphs.reconcile_executions.execute()
     if graph_reconciled.cleaned:
         logger.info(

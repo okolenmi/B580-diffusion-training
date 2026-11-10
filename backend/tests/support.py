@@ -41,12 +41,9 @@ from backend.application.ports.graph_execution_repository import (
 from backend.application.ports.graph_library import GraphLibrary
 from backend.application.ports.graph_runtime import GraphRuntime
 from backend.application.ports.monitor_bus import MonitorBus as MonitorBusPort
-from backend.application.dataset_task_sweeper import DatasetTaskSweeper
 from backend.application.errors import ConfigNotFoundError
 from backend.application.memory_admission import (
     LedgerProvider,
-    release,
-    task_owner,
 )
 from backend.application.memory_ledger import (
     DEFAULT_FOREIGN_RESERVE_MB,
@@ -63,7 +60,6 @@ from backend.application.services import (
     ApplicationServices,
     AssetServices,
     ConfigServices,
-    DatasetServices,
     GraphServices,
     InstallerServices,
     MonitorServices,
@@ -84,28 +80,18 @@ from backend.application.use_cases.install_packages import (
 from backend.application.use_cases import (
     ApplyInstallation,
     BrowseAssets,
-    BulkUpdateDatasetItems,
     CheckComfyConflicts,
     CheckRequirements,
-    CommitDatasetItems,
-    CreateDataset,
-    DeleteDataset,
     DeleteGraph,
     DeleteGraphExecutions,
     DescribeRequirements,
-    DiscardDatasetItems,
     GetConfig,
     GetConfigOptions,
-    GetDataset,
     GetGraph,
     GetGraphExecution,
     GetSettings,
     InspectAsset,
     ListAssets,
-    ListDatasetItems,
-    ListDatasetSets,
-    ListDatasetTasks,
-    ListDatasets,
     ListGraphExecutions,
     ListGraphs,
     MakeAssetFolder,
@@ -116,35 +102,21 @@ from backend.application.use_cases import (
     ResolveNode,
     PreviewGraphMemory,
     ReadConfigRaw,
-    ReadDatasetFile,
-    ReconcileDatasetTasks,
     ReconcileGraphExecutions,
     SaveGraph,
-    SetDatasetPreview,
-    StartDatasetTask,
     StartGraphExecution,
-    StopDatasetTask,
     StopGraphExecution,
     SubscribeMonitor,
     SweepExecutionScratch,
     UpdateConfig,
-    UpdateDatasetItem,
     UpdateSettings,
     UploadAsset,
     ValidateGraph,
     WriteConfigRaw,
 )
 from backend.domain.events import DomainEvent
-from backend.application.ports.dataset_task_gateway import (
-    DatasetTaskGateway,
-    DatasetTaskLaunch,
-)
 from backend.infrastructure.config_options import PydanticConfigOptions
 from backend.infrastructure.core_config_files import CoreConfigFiles
-from backend.infrastructure.dataset_files import FsDatasetFiles
-from backend.infrastructure.dataset_library import SqliteDatasetLibrary
-from backend.infrastructure.dataset_previews import SqliteDatasetPreviews
-from backend.infrastructure.dataset_tasks import SqliteDatasetTasks
 from backend.infrastructure.events.callback_event_bus import CallbackEventBus
 from backend.infrastructure.file_asset_store import FileSystemAssetStore
 from backend.infrastructure.graph.contract_catalog import ContractNodeCatalog
@@ -463,63 +435,7 @@ class RecordingEventBus(CallbackEventBus):
         return [event.event_type for event in self.published]
 
 
-class FakeDatasetTaskGateway(DatasetTaskGateway):
-    """Scriptable fork gateway: spawn registers a fake pid as alive;
-    tests kill it by discarding from ``alive``; ``spawn_error`` fails
-    the launch (mirrors FakeTrainingGateway's posture).
 
-    ``on_exit`` is the same hook the real gateway's reaper thread calls
-    when the child is gone (it hands the admission claim back). Two
-    ways a fake child dies, both faithful to the real gateway:
-
-    * ``kill()`` -- the real gateway SIGKILLs the whole group, so the
-      child is gone when kill returns and the waiter fires then;
-    * ``child_exited(task_id)`` -- a *natural* end (the real child
-      finalises its own row and the reaper notices the exit); a fake
-      child has no thread, so a test that ends a task this way fires
-      it explicitly.
-
-    Never fired automatically on row finalisation: "the child is still
-    running" is exactly what most task tests are asserting.
-    """
-
-    def __init__(self, on_exit=None) -> None:
-        self.spawned: list[DatasetTaskLaunch] = []
-        self.killed: list[int] = []
-        self.alive: set[int] = set()
-        self.spawn_error: Exception | None = None
-        self.next_pid = 7777
-        self._on_exit = on_exit
-        self._pid_to_task: dict[int, int] = {}
-
-    def spawn(self, launch: DatasetTaskLaunch) -> int:
-        if self.spawn_error is not None:
-            raise self.spawn_error
-        self.spawned.append(launch)
-        pid = self.next_pid
-        self.next_pid += 1
-        self.alive.add(pid)
-        self._pid_to_task[pid] = launch.task_id
-        return pid
-
-    def kill(self, pid: int) -> None:
-        self.killed.append(pid)
-        self.alive.discard(pid)
-        # SIGKILL is immediate: the real reaper fires when the child is
-        # gone, and here the child is gone now. A kill that skipped the
-        # waiter would hold a dead task's claim and refuse the next
-        # start against a card that is actually free.
-        task_id = self._pid_to_task.pop(pid, None)
-        if task_id is not None and self._on_exit is not None:
-            self._on_exit(task_id)
-
-    def is_alive(self, pid: int) -> bool:
-        return pid in self.alive
-
-    def child_exited(self, task_id: int) -> None:
-        """Simulate the child leaving: fire the exit hook if wired."""
-        if self._on_exit is not None:
-            self._on_exit(task_id)
 class FakeConfigInspector(ConfigInspector):
     """Existence check is real; summaries/descriptions are scripted.
 
@@ -696,10 +612,6 @@ def build_services(
     config_files: CoreConfigFiles | None = None,
     config_options: PydanticConfigOptions | None = None,
     assets: FileSystemAssetStore | None = None,
-    dataset_library: SqliteDatasetLibrary | None = None,
-    dataset_tasks: SqliteDatasetTasks | None = None,
-    dataset_previews: SqliteDatasetPreviews | None = None,
-    dataset_gateway: DatasetTaskGateway | None = None,
     graph_registry: Any | None = None,
     graph_runtime: GraphRuntime | None = None,
     graph_executions: GraphExecutionRepository | None = None,
@@ -710,12 +622,11 @@ def build_services(
 ) -> ApplicationServices:
     """Wire the use cases against fakes (the composition root's twin).
 
-    The config / settings / assets / datasets / graph domains default to
+    The config / settings / assets / graph domains default to
     the *real* adapters
     over temp locations -- they are cheap, and exercising the real TOML /
     SQLite / filesystem code paths is the point of these tests. The
-    dataset *gateway* is fake by default: spawning a real child that
-    imports torch is nobody's unit test. The graph domain defaults to
+    graph domain defaults to
     the *fixture* node classes (a NodeRegistry that skips the nodes/
     walk) with the real SQLite execution/library tables and a no-op
     memory releaser -- validation and execution run for real, the GPU
@@ -744,20 +655,9 @@ def build_services(
     layout = WorkspaceLayout(
         project_root, runs_dir=runs_dir, settings_kv=settings_store.get
     )
-    if dataset_library is None:
-        dataset_library = SqliteDatasetLibrary(layout)
-    if dataset_tasks is None:
-        tasks_db = SqliteDatabase(project_root / "test-dataset-tasks.db")
-        tasks_db.initialize()
-        dataset_tasks = SqliteDatasetTasks(tasks_db, clock)
-    if dataset_previews is None:
-        previews_db = SqliteDatabase(project_root / "test-dataset-previews.db")
-        previews_db.initialize()
-        dataset_previews = SqliteDatasetPreviews(previews_db, dataset_library)
-    dataset_files = FsDatasetFiles(layout.datasets_dir)
     image_libraries = FsImageLibraries(layout)
     if assets is None:
-        assets = FileSystemAssetStore(layout, datasets=dataset_library)
+        assets = FileSystemAssetStore(layout)
     if config_files is None:
         config_files = CoreConfigFiles()
     if config_options is None:
@@ -807,25 +707,8 @@ def build_services(
     memory_ledger = LedgerProvider(
         probe=shared_probe,
         graph_executions=graph_executions,
-        dataset_tasks=dataset_tasks,
         foreign_reserve_mb=DEFAULT_FOREIGN_RESERVE_MB,
         process_overhead_mb=DEFAULT_PROCESS_OVERHEAD_MB,
-    )
-    # Unconditional, like ``graph_scratch``: a caller that passes only
-    # ``dataset_gateway`` still needs ``task_sweeper`` bound (the old
-    # nested assignment left it unbound and its first use raised
-    # NameError). A fake child has no waiter thread of its own, so
-    # tests end tasks by calling ``child_exited`` -- the same thing the
-    # real gateway's reaper does on child exit.
-    if dataset_gateway is None:
-        dataset_gateway = FakeDatasetTaskGateway(
-            on_exit=lambda task_id: release(memory_ledger, task_owner(task_id)),
-        )
-    task_sweeper = DatasetTaskSweeper(
-        tasks=dataset_tasks,
-        gateway=dataset_gateway,
-        clock=clock,
-        memory_ledger=memory_ledger,
     )
     execution_writer = ExecutionLifecycleWriter(
         clock=clock,
@@ -925,44 +808,6 @@ def build_services(
             upload=UploadAsset(assets=assets),
             inspect=InspectAsset(assets=assets),
         ),
-        datasets=DatasetServices(
-            list=ListDatasets(library=dataset_library, previews=dataset_previews),
-            get=GetDataset(
-                library=dataset_library,
-                tasks=dataset_tasks,
-                previews=dataset_previews,
-            ),
-            create=CreateDataset(library=dataset_library),
-            delete=DeleteDataset(
-                library=dataset_library,
-                tasks=dataset_tasks,
-                previews=dataset_previews,
-            ),
-            items=ListDatasetItems(library=dataset_library),
-            update_item=UpdateDatasetItem(library=dataset_library),
-            bulk_update=BulkUpdateDatasetItems(library=dataset_library),
-            discard=DiscardDatasetItems(library=dataset_library),
-            sets=ListDatasetSets(library=dataset_library),
-            commit=CommitDatasetItems(library=dataset_library),
-            tasks=ListDatasetTasks(
-                library=dataset_library,
-                tasks=dataset_tasks,
-            ),
-            start_task=StartDatasetTask(
-                library=dataset_library,
-                tasks=dataset_tasks,
-                gateway=dataset_gateway,
-                checkpoints_dir=lambda: layout.checkpoints_dir,
-                memory_ledger=memory_ledger,
-                sweeper=task_sweeper,
-            ),
-            stop_task=StopDatasetTask(tasks=dataset_tasks, gateway=dataset_gateway),
-            reconcile_tasks=ReconcileDatasetTasks(sweeper=task_sweeper),
-            read_file=ReadDatasetFile(files=dataset_files),
-            set_preview=SetDatasetPreview(
-                library=dataset_library, previews=dataset_previews
-            ),
-        ),
         templates=TemplateServices(
             describe=describe_modules,
             resolve=ResolveTemplate(describe=describe_modules, runtime=graph_runtime),
@@ -1025,157 +870,6 @@ def build_services(
         monitor=MonitorServices(subscribe=SubscribeMonitor(bus=monitor_bus)),
     )
 
-
-
-# --------------------------------------------------------------------------
-# Dataset fixtures -- raw format-v2 / v1 dirs written with plain sqlite3
-# --------------------------------------------------------------------------
-
-# Mirrors manager/db.init_local_db's v2 schema verbatim (documented
-# duplicate: these fixtures must not import manager -- that pulls torch).
-_V2_SCHEMA = """
-    CREATE TABLE IF NOT EXISTS info (
-        name        TEXT PRIMARY KEY,
-        description TEXT,
-        created_at  REAL NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS sources (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        name        TEXT    NOT NULL,
-        type        TEXT    NOT NULL,
-        model_path  TEXT,
-        config      TEXT,
-        created_at  REAL    NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS shards (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-        file_path    TEXT    NOT NULL UNIQUE,
-        layout       TEXT    NOT NULL DEFAULT 'single_latent',
-        sample_count INTEGER NOT NULL DEFAULT 0,
-        size_bytes   INTEGER NOT NULL DEFAULT 0,
-        created_at   REAL    NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS trajectories (
-        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-        source_id    INTEGER NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
-        shard_id     INTEGER NOT NULL REFERENCES shards(id) ON DELETE CASCADE,
-        shard_index  INTEGER NOT NULL,
-        sample_count INTEGER NOT NULL DEFAULT 0,
-        seed         INTEGER,
-        prompt       TEXT,
-        neg_prompt   TEXT NOT NULL DEFAULT '',
-        model_type   TEXT NOT NULL DEFAULT 'eps',
-        type         TEXT NOT NULL DEFAULT 'good',
-        cfg          REAL,
-        source_path  TEXT,
-        latent_h     INTEGER NOT NULL DEFAULT 0,
-        latent_w     INTEGER NOT NULL DEFAULT 0,
-        preview_path TEXT,
-        extra        TEXT
-    );
-    CREATE TABLE IF NOT EXISTS training_sets (
-        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-        name        TEXT    NOT NULL UNIQUE,
-        description TEXT,
-        created_at  REAL    NOT NULL
-    );
-    CREATE TABLE IF NOT EXISTS set_members (
-        set_id        INTEGER NOT NULL REFERENCES training_sets(id) ON DELETE CASCADE,
-        trajectory_id INTEGER NOT NULL REFERENCES trajectories(id) ON DELETE CASCADE,
-        PRIMARY KEY (set_id, trajectory_id)
-    );
-"""
-
-_EPOCH = 1767225600.0  # 2026-01-01T00:00:00Z
-
-
-def make_v2_dataset(
-    project_root: Path,
-    name: str,
-    *,
-    items: int = 4,
-    shard_file: bool = True,
-    previews: bool = True,
-) -> Path:
-    """A format-v2 dataset dir: 1 source, 1 shard, ``items`` rows.
-
-    Item i (1-based) gets prompt ``"photo i"``; the last row is type
-    ``bad``; row 1 optionally carries a real preview file. Returns the
-    dataset directory (``datasets/<name>`` under ``project_root``).
-    """
-    import sqlite3  # local: keeps this module's import surface light
-
-    directory = project_root / "datasets" / name
-    (directory / "shards").mkdir(parents=True, exist_ok=True)
-    (directory / "previews").mkdir(exist_ok=True)
-    shard_rel = "shards/x0_0.safetensors"
-    if shard_file:
-        (directory / shard_rel).write_bytes(b"\x00" * 16)
-    if previews:
-        (directory / "previews" / "p1.png").write_bytes(b"\x89PNG")
-
-    conn = sqlite3.connect(str(directory / "metadata.db"))
-    try:
-        conn.executescript(_V2_SCHEMA)
-        conn.execute(
-            "INSERT INTO info (name, description, created_at) VALUES (?, ?, ?)",
-            (name, "fixture", _EPOCH),
-        )
-        conn.execute(
-            "INSERT INTO sources (name, type, model_path, config, created_at) "
-            "VALUES (?, 'real', ?, NULL, ?)",
-            (f"{name}_lora", "ckpt/model.safetensors", _EPOCH),
-        )
-        conn.execute(
-            "INSERT INTO shards (file_path, layout, sample_count, size_bytes, "
-            "created_at) VALUES (?, 'single_latent', ?, 1024, ?)",
-            (shard_rel, items, _EPOCH),
-        )
-        for i in range(1, items + 1):
-            last = i == items
-            conn.execute(
-                "INSERT INTO trajectories (source_id, shard_id, shard_index, "
-                "sample_count, seed, prompt, neg_prompt, model_type, type, cfg, "
-                "source_path, latent_h, latent_w, preview_path, extra) "
-                "VALUES (1, 1, ?, 1, ?, ?, '', 'eps', ?, 5.0, ?, 64, 64, ?, NULL)",
-                (
-                    i - 1,
-                    100 + i,
-                    f"photo {i}",
-                    "bad" if last else "good",
-                    f"img_{i}.png",
-                    "previews/p1.png" if (previews and i == 1) else None,
-                ),
-            )
-        conn.execute("PRAGMA user_version = 2")
-        conn.commit()
-    finally:
-        conn.close()
-    return directory
-
-
-def make_v1_dataset(project_root: Path, name: str) -> Path:
-    """A legacy (pre-v2) dataset dir: ``info`` table only, version 0 --
-    enough for identity reads; every v2-only operation must refuse it
-    *before* touching columns this fixture doesn't have."""
-    import sqlite3  # local: keeps this module's import surface light
-
-    directory = project_root / "datasets" / name
-    directory.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(directory / "metadata.db"))
-    try:
-        conn.execute(
-            "CREATE TABLE info (name TEXT PRIMARY KEY, description TEXT, "
-            "created_at REAL NOT NULL)"
-        )
-        conn.execute(
-            "INSERT INTO info (name, description, created_at) VALUES (?, ?, ?)",
-            (name, "legacy fixture", _EPOCH),
-        )
-        conn.commit()  # user_version stays 0 (legacy never set it to 1 either)
-    finally:
-        conn.close()
-    return directory
 
 
 # --------------------------------------------------------------------------

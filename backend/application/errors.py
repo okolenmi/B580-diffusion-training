@@ -140,47 +140,24 @@ class SettingsInvalidError(ApplicationError):
 
 
 class DatasetNotFoundError(ApplicationError):
-    """No dataset directory exists under the requested name."""
+    """No image library exists under the requested name."""
 
     code = "dataset_not_found"
     status_code = 404
 
 
-class DatasetItemNotFoundError(ApplicationError):
-    """No trajectory row exists under the requested id in this dataset."""
-
-    code = "dataset_item_not_found"
-    status_code = 404
-
-
 class DatasetFileNotFoundError(ApplicationError):
-    """No readable file at the requested path inside the dataset
-    directory: missing, not a regular file, or escaping the dataset
-    root (the escape is reported as not-found, never resolved)."""
+    """No readable file for the requested image: missing, or not a
+    regular file."""
 
     code = "dataset_file_not_found"
     status_code = 404
 
 
 class DatasetAlreadyExistsError(ApplicationError):
-    """A dataset already occupies the requested name."""
+    """A dataset (image library) already occupies the requested name."""
 
     code = "dataset_exists"
-    status_code = 409
-
-
-class DatasetDirectoryConflictError(ApplicationError):
-    """A non-dataset directory occupies the requested dataset name.
-
-    ``datasets/<name>`` exists but holds no ``metadata.db`` *and* is not
-    an empty skeleton -- i.e. it holds files this code did not create. The
-    legacy server deleted such a directory ("nothing in it can be
-    loadable"); doing that to a user's own image folder is silent data
-    loss, so the name is refused instead (docs 07 F-10). The user renames
-    or removes the directory, then creates the dataset.
-    """
-
-    code = "dataset_directory_conflict"
     status_code = 409
 
 
@@ -197,45 +174,6 @@ class RunDirectoryCollisionError(ApplicationError):
 
     code = "run_directory_conflict"
     status_code = 409
-
-
-class DatasetNotMigratedError(ApplicationError):
-    """The dataset is still in legacy format v1.
-
-    ``details`` carries the migration hint; every v2-only operation
-    refuses loudly rather than failing on a missing column.
-    """
-
-    code = "dataset_not_migrated"
-    status_code = 409
-
-
-class DatasetTaskActiveError(ApplicationError):
-    """A pending/running task already owns the dataset (one at a time)."""
-
-    code = "dataset_task_active"
-    status_code = 409
-
-
-class DatasetTaskNotFoundError(ApplicationError):
-    """No dataset task exists under the requested id."""
-
-    code = "dataset_task_not_found"
-    status_code = 404
-
-
-class DatasetTaskNotActiveError(ApplicationError):
-    """The action needs a pending/running task; this one already ended."""
-
-    code = "dataset_task_not_active"
-    status_code = 409
-
-
-class DatasetTaskLaunchError(ApplicationError):
-    """The ingestion child could not be started (row already failed)."""
-
-    code = "dataset_task_launch_failed"
-    status_code = 500
 
 
 # Graphs (M4)

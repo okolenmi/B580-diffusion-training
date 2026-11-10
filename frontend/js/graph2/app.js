@@ -52,7 +52,7 @@ function bindLayout() {
   apply();
 }
 
-/** What a picker offers: model files of the node's `scope`, or the image libraries the nodes can open (not the Datasets page's trajectory datasets). */
+/** What a picker offers: model files of the node's `scope`, or the image libraries the nodes can open. */
 const PICKER_TTL_MS = 5000;
 const pickerAnswers = new Map();
 

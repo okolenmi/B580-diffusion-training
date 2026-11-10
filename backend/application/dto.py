@@ -13,14 +13,6 @@ from datetime import datetime
 from ..domain.entities.graph_execution import GraphExecution
 from ..domain.graph import NodeResult
 from ..domain.value_objects import GraphStatus
-from .ports.dataset_library import (
-    DatasetInfo,
-    DatasetItem,
-    DatasetStats,
-    DatasetSummary,
-    TrainingSetInfo,
-)
-from .ports.dataset_tasks import DatasetTask
 from .ports.graph_runtime import GraphIssue
 from .ports.graph_library import SavedGraph
 from .ports.template_library import SavedTemplate
@@ -32,8 +24,7 @@ from .ports.template_library import SavedTemplate
 class ReconcileResult:
     """Outcome of a startup sweep of unfinished rows.
 
-    Shared by the dataset-task and graph-execution reconcilers, which is
-    why ``adopted`` exists on a type a reconciler that adopts nothing can
+    Used by the graph-execution reconciler; ``adopted`` exists because ``adopted`` exists on a type a reconciler that adopts nothing can
     still produce: a graph run lives in its own session and can outlive
     the server that started it, so that sweep has a second outcome
     besides "row moved out of an unfinished state" and counting them
@@ -62,146 +53,6 @@ class RawConfig:
     """A config file's exact text (raw editor round-trip)."""
 
     content: str
-
-# --------------------------------------------------------------------------
-# Datasets (M3b)
-# --------------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class DatasetDetail:
-    """One round-trip for a dataset page: identity, counts, sets, and
-    whatever task is currently running. ``preview_path`` is the
-    resolved card image (``DatasetPreviews`` port), null when the
-    dataset has no usable preview."""
-
-    info: DatasetInfo
-    stats: DatasetStats | None
-    sets: tuple[TrainingSetInfo, ...]
-    active_tasks: tuple[DatasetTask, ...]
-    preview_path: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class DatasetListResult:
-    datasets: tuple[DatasetSummary, ...]
-    count: int
-
-
-@dataclass(frozen=True, slots=True)
-class DatasetItemsResult:
-    """One page of items, plus enough to say whether there are more.
-
-    ``count`` is the size of *this page* and ``total`` the size of the
-    whole filtered result; keeping both is what lets a client render
-    "showing 500 of 12,000" rather than a truncated list presented as
-    the whole set (docs 08 Q10). ``next_offset`` is the offset of the
-    next page, or ``None`` when there is none.
-    """
-
-    items: tuple[DatasetItem, ...]
-    count: int
-    limit: int | None = None   # the page size actually served
-    offset: int = 0
-    total: int | None = None
-    next_offset: int | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class DiscardItemsResult:
-    deleted: int
-
-
-@dataclass(frozen=True, slots=True)
-class BulkUpdateResult:
-    updated: int
-
-
-@dataclass(frozen=True, slots=True)
-class CommitResult:
-    set_id: int
-    set_name: str
-    added: int
-
-
-@dataclass(frozen=True, slots=True)
-class DatasetTaskListResult:
-    tasks: tuple[DatasetTask, ...]
-    count: int
-
-
-@dataclass(frozen=True, slots=True)
-class TeacherTaskParams:
-    """Sampling + prompt options for ``generate_teacher`` (M8e).
-
-    Ported from the legacy ``/tasks/start`` ``type="teacher"`` body
-    (``archive/server/routes_datasets.py``), one field per legacy parameter so
-    the stored task ``params`` record stays a flat, faithful launch
-    payload. ``seed``/``latent_size``/``model_type`` are shared with
-    image import in the wire schema but live here for this kind, since
-    they are what the builder's teacher path consumes.
-
-    Validation (modes, ranges, prompt content) is *not* here: this is
-    a DTO. ``application.teacher_prompts`` owns it, shared between the
-    start use case (fail fast, before the row exists) and the task
-    worker (re-assemble the prompt configs it hands to the builder).
-    """
-
-    prompt_mode: str = "list"  # 'list' | 'keywords'
-    prompts: str = ""  # newline-separated, mode=list
-    keywords: str = ""  # newline-separated, mode=keywords
-    keywords_file: str = ""  # optional server-side word list (.txt/.csv)
-    template: str = ""  # "{keywords}" placeholder template
-    min_keywords: int = 3
-    max_keywords: int = 10
-    neg_mode: str = "list"  # 'list' | 'keywords'
-    negative_prompt: str = ""  # one string for every sample, mode=list
-    neg_keywords: str = ""
-    neg_keywords_file: str = ""
-    neg_template: str = ""
-    neg_min_keywords: int = 3
-    neg_max_keywords: int = 10
-    cfg_min: float = 3.0
-    cfg_max: float = 9.0
-    steps_min: int = 20
-    steps_max: int = 30
-    t_mode: str = "uniform"  # uniform | low | mid | high | logit
-    t_low: int = 20
-    t_high: int = 999
-    batch_size: int = 1
-    seed: int = 42
-    n_conditions: int = 10
-    n_samples_per_cond: int = 1
-    latent_size: int = 64
-    model_type: str = "eps"  # eps | vpred
-
-
-@dataclass(frozen=True, slots=True)
-class StartDatasetTaskCommand:
-    """Launch a dataset task. ``model`` is a checkpoint path
-    relative to the resolved checkpoints dir (validated + sandboxed by
-    the use case); ``image_dir`` is an absolute server-side source
-    directory (validated for existence, not sandboxed -- raw images
-    legitimately live outside the workspace, as in the legacy API).
-
-    Two kinds (``application.ports.dataset_tasks.TASK_KINDS``):
-    ``ingest_lora`` VAE-encodes an image directory (flat fields below);
-    ``generate_teacher`` samples new trajectories from a checkpoint
-    (``teacher`` carries its options, absent for the import kind)."""
-
-    dataset: str
-    kind: str = "ingest_lora"
-    image_dir: str = ""
-    model: str = ""
-    recursive: bool = True
-    resize_mode: str = "center_crop"
-    latent_size: int = 64
-    neg_prompt: str = ""
-    model_type: str = "eps"
-    seed: int = 42
-    max_aspect_ratio: float = 2.0
-    teacher: TeacherTaskParams | None = None
-
 
 # --------------------------------------------------------------------------
 # Graphs (M4)

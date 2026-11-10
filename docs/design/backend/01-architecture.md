@@ -1,5 +1,8 @@
 # 01 -- Backend architecture
 
+> **Superseded (2026-11-10):** the trajectory-dataset parts of this document (dataset tasks, format v1/v2, previews, `dataset_task_*` errors) describe removed code. Datasets are image libraries now: `rework/contracts/datasets.md`.
+
+
 Status: shipped through **M9** (the entry-point flip; `server/` is
 archived). M1-M9 are all **done** -- the milestone log was removed in
 the 2026-10-01 docs cleanup, since it recorded finished work; what

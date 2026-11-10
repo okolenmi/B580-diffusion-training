@@ -4,7 +4,7 @@ Level 1 wiring for MEM-03. Three things live here so every caller says
 them the same way:
 
 * **Owner naming.** A claim is durable only through its row, so claims
-  are keyed ``graph:<id>`` / ``task:<id>`` -- what every release path
+  are keyed ``graph:<id>`` -- what every release path
   (finish, reconcile, sweeper, wipe) can derive from the row it holds.
   A claim must be taken *before* the row exists (a refusal writes no
   row), so it starts under ``<kind>:pending:<uuid>`` and the start path
@@ -36,7 +36,6 @@ from uuid import uuid4
 
 from .errors import MemoryUnavailableError
 from .memory_ledger import Grant, MemoryLedger, Refusal
-from .ports.dataset_tasks import DatasetTasks
 from .ports.environment import DeviceProbe
 from .ports.graph_execution_repository import GraphExecutionRepository
 
@@ -77,11 +76,6 @@ def holders_without_ledger(source: LedgerSource | None) -> dict[str, float]:
 def graph_owner(execution_id: int) -> str:
     """The row-derived claim key for a graph execution."""
     return f"graph:{execution_id}"
-
-
-def task_owner(task_id: int) -> str:
-    """The row-derived claim key for a dataset task."""
-    return f"task:{task_id}"
 
 
 def pending_owner(kind: str) -> str:
@@ -262,13 +256,11 @@ class LedgerProvider:
         *,
         probe: DeviceProbe,
         graph_executions: GraphExecutionRepository,
-        dataset_tasks: DatasetTasks,
         foreign_reserve_mb: float,
         process_overhead_mb: float,
     ) -> None:
         self._probe = probe
         self._graph_executions = graph_executions
-        self._dataset_tasks = dataset_tasks
         self._foreign_reserve_mb = foreign_reserve_mb
         self._process_overhead_mb = process_overhead_mb
         self._ledger: MemoryLedger | None = None
@@ -316,9 +308,6 @@ class LedgerProvider:
                     "owner": graph_owner(execution.id),
                     "mb": execution.reserved_mb,
                 })
-        for task in self._dataset_tasks.list_unfinished():
-            if task.reserved_mb:
-                rows.append({"owner": task_owner(task.id), "mb": task.reserved_mb})
         return rows
 
     def unbuilt_holders(self) -> dict[str, float]:

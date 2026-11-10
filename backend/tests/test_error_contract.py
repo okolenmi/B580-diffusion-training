@@ -34,8 +34,6 @@ from backend.presentation import security as _security  # noqa: E402,F401
 from backend.application.errors import (  # noqa: E402
     ApplicationError,
     ConfigNotFoundError,
-    DatasetNotMigratedError,
-    DatasetTaskActiveError,
     GraphExecutionNotActiveError,
     InvalidQueryError,
     NodeDiagnosticsError,
@@ -190,8 +188,6 @@ def test_handler_replies_with_the_declared_status() -> None:
         RunDirectoryCollisionError("runs/run_1 has files"),
         SettingsInvalidError("venv_python is not executable"),
         TrainingLaunchError("exec failed"),
-        DatasetTaskActiveError("already running"),
-        DatasetNotMigratedError("format v1"),
         GraphExecutionNotActiveError("already finished"),
         NodeDiagnosticsError("bad params"),
         ConfigNotFoundError("no such config"),

@@ -15,28 +15,6 @@ MAX_PAGE_SIZE = 500
 
 DEFAULT_EXECUTION_PAGE_SIZE = 50
 
-# --- dataset curation -----------------------------------------------------
-
-DEFAULT_DATASET_ITEM_PAGE_SIZE = 500
-"""Rows per page when a caller does not ask for a size.
-
-Was: every row. A dataset is the one collection in this system whose
-size is genuinely unbounded -- it grows by ingestion, not by user
-action -- so "return it all" meant a request whose response grew until
-it hit the point where the browser stopped rendering it (docs 07 F-14,
-docs 08 Q10). The page is large enough that ordinary datasets are
-still served whole, which is what the curation UI assumed; `total` and
-`next_offset` let a client know when it is not.
-"""
-
-MAX_PREVIEW_BYTES = 32 * 1024 * 1024
-"""Ceiling on a dataset file served as a preview.
-
-Bytes, not pixels: an allowlist already guarantees the extension is an
-image type, and a decoder's own limits are its business. The cap exists
-so a 4 GB file named .png cannot be streamed to a browser.
-"""
-
 # --- uploads ---------------------------------------------------------------
 
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024 * 1024

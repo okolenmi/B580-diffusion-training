@@ -24,27 +24,15 @@ from backend.application.errors import InvalidQueryError  # noqa: E402
 from backend.application.event_publisher import EventPublisher  # noqa: E402
 from backend.application.limits import (  # noqa: E402
     DEFAULT_EXECUTION_PAGE_SIZE,
-    DEFAULT_DATASET_ITEM_PAGE_SIZE,
     MAX_GRAPH_DESCRIPTION,
     MAX_PAGE_SIZE,
 )
 from backend.application.project_paths import ProjectPaths  # noqa: E402
-from backend.application.ports.dataset_library import (  # noqa: E402
-    BulkItemChanges,
-    ItemChanges,
-)
-from backend.application.requests import (  # noqa: E402
-    ITEM_TYPES,
-    TEXT_MODES,
-    AssetRequest,
-    ItemChangesRequest,
-    ItemSelection,
-)
+from backend.application.requests import AssetRequest  # noqa: E402
 from backend.application.lifecycle_writer import (  # noqa: E402
     ExecutionLifecycleWriter,
     LifecycleWriter,
 )
-from backend.application.ports.dataset_tasks import TaskKind, TaskStatus  # noqa: E402
 from backend.application.ports.graph_runtime import IssueSeverity  # noqa: E402
 from backend.domain.entities.graph_execution import GraphExecution  # noqa: E402
 from backend.domain.exceptions import DomainError  # noqa: E402
@@ -175,26 +163,17 @@ def test_event_publisher() -> None:
 def test_limits() -> None:
     print("\n== limits: the numbers API and clients agree on ==")
     check(MAX_PAGE_SIZE == 500, "one page ceiling for every list endpoint")
-    check(
-        DEFAULT_DATASET_ITEM_PAGE_SIZE == 500,
-        "dataset item page size -- the one unbounded collection",
-    )
     check(DEFAULT_EXECUTION_PAGE_SIZE == 50, "executions default page size")
     check(MAX_GRAPH_DESCRIPTION == 1000, "graph description ceiling")
 
     # The point of the module: the route's default *is* the use case's
     # default, not a second number that happens to match today.
     from backend.application.use_cases import list_graph_executions as lge
-    from backend.application.use_cases.list_dataset_items import ListDatasetItems
 
     check(
         lge.MAX_LIMIT == MAX_PAGE_SIZE and lge.DEFAULT_LIMIT == DEFAULT_EXECUTION_PAGE_SIZE,
         "ListGraphExecutions enforces the shared ceiling, and its own "
         "default is the shared constant",
-    )
-    check(
-        ListDatasetItems.MAX_LIMIT == MAX_PAGE_SIZE,
-        "ListDatasetItems enforces the same one",
     )
 
     import backend.presentation.api.graphs as graphs_route
@@ -241,73 +220,6 @@ def test_asset_request() -> None:
         AssetRequest.of("lora", "").relative_path == "",
         "listing a kind needs no path",
     )
-
-
-def test_item_selection() -> None:
-    print("\n== ItemSelection: one 'item_ids must not be empty' ==")
-    selection = ItemSelection.of([3, 1, 3])
-    check(selection.as_list() == [3, 1, 3], "the ids are kept as sent (no dedup)")
-    check(len(selection) == 3, "length is the id count")
-    check(list(selection) == [3, 1, 3], "iterable for the adapters that want a list")
-    _expect_error(
-        lambda: ItemSelection.of([]),
-        InvalidQueryError,
-        "item_ids must not be empty",
-        "an empty selection refused",
-    )
-
-
-def test_item_changes_request() -> None:
-    print("\n== ItemChangesRequest: single and bulk share the two rules ==")
-    changes = ItemChangesRequest.single(prompt="a cat")
-    check(isinstance(changes, ItemChanges) and changes.prompt == "a cat", "single patch")
-    bulk = ItemChangesRequest.bulk(prompt="a cat", prompt_mode="prepend")
-    check(
-        isinstance(bulk, BulkItemChanges) and bulk.prompt_mode == "prepend",
-        "bulk patch keeps its mode",
-    )
-
-    for label, fn in (
-        ("single", lambda: ItemChangesRequest.single()),
-        ("bulk", lambda: ItemChangesRequest.bulk()),
-    ):
-        _expect_error(
-            fn,
-            InvalidQueryError,
-            "no changes provided",
-            f"{label} refuses a patch that changes nothing",
-        )
-    for label, fn in (
-        ("single", lambda: ItemChangesRequest.single(prompt="x", type="maybe")),
-        ("bulk", lambda: ItemChangesRequest.bulk(prompt="x", type="maybe")),
-    ):
-        _expect_error(
-            fn,
-            InvalidQueryError,
-            "unknown type",
-            f"{label} refuses an unknown verdict",
-        )
-    for mode_field, fn in (
-        ("prompt_mode", lambda: ItemChangesRequest.bulk(prompt="x", prompt_mode="upend")),
-        ("neg_prompt_mode", lambda: ItemChangesRequest.bulk(prompt="x", neg_prompt_mode="upend")),
-    ):
-        _expect_error(
-            fn, InvalidQueryError, f"unknown {mode_field}", f"{mode_field} refused"
-        )
-
-    check(ITEM_TYPES == ("good", "bad"), "verdict vocabulary")
-    check(TEXT_MODES == ("set", "prepend", "append"), "text-mode vocabulary")
-    # Order matters: an *unknown* verdict is refused even when nothing
-    # else was sent, so the vocabulary check cannot be masked by the
-    # "no changes" rule running first.
-    _expect_error(
-        lambda: ItemChangesRequest.single(type="maybe"),
-        InvalidQueryError,
-        "unknown type",
-        "the verdict is checked before the no-changes rule",
-    )
-    verdict_only = ItemChangesRequest.single(type="good")
-    check(verdict_only.type == "good", "a verdict on its own is a real change")
 
 
 # ---------------------------------------------------------------------------
@@ -442,52 +354,6 @@ def test_fail_if_unfinished() -> None:
           f"the caller's note is what lands on the row (got {row.error!r})")
 
 
-# ---------------------------------------------------------------------------
-
-
-    print("\n== TaskStatus: active and terminal derived (S-24) ==")
-    check(TaskStatus.PENDING.is_active and TaskStatus.RUNNING.is_active,
-          "pending/running are active")
-    check(
-        all(
-            not s.is_active and s.is_terminal
-            for s in (TaskStatus.FINISHED, TaskStatus.FAILED, TaskStatus.KILLED)
-        ),
-        "finished/failed/killed are terminal",
-    )
-    check(
-        all(not s.is_terminal for s in TaskStatus if s.is_active),
-        "an active status is never terminal",
-    )
-    check(len(list(TaskStatus)) == 5, "the vocabulary is closed")
-    check(
-        [k.value for k in TaskKind] == ["ingest_lora", "generate_teacher"],
-        "two task kinds",
-    )
-
-
-def test_task_status() -> None:
-    print("\n== TaskStatus: active and terminal derived (S-24) ==")
-    check(TaskStatus.PENDING.is_active and TaskStatus.RUNNING.is_active,
-          "pending/running are active")
-    check(
-        all(
-            not s.is_active and s.is_terminal
-            for s in (TaskStatus.FINISHED, TaskStatus.FAILED, TaskStatus.KILLED)
-        ),
-        "finished/failed/killed are terminal",
-    )
-    check(
-        all(not s.is_terminal for s in TaskStatus if s.is_active),
-        "an active status is never terminal",
-    )
-    check(len(list(TaskStatus)) == 5, "the vocabulary is closed")
-    check(
-        [k.value for k in TaskKind] == ["ingest_lora", "generate_teacher"],
-        "two task kinds",
-    )
-
-
 def test_issue_severity() -> None:
     print("\n== IssueSeverity: what blocks a run ==")
     check(IssueSeverity.ERROR.blocks, "an error blocks")
@@ -594,11 +460,8 @@ def main() -> None:
     test_event_publisher()
     test_limits()
     test_asset_request()
-    test_item_selection()
-    test_item_changes_request()
     test_lifecycle_writer()
     test_fail_if_unfinished()
-    test_task_status()
     test_issue_severity()
     finish()
 

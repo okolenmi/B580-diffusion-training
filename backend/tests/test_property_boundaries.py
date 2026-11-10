@@ -313,7 +313,7 @@ def _assert_inside_or_refused(kind: str, relative: str, tag: str) -> None:
           f"{relative!r} resolved to {resolved}, outside {base}")
 
 
-@given(st.sampled_from(["checkpoint", "lora", "dataset"]),
+@given(st.sampled_from(["checkpoint", "lora"]),
        st.one_of(
            _segments.map(lambda segs: "/".join(segs)),
            st.sampled_from(["..", "../..", "../../etc/passwd", "/etc/passwd",
@@ -331,7 +331,7 @@ def test_a_client_path_never_resolves_outside_the_base(kind: str, relative: str)
     _assert_inside_or_refused(kind, relative, "sandbox")
 
 
-@given(st.sampled_from(["checkpoint", "lora", "dataset"]),
+@given(st.sampled_from(["checkpoint", "lora"]),
        st.text(max_size=40))
 @_SETTING
 def test_any_client_path_answers_refused_or_inside(kind: str, relative: str) -> None:

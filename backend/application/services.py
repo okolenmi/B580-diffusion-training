@@ -7,7 +7,7 @@ than in presentation) keeps the dependency direction honest: the web
 layer depends on application, never the other way around.
 
 Use cases are grouped by domain so the aggregate stays navigable as
-it grows: ``config``, ``settings``, ``assets``, ``datasets``, ``graphs``.
+it grows: ``config``, ``settings``, ``assets``, ``libraries``, ``graphs``.
 
 There is no ``runs`` group. Training is started from the graph route
 (``graphs``), which runs the ``nodes/`` pipeline in-process; the separate
@@ -26,16 +26,12 @@ from .ports.environment import DeviceProbe
 from .ports.event_bus import EventBus
 from .use_cases.apply_installation import ApplyInstallation
 from .use_cases.browse_assets import BrowseAssets
-from .use_cases.bulk_update_dataset_items import BulkUpdateDatasetItems
 from .use_cases.check_comfy_conflicts import CheckComfyConflicts
 from .use_cases.install_packages import GetInstall, StartInstall
 from .use_cases.check_requirements import (
     CheckRequirements,
     DescribeRequirements,
 )
-from .use_cases.commit_dataset_items import CommitDatasetItems
-from .use_cases.create_dataset import CreateDataset
-from .use_cases.delete_dataset import DeleteDataset
 from .use_cases.delete_graph import DeleteGraph
 from .use_cases.graph_modules import DescribeGraphModules, ResolveTemplate
 from .use_cases.run_template import RunTemplate
@@ -46,19 +42,13 @@ from .use_cases.template_crud import (
     SaveTemplate,
 )
 from .use_cases.delete_graph_executions import DeleteGraphExecutions
-from .use_cases.discard_dataset_items import DiscardDatasetItems
 from .use_cases.get_config import GetConfig
 from .use_cases.get_config_options import GetConfigOptions
-from .use_cases.get_dataset import GetDataset
 from .use_cases.get_graph import GetGraph
 from .use_cases.get_graph_execution import GetGraphExecution
 from .use_cases.get_settings import GetSettings
 from .use_cases.inspect_asset import InspectAsset
 from .use_cases.list_assets import ListAssets
-from .use_cases.list_dataset_items import ListDatasetItems
-from .use_cases.list_dataset_sets import ListDatasetSets
-from .use_cases.list_dataset_tasks import ListDatasetTasks
-from .use_cases.list_datasets import ListDatasets
 from .use_cases.list_graph_executions import ListGraphExecutions
 from .use_cases.list_graphs import ListGraphs
 from .use_cases.make_asset_folder import MakeAssetFolder
@@ -70,18 +60,12 @@ from .use_cases.image_libraries import (
 from .use_cases.node_shapes import GetNodeCatalog, ListImageLibraries, ListModelFiles, ResolveNode
 from .use_cases.starters import BuildStarter, ListStarters
 from .use_cases.read_config_raw import ReadConfigRaw
-from .use_cases.read_dataset_file import ReadDatasetFile
-from .use_cases.reconcile_dataset_tasks import ReconcileDatasetTasks
 from .use_cases.reconcile_graph_executions import ReconcileGraphExecutions
 from .use_cases.subscribe_monitor import SubscribeMonitor
 from .use_cases.save_graph import SaveGraph
-from .use_cases.set_dataset_preview import SetDatasetPreview
-from .use_cases.start_dataset_task import StartDatasetTask
 from .use_cases.start_graph_execution import StartGraphExecution
-from .use_cases.stop_dataset_task import StopDatasetTask
 from .use_cases.stop_graph_execution import StopGraphExecution
 from .use_cases.update_config import UpdateConfig
-from .use_cases.update_dataset_item import UpdateDatasetItem
 from .use_cases.update_settings import UpdateSettings
 from .use_cases.upload_asset import UploadAsset
 from .use_cases.preview_graph_memory import PreviewGraphMemory
@@ -144,28 +128,6 @@ class AssetServices:
     make_folder: MakeAssetFolder
     upload: UploadAsset
     inspect: InspectAsset
-
-
-@dataclass(frozen=True, slots=True)
-class DatasetServices:
-    """Dataset library, curation, training sets, and task lifecycle (M3b)."""
-
-    list: ListDatasets
-    get: GetDataset
-    create: CreateDataset
-    delete: DeleteDataset
-    items: ListDatasetItems
-    update_item: UpdateDatasetItem
-    bulk_update: BulkUpdateDatasetItems
-    discard: DiscardDatasetItems
-    sets: ListDatasetSets
-    commit: CommitDatasetItems
-    tasks: ListDatasetTasks
-    start_task: StartDatasetTask
-    stop_task: StopDatasetTask
-    reconcile_tasks: ReconcileDatasetTasks
-    read_file: ReadDatasetFile
-    set_preview: SetDatasetPreview
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,8 +213,6 @@ class ApplicationServices:
     settings: SettingsServices
     installer: InstallerServices
     assets: AssetServices
-    # dataset domain (M3b)
-    datasets: DatasetServices
     # graph domain (M4)
     graphs: GraphServices
     libraries: LibraryServices

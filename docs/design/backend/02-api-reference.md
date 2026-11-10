@@ -1,5 +1,8 @@
 # 02 -- API contract
 
+> **Superseded (2026-11-10):** the trajectory-dataset parts of this document (dataset tasks, format v1/v2, previews, `dataset_task_*` errors) describe removed code. Datasets are image libraries now: `rework/contracts/datasets.md`.
+
+
 **Where the field-level detail lives: the server.** `/openapi.json` is
 served from the route decorators themselves, so every path, query
 constraint, body schema and response model below is discoverable there
@@ -66,9 +69,8 @@ the other processes it talks to. That is this document.
   | `settings_invalid` | 400 | settings |
   | `asset_too_large` | 413 | assets (upload body over the 8 GiB cap, or a declared `Content-Length` over it — the body is streamed, so the running total is the authoritative check) |
 | `asset_exists` | 409 | assets (the upload target already exists; pass `?overwrite=true` to replace it — a `PUT` never silently overwrites a checkpoint, docs 08 N-14) |
-  | `dataset_not_found`, `dataset_item_not_found`, `dataset_file_not_found`, `dataset_task_not_found` | 404 | datasets |
-  | `dataset_exists`, `dataset_not_migrated`, `dataset_task_active`, `dataset_task_not_active`, `dataset_directory_conflict` | 409 | datasets (`dataset_directory_conflict`: the name is taken by a directory that is not a dataset — it is never deleted, docs 07 F-10) |
-  | `dataset_task_launch_failed` | 500 | datasets |
+  | `dataset_not_found`, `dataset_file_not_found` | 404 | datasets (image libraries) |
+  | `dataset_exists` | 409 | datasets (image libraries) |
   | `graph_invalid` | 422 | graphs |
   | `graph_not_found`, `graph_execution_not_found`, `node_class_not_found`, `starter_not_found` | 404 | graphs |
   | `graph_execution_active`, `graph_execution_not_active` | 409 | graphs |

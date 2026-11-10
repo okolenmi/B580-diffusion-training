@@ -40,6 +40,11 @@ ASSETS = (
     "/ui/js/lib/loss_chart.js",
     "/ui/js/views/config.js",
     "/ui/js/views/datasets.js",
+    "/ui/js/datasets/client.js",
+    "/ui/js/datasets/library_list.js",
+    "/ui/js/datasets/library_detail.js",
+    "/ui/js/datasets/import_panel.js",
+    "/ui/js/datasets/bulk_bar.js",
     "/ui/js/editor.js",
     "/ui/js/editor/state.js",
     "/ui/js/editor/canvas.js",
@@ -121,13 +126,13 @@ def test_pages_and_assets() -> None:
 
         status, _, body = asgi_request(app, "/datasets")
         check(
-            status == 200 and isinstance(body, str) and "ds-grid" in body,
+            status == 200 and isinstance(body, str) and "ds-title" in body,
             f"/datasets serves the dataset manager page (got {status})",
         )
 
         status, _, body = asgi_request(app, "/datasets/test2")
         check(
-            status == 200 and isinstance(body, str) and "ds-grid" in body,
+            status == 200 and isinstance(body, str) and "ds-title" in body,
             f"/datasets/{{name}} serves the same detail page (got {status})",
         )
 

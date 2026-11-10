@@ -137,6 +137,94 @@ class ImageLibrary:
     def sets(self) -> list[str]:
         return [r[0] for r in self._db.execute("select name from sets order by name")]
 
+    # ----- reading for a browser -----
+
+    def count(self, set_name: str = DEFAULT_SET, *, query: str = "") -> int:
+        where, args = self._filter(set_name, query)
+        return self._db.execute(f"select count(*) from images i {where}", args).fetchone()[0]
+
+    def page(self, set_name: str = DEFAULT_SET, *, query: str = "", offset: int = 0, limit: int = 60) -> list[dict]:
+        """Images of one set, newest ingest first, each with its captions; ``query`` matches any caption or the path."""
+        where, args = self._filter(set_name, query)
+        rows = self._db.execute(
+            f"select i.id, i.path, i.width, i.height, i.bytes from images i {where} order by i.added desc, i.id limit ? offset ?",
+            (*args, limit, offset)).fetchall()
+        caps: dict[str, dict[str, str]] = {r[0]: {} for r in rows}
+        for image_id, channel, text in self._db.execute(
+                f"select id, channel, text from captions where id in ({','.join('?' * len(rows))})", [r[0] for r in rows]) if rows else ():
+            caps[image_id][channel] = text
+        return [{"id": i, "path": p, "width": w, "height": h, "bytes": b, "captions": caps[i]} for i, p, w, h, b in rows]
+
+    def path_of(self, image_id: str) -> str | None:
+        row = self._db.execute("select path from images where id=?", (image_id,)).fetchone()
+        return row[0] if row else None
+
+    def _filter(self, set_name: str, query: str) -> tuple[str, list]:
+        where, args = "join members m on m.id=i.id where m.set_name=?", [set_name]
+        if query.strip():
+            like = f"%{query.strip()}%"
+            where += " and (i.path like ? or exists(select 1 from captions c where c.id=i.id and c.text like ?))"
+            args += [like, like]
+        return where, args
+
+    def ids(self, set_name: str = DEFAULT_SET, *, query: str = "") -> list[str]:
+        where, args = self._filter(set_name, query)
+        return [r[0] for r in self._db.execute(f"select i.id from images i {where} order by i.added desc, i.id", args)]
+
+    def stats(self) -> dict:
+        images, = self._db.execute("select count(*) from images").fetchone()
+        sets = {n: c for n, c in self._db.execute("select set_name, count(*) from members group by set_name")}
+        captioned = {ch: n for ch, n in self._db.execute("select channel, count(*) from captions where trim(text) != '' group by channel")}
+        return {"images": images, "sets": {n: sets.get(n, 0) for n in self.sets()}, "captioned": captioned}
+
+    # ----- editing -----
+
+    def edit_captions(self, ids: Iterable[str], channel: str, mode: str, text: str = "", find: str = "") -> int:
+        """Change one channel of many images: ``set`` | ``prepend`` | ``append`` | ``replace`` (``find`` -> ``text``) | ``clear``.
+
+        ``prepend`` / ``append`` skip an image that already has the text there, so repeating a trigger word is harmless.
+        """
+        if mode not in ("set", "prepend", "append", "replace", "clear"):
+            raise ValueError(f"unknown caption edit {mode!r}")
+        if channel not in CHANNELS:
+            raise ValueError(f"unknown caption channel {channel!r}; choose from {CHANNELS}")
+        changed = 0
+        for image_id in ids:
+            row = self._db.execute("select text from captions where id=? and channel=?", (image_id, channel)).fetchone()
+            old = row[0] if row else ""
+            if mode == "set": new = text
+            elif mode == "clear": new = ""
+            elif mode == "replace": new = old.replace(find, text) if find else old
+            elif mode == "prepend": new = old if old.startswith(text) else f"{text}{', ' if old and text else ''}{old}"
+            else: new = old if old.endswith(text) else f"{old}{', ' if old and text else ''}{text}"
+            if new != old:
+                self.set_caption(image_id, new, channel, commit=False)
+                changed += 1
+        self._db.commit()
+        return changed
+
+    def remove(self, ids: Iterable[str], set_name: str | None = None) -> int:
+        """Take images out of one set, or out of the library when ``set_name`` is None (their files stay on disk)."""
+        ids = list(ids)
+        if set_name in (None, DEFAULT_SET):
+            self._db.executemany("delete from images where id=?", [(i,) for i in ids])
+        else:
+            self._db.executemany("delete from members where set_name=? and id=?", [(set_name, i) for i in ids])
+        self._db.commit()
+        return len(ids)
+
+    def add_to_set(self, set_name: str, ids: Iterable[str]) -> int:
+        self._db.execute("insert or ignore into sets(name) values(?)", (set_name,))
+        self._db.executemany("insert or ignore into members values(?,?)", [(set_name, i) for i in ids])
+        self._db.commit()
+        return self._db.execute("select count(*) from members where set_name=?", (set_name,)).fetchone()[0]
+
+    def delete_set(self, set_name: str) -> None:
+        if set_name == DEFAULT_SET:
+            raise ValueError(f"the {DEFAULT_SET!r} set holds every image and cannot be deleted")
+        self._db.execute("delete from sets where name=?", (set_name,))
+        self._db.commit()
+
     def snapshot(self, set_name: str = DEFAULT_SET, *, min_side: int = 0, caption_required: str | None = None) -> ImageSet:
         """An immutable ``ImageSet`` of one set, optionally filtered by size or by a required caption channel."""
         rows = self._db.execute(

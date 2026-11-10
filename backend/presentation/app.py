@@ -19,11 +19,11 @@ from .api import (
     assets,
     catalog,
     config,
-    datasets,
     events,
     graphs,
     health,
     installer,
+    libraries,
     monitor,
     settings,
     templates,
@@ -57,7 +57,7 @@ def create_app(
     app.include_router(settings.router)
     app.include_router(installer.router)
     app.include_router(assets.router)
-    app.include_router(datasets.router)
+    app.include_router(libraries.router)
     app.include_router(catalog.router)
     app.include_router(graphs.router)
     app.include_router(templates.router)

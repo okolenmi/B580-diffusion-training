@@ -189,5 +189,9 @@ Start the backend and open `http://127.0.0.1:<port>/graph2` (the old editor stay
 ## 77. Page styling after the control-skin cleanup
 Open every page (Training, Config, Datasets, Templates, Settings, Setup, Help, Monitor, both graph editors) and look at the text fields, selects and checkboxes: they now share one look (dark field, 4px corners, same size per area). Report any control that looks too big, too small or different from its neighbours, and any page where something moved or lost its styling. The old Training and Run page sheets were unused and are deleted.
 
+## 78. Datasets page for image libraries
+The Datasets page now manages image libraries (what the training nodes open); the old trajectory datasets are not shown.
+(1) Create a dataset, open it, "Import images" with the path of a folder of your images (with `name.txt` captions beside them): the progress bar moves, the grid fills, the "without text" chip counts uncaptioned images. Try a large folder and say how long it takes and whether the page stays usable. (2) Search, switch the caption channel, click a picture: the editor opens with three caption fields, Previous/Next, Save. (3) Tick images: "Add at the start" a trigger word to the selection or (nothing ticked) to everything shown; "Add to set" makes a set; the set appears in the first dropdown. (4) Delete a dataset: your image files must still be there. (5) Your old `my_set` should appear in the list; the dataset picker in the graph editor lists the same names. (6) After a run, a latent cache per VAE shows under "Latent caches" with its size and can be deleted.
+
 ## Reading a bundle automatically
 `python -m next.accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m next.perf hwcheck` without running anything.

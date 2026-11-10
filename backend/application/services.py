@@ -63,6 +63,10 @@ from .use_cases.list_graph_executions import ListGraphExecutions
 from .use_cases.list_graphs import ListGraphs
 from .use_cases.make_asset_folder import MakeAssetFolder
 from .use_cases.node_diagnostics import NodeDiagnostics
+from .use_cases.image_libraries import (
+    AddToSet, CreateLibrary, DeleteCache, DeleteLibrary, DeleteSet, EditCaptions, ListImages, ListImports, ListLibraries, ReadImage,
+    RemoveImages, StartImport,
+)
 from .use_cases.node_shapes import GetNodeCatalog, ListImageLibraries, ListModelFiles, ResolveNode
 from .use_cases.starters import BuildStarter, ListStarters
 from .use_cases.read_config_raw import ReadConfigRaw
@@ -165,6 +169,24 @@ class DatasetServices:
 
 
 @dataclass(frozen=True, slots=True)
+class LibraryServices:
+    """Image libraries: what the Datasets page does with them."""
+
+    list: ListLibraries
+    create: CreateLibrary
+    delete: DeleteLibrary
+    images: ListImages
+    read_image: ReadImage
+    edit_captions: EditCaptions
+    remove_images: RemoveImages
+    add_to_set: AddToSet
+    delete_set: DeleteSet
+    delete_cache: DeleteCache
+    start_import: StartImport
+    imports: ListImports
+
+
+@dataclass(frozen=True, slots=True)
 class GraphServices:
     """Node-graph catalog, validation, execution, history, library (M4)."""
 
@@ -233,6 +255,7 @@ class ApplicationServices:
     datasets: DatasetServices
     # graph domain (M4)
     graphs: GraphServices
+    libraries: LibraryServices
     # monitor telemetry (M6)
     monitor: MonitorServices
     # shared: the publisher every writer drains its aggregate's events

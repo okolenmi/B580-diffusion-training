@@ -434,5 +434,43 @@ def prompt_lifetimes_and_store() -> None:
     check(small.full and len(small) == 0, "a full store stops writing and says so; the run continues from memory")
 
 
+def library_browsing() -> None:
+    """What the Datasets page relies on: paging with search, caption edits, sets, removal, and the store's create/delete/caches."""
+    from ..data.store import DatasetStore
+
+    tmp = Path(tempfile.mkdtemp())
+    for n in range(5):
+        Image.new("RGB", (64 + n, 64), (n * 40, 10, 10)).save(tmp / f"p{n}.png")
+        (tmp / f"p{n}.txt").write_text(f"girl, tag{n}")
+    store = DatasetStore(tmp / "datasets")
+    store.create("mine")
+    raises(FileExistsError, lambda: store.create("mine"), "creating a library twice")
+    lib = store.library("mine")
+    lib.ingest(tmp)
+    check(lib.count() == 5 and len(lib.page(limit=2)) == 2 and len(lib.page(offset=4, limit=2)) == 1, "paging counts and slices")
+    check(lib.count(query="tag3") == 1 and lib.page(query="tag3")[0]["captions"]["text"] == "girl, tag3", "search matches captions")
+    ids = lib.ids()
+    check(lib.edit_captions(ids, "text", "prepend", "trigger") == 5 and lib.edit_captions(ids, "text", "prepend", "trigger") == 0,
+          "prepending a trigger word is idempotent")
+    lib.edit_captions(ids, "text", "replace", "boy", find="girl")
+    check(all("boy" in i["captions"]["text"] for i in lib.page()), "find and replace changes every caption")
+    check(lib.add_to_set("pick", ids[:2]) == 2 and lib.count("pick") == 2 and lib.count() == 5, "a set holds some of the images")
+    lib.remove(ids[:1], "pick")
+    check(lib.count("pick") == 1 and lib.count() == 5, "removing from a set keeps the image in the library")
+    lib.remove(ids[1:2])
+    check(lib.count() == 4 and lib.count("pick") == 0, "removing from the library removes it from every set")
+    raises(ValueError, lambda: lib.delete_set("all"), "deleting the all set")
+    lib.delete_set("pick")
+    check("pick" not in lib.sets() and lib.stats()["images"] == 4, "a deleted set is gone and the stats follow")
+    lib.close()
+    (store.caches("mine") / "vae1").mkdir(parents=True)
+    (store.caches("mine") / "vae1" / "a.bin").write_bytes(b"x" * 10)
+    check(store.cache_report("mine") == [{"vae": "vae1", "files": 1, "bytes": 10}], "a cache is listed with its size")
+    raises(LookupError, lambda: store.delete_cache("mine", "../x"), "a cache name that escapes the folder")
+    store.delete_cache("mine", "vae1")
+    store.delete("mine")
+    check(store.names() == [] and (tmp / "p0.png").is_file(), "deleting a library leaves the image files alone")
+
+
 if __name__ == "__main__":
-    run(main, shape_limit, batch_area_limit, batch_ramp, resumed_stream, packing, padding_fill, captioning, prompt_lifetimes_and_store)
+    run(main, shape_limit, batch_area_limit, batch_ramp, resumed_stream, packing, padding_fill, captioning, prompt_lifetimes_and_store, library_browsing)

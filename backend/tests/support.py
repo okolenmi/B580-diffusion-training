@@ -162,7 +162,12 @@ from backend.infrastructure.persistence.graph_execution_repository import (
 )
 from backend.infrastructure.persistence.graph_library import SqliteGraphLibrary
 from backend.infrastructure.persistence.template_library import SqliteTemplateLibrary
-from backend.application.services import TemplateServices
+from backend.application.services import LibraryServices, TemplateServices
+from backend.application.use_cases.image_libraries import (
+    AddToSet, CreateLibrary, DeleteCache, DeleteLibrary, DeleteSet, EditCaptions, ListImages, ListImports, ListLibraries, ReadImage,
+    RemoveImages, StartImport,
+)
+from backend.infrastructure.image_libraries import FsImageLibraries
 from backend.application.use_cases.graph_modules import DescribeGraphModules, ResolveTemplate
 from backend.application.use_cases.run_template import RunTemplate
 from backend.application.use_cases.template_crud import (
@@ -750,6 +755,7 @@ def build_services(
         previews_db.initialize()
         dataset_previews = SqliteDatasetPreviews(previews_db, dataset_library)
     dataset_files = FsDatasetFiles(layout.datasets_dir)
+    image_libraries = FsImageLibraries(layout)
     if assets is None:
         assets = FileSystemAssetStore(layout, datasets=dataset_library)
     if config_files is None:
@@ -965,6 +971,12 @@ def build_services(
             list=ListTemplates(library=template_library),
             delete=DeleteTemplate(library=template_library),
             run=RunTemplate(library=template_library, start=start_execution),
+        ),
+        libraries=LibraryServices(
+            list=ListLibraries(image_libraries), create=CreateLibrary(image_libraries), delete=DeleteLibrary(image_libraries),
+            images=ListImages(image_libraries), read_image=ReadImage(image_libraries), edit_captions=EditCaptions(image_libraries),
+            remove_images=RemoveImages(image_libraries), add_to_set=AddToSet(image_libraries), delete_set=DeleteSet(image_libraries),
+            delete_cache=DeleteCache(image_libraries), start_import=StartImport(image_libraries), imports=ListImports(image_libraries),
         ),
         graphs=GraphServices(
             node_catalog=GetNodeCatalog(catalog=contract_catalog),

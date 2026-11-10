@@ -46,3 +46,23 @@ export function showMessage(target, message) {
   box.textContent = message || "";
   box.hidden = !message;
 }
+/**
+ * Build an element: `h("button", {class: "btn", text: "Go", onclick: fn, disabled: true}, ...children)`.
+ * Text only ever goes in through `text`/text nodes, never innerHTML, because captions and paths are arbitrary.
+ * @param {string} tag
+ * @param {Record<string, any>} [attrs]
+ * @param {...any} children
+ * @returns {HTMLElement}
+ */
+export function h(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (key === "class") node.className = value;
+    else if (key === "text") node.textContent = value;
+    else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+    else if (key in node && typeof value !== "string") /** @type {any} */ (node)[key] = value;
+    else if (value !== false && value != null) node.setAttribute(key, value === true ? "" : value);
+  }
+  for (const child of children.flat(3)) if (child != null) node.append(child);
+  return node;
+}

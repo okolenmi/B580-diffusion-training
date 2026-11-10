@@ -46,6 +46,7 @@ from .application.services import (
     ConfigServices,
     DatasetServices,
     GraphServices,
+    LibraryServices,
     InstallerServices,
     MonitorServices,
     SettingsServices,
@@ -109,11 +110,16 @@ from .infrastructure.config_options import PydanticConfigOptions
 from .infrastructure.core_config_files import CoreConfigFiles
 from .infrastructure.dataset_files import FsDatasetFiles
 from .infrastructure.dataset_library import SqliteDatasetLibrary
+from .infrastructure.image_libraries import FsImageLibraries
 from .infrastructure.dataset_previews import SqliteDatasetPreviews
 from .infrastructure.dataset_task_gateway import SubprocessDatasetTaskGateway
 from .infrastructure.dataset_tasks import SqliteDatasetTasks
 from .infrastructure.events.callback_event_bus import CallbackEventBus
 from .infrastructure.file_asset_store import FileSystemAssetStore
+from .application.use_cases.image_libraries import (
+    AddToSet, CreateLibrary, DeleteCache, DeleteLibrary, DeleteSet, EditCaptions, ListImages, ListImports, ListLibraries, ReadImage,
+    RemoveImages, StartImport,
+)
 from .application.use_cases.node_shapes import GetNodeCatalog, ListImageLibraries, ListModelFiles, ResolveNode
 from .application.use_cases.starters import BuildStarter, ListStarters
 from .infrastructure.graph.contract_catalog import ContractNodeCatalog, model_environment
@@ -349,6 +355,7 @@ def build_container(settings: Settings) -> Container:
     )
     describe_modules = DescribeGraphModules(catalog=node_catalog)
 
+    image_libraries = FsImageLibraries(layout)
     services = ApplicationServices(
         config=ConfigServices(
             read=GetConfig(files=config_files, paths=paths),
@@ -446,6 +453,12 @@ def build_container(settings: Settings) -> Container:
             set_preview=SetDatasetPreview(
                 library=dataset_library, previews=dataset_previews
             ),
+        ),
+        libraries=LibraryServices(
+            list=ListLibraries(image_libraries), create=CreateLibrary(image_libraries), delete=DeleteLibrary(image_libraries),
+            images=ListImages(image_libraries), read_image=ReadImage(image_libraries), edit_captions=EditCaptions(image_libraries),
+            remove_images=RemoveImages(image_libraries), add_to_set=AddToSet(image_libraries), delete_set=DeleteSet(image_libraries),
+            delete_cache=DeleteCache(image_libraries), start_import=StartImport(image_libraries), imports=ListImports(image_libraries),
         ),
         graphs=GraphServices(
             node_catalog=GetNodeCatalog(catalog=node_catalog),

@@ -68,14 +68,6 @@ Pass: no out of memory at a batch or resolution that int8 cannot hold; loss with
 ## 30. Padding decision by eye (mirror against zero)
 `python -m next.accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`, then look at `sheet.png`: per sample, the clean placement, zero padding (the strip is noise alone after noising) and mirror padding (a reflection of the noisy sample). Tell me which you would train on; the default stays zero until you say.
 
-## 60. Gradient-aligned start: other values, and with LoRA+ (about 3 hours for five arms; pick with `--arms`)
-Your result: 4 batches gave very good textures, 16 failed. This brackets 4 with 2 and 6, and puts 4 together with LoRA+ 4 and 8 (A is already a good direction, B has to grow from zero). `aligned-4` is run again so all pictures are on one sheet.
-```
-python -m next.lab template aligned-values > aligned2.json
-python -m next.lab run aligned2.json
-```
-Send the zip. Look at textures first, then whether LoRA+ adds to the aligned start or fights it.
-
 ## 61. Continue your best adapter (about 1.5 hours)
 Put your saved adapter (batch 1, lr 2e-4, 600 steps) into `lab-setup.json` under `loras` as `best`. The template renders it as it is and continues it three ways with a new `--init-adapter` option: 300 more steps at 2e-4, 300 at 5e-5, 600 at 2e-4 (fresh optimizer, 50 step warmup, no region ladder).
 ```
@@ -86,22 +78,6 @@ Send the zip. Does more training improve it or damage it? Compare each arm with 
 
 ## 62. Queue run and the cache warning (check while running the above)
 Run two files in one command (for example `python -m next.lab run aligned2.json more.json`). Each file now runs in its own process; the second file's training should start without the out-of-memory error that chained runs gave. Send the console of any failure. Also: the `oneDNN primitive cache is evicting shapes` warning should no longer appear (the cache floor is 4096 and counts four batch sizes per shape); tell me if it does.
-
-## 63. Anchor loss: protect what the model already does (about 3 hours for four arms; pick with `--arms`)
-New: `--anchor W` (with `--anchor-every N`, default 2, and `--anchor-prompts "a|b"`). Every Nth step the network is also asked about the batch's noisy images under a random prompt unrelated to the dataset, with and without the adapter; the squared difference of the two predictions times W is added to the gradient. The step line shows `loss_anchor` (the difference before the weight: it should stay small and not climb steadily). Costs about one more forward and backward on those steps; plain optimizer, no graph.
-```
-python -m next.lab template anchor > anchor.json
-python -m next.lab run anchor.json
-```
-Send the zip. Look at the `portrait` and `red house` pictures first (the dataset is not in them): do they stay closer to the base model's rendering as the weight grows (1, 5, 25 against baseline)? Then the empty prompt: is the dataset's look still learned? If 25 changes nothing and 1 changes nothing, the weight range is too low and I will raise it; if even 1 flattens the dataset look, it is too strong.
-
-## 64. LoRA cleaner (about 1.5 hours; the cleaning is 200 gate steps per arm)
-Your idea, built: every weight of a trained adapter (`element`) or every singular direction of each layer (`component`) gets a gate between 0 and 1. The adapter is frozen and only the gates train, with the training loss and, with `--anchor`, the damage to other prompts; the 15% with the highest gates stay and, unless `--clean-no-freeze`, are frozen while the cleared rest trains from zero (a removed direction from a fresh start). In one command: `--init-adapter best.safetensors --clean 0.15 --anchor 5 [--clean-mode component] [--clean-steps 200] [--clean-at N]` (`--clean-at N` cleans an adapter trained in the same run, before step N). It needs the plain optimizer and no graph.
-```
-python -m next.lab template clean > clean.json
-python -m next.lab run clean.json
-```
-Needs `best` in `lab-setup.json` (rank 16 default targets as in the template). Send the zip. `magnitude-15-only` is the control without learning (the largest 15% of the weights stay): the gates are worth it only if they look better than it. Look first at the `-only` arms against `best` (is the dataset's look still there with 15%?), then at the portrait and red house pictures (closer to the base model than `best`?), then at `element-15-more`. In each arm's `train/clean/` folder, `summary.json` says what share was kept per part of the network (input, middle, output blocks; attention, feed-forward): send it too. The console prints the gate loss at the start and the end of the cleaning; if the cleaning step is slow or runs out of memory, tell me (the gates are one float per weight).
 
 ## 65. LoRA+ ratios 2, 4, 8, 12 (about 3 hours for five arms; pick with `--arms`)
 Both 4 and 16 looked good in the first test; this narrows it down on the same recipe, with the baseline rerun for one sheet.

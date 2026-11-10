@@ -8,10 +8,12 @@ All routes are under `/api/v1/datasets`; errors use the one envelope.
 
 | Route | Purpose |
 |---|---|
-| `GET /` | `{datasets: [{name, images, sets: {name: count}, captioned: {channel: count}, caches: [{vae, files, bytes}]}]}` |
+| `GET /` | `{datasets: [{name, images, bytes, sets: {name: count}, captioned: {channel: count}, orientation: {portrait, square, landscape}, covers: [image id x4], caches: [{vae, files, bytes}]}]}` |
 | `POST /` `{name}` | create an empty dataset (201; 409 exists; 422 unusable name) |
 | `DELETE /{name}` | remove the library and its caches, never the image files |
-| `GET /{name}/images?set=&q=&offset=&limit=` | `{total, items: [{id, path, width, height, bytes, captions: {text, tags, desc}}]}`, newest first; `q` matches captions and paths |
+| `GET /{name}/images?set=&q=&missing=&offset=&limit=` | `{total, items: [{id, path, width, height, bytes, captions: {text, tags, desc}, sets: [names besides all]}]}`, newest first; `q` matches captions and paths; `missing=<channel>` keeps only images without a caption there (422 for an unknown channel) |
+| `GET /{name}/image-ids?set=&q=&missing=` | `{ids}` every id the same filters select, so "select all" reaches images that are not loaded |
+| `GET /{name}/report?channel=` | what to check before a run: `{images, sizes, distinct_sizes, smallest_side, empty_captions, repeated_captions, distinct_captions, tags, distinct_tags}` |
 | `GET /{name}/images/{id}/file?thumb=N` | the picture or a WebP thumbnail; by id only, never by path |
 | `POST /{name}/captions` | `{ids|null, set, query, channel, mode: set|prepend|append|replace|clear, text, find}`; `ids: null` = everything the set and query select; prepend/append skip an image that already has the text there |
 | `POST /{name}/images/remove` | `{ids, set|null}` out of a set, or out of the dataset when `set` is null |
@@ -23,3 +25,16 @@ All routes are under `/api/v1/datasets`; errors use the one envelope.
 
 The node pickers list datasets through `GET /api/v1/catalog/libraries` (names that have a `library.sqlite`).
 Not built yet: generating images with a teacher checkpoint into a dataset; uploading images from the browser.
+
+## The page (`frontend/js/datasets/`)
+
+`/datasets` shows cards (a mosaic of the newest pictures, caption completeness, sets and caches); the dashed first card creates one.
+`/datasets/{name}` is a workbench:
+
+- **Mosaic** of justified rows (`layout.js`): every picture keeps its proportions, rows fill the width. Tile size slider; infinite scroll.
+- **Selection** (`selection.js`): click, Ctrl/Cmd-click toggles, Shift-click ranges, `Select all` takes every id of the view (loaded or not). Keys: arrows move (rows are uneven, so up/down pick the nearest tile in the next row), Space/Enter opens the full-size viewer, Esc clears, Ctrl+A selects all, Delete removes after a confirmation.
+- **Inspector** beside the mosaic: *Selection* tab (one image: preview, caption editor that saves by itself on idle, blur, image change and channel change, sets; several: bulk caption edit with a preview of the result on the first image, add to a set, take out of the current set, remove) and *Library* tab (shapes, caption completeness with "show missing", the report: repeated and empty captions, sizes, most used tags that search on click, sets, latent caches).
+- **Set tabs** above the mosaic; dragging the selection onto a set tab adds it to that set.
+- **Import** dialog with progress; a pill in the page header keeps the progress visible after the dialog is closed.
+
+`LibraryState` is the one object the panels share (view, loaded images, selection, operations); panels listen to its events and never call the API for the dataset themselves.

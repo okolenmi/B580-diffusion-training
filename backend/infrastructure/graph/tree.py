@@ -6,6 +6,7 @@ contents to the repository root, and this module is then the only import that ch
 
 from __future__ import annotations
 
+from next.data.library import report as library_report
 from next.data.store import DatasetStore
 from next.families.api.library import ModelLibrary
 from next.families.registry import list_families
@@ -17,7 +18,7 @@ from next.graph.runtime import GraphRunner
 from next.starters import SdxlLoraOptions, sdxl_lora
 
 __all__ = ["DatasetStore", "Environment", "GraphRunner", "ModelLibrary", "NodeRegistry", "SdxlLoraOptions", "build_catalog",
-           "diagnose_node", "list_families", "make_runtime", "resolve_node", "sdxl_lora"]
+           "diagnose_node", "library_report", "list_families", "make_runtime", "resolve_node", "sdxl_lora"]
 
 
 def make_runtime(context):

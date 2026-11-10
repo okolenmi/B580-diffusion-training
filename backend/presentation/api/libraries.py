@@ -60,9 +60,22 @@ def delete_dataset(name: str, services: ApplicationServices = Depends(get_servic
 
 
 @router.get("/{name}/images")
-def list_images(name: str, set: str = "all", q: str = "", offset: int = Query(0, ge=0), limit: int = Query(60, ge=1, le=300),
+def list_images(name: str, set: str = "all", q: str = "", missing: str = "", offset: int = Query(0, ge=0), limit: int = Query(60, ge=1, le=300),
                 services: ApplicationServices = Depends(get_services)) -> dict:
-    return services.libraries.images.execute(name, set_name=set, query=q, offset=offset, limit=limit)
+    """One page of a set. ``missing`` is a caption channel (text, tags, desc): only images without a caption there."""
+    return services.libraries.images.execute(name, set_name=set, query=q, missing=missing, offset=offset, limit=limit)
+
+
+@router.get("/{name}/image-ids")
+def list_image_ids(name: str, set: str = "all", q: str = "", missing: str = "", services: ApplicationServices = Depends(get_services)) -> dict:
+    """Every id the same filters select, so "select all" reaches images that are not loaded yet."""
+    return {"ids": services.libraries.image_ids.execute(name, set_name=set, query=q, missing=missing)}
+
+
+@router.get("/{name}/report")
+def library_report(name: str, channel: str = "text", services: ApplicationServices = Depends(get_services)) -> dict:
+    """What is worth checking before a run: sizes, empty and repeated captions, the most used tags."""
+    return services.libraries.report.execute(name, channel)
 
 
 @router.get("/{name}/images/{image_id}/file", response_class=Response)

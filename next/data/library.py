@@ -139,13 +139,16 @@ class ImageLibrary:
 
     # ----- reading for a browser -----
 
-    def count(self, set_name: str = DEFAULT_SET, *, query: str = "") -> int:
-        where, args = self._filter(set_name, query)
+    def count(self, set_name: str = DEFAULT_SET, *, query: str = "", missing: str = "") -> int:
+        where, args = self._filter(set_name, query, missing)
         return self._db.execute(f"select count(*) from images i {where}", args).fetchone()[0]
 
-    def page(self, set_name: str = DEFAULT_SET, *, query: str = "", offset: int = 0, limit: int = 60) -> list[dict]:
-        """Images of one set, newest ingest first, each with its captions; ``query`` matches any caption or the path."""
-        where, args = self._filter(set_name, query)
+    def page(self, set_name: str = DEFAULT_SET, *, query: str = "", missing: str = "", offset: int = 0, limit: int = 60) -> list[dict]:
+        """Images of one set, newest ingest first, each with its captions and the sets it is in (besides ``all``).
+
+        ``query`` matches any caption or the path; ``missing`` keeps only images without a caption in that channel.
+        """
+        where, args = self._filter(set_name, query, missing)
         rows = self._db.execute(
             f"select i.id, i.path, i.width, i.height, i.bytes from images i {where} order by i.added desc, i.id limit ? offset ?",
             (*args, limit, offset)).fetchall()
@@ -153,29 +156,46 @@ class ImageLibrary:
         for image_id, channel, text in self._db.execute(
                 f"select id, channel, text from captions where id in ({','.join('?' * len(rows))})", [r[0] for r in rows]) if rows else ():
             caps[image_id][channel] = text
-        return [{"id": i, "path": p, "width": w, "height": h, "bytes": b, "captions": caps[i]} for i, p, w, h, b in rows]
+        member_of: dict[str, list[str]] = {r[0]: [] for r in rows}
+        for image_id, name in self._db.execute(
+                f"select id, set_name from members where set_name != ? and id in ({','.join('?' * len(rows))}) order by set_name",
+                [DEFAULT_SET, *member_of]) if rows else ():
+            member_of[image_id].append(name)
+        return [{"id": i, "path": p, "width": w, "height": h, "bytes": b, "captions": caps[i], "sets": member_of[i]}
+                for i, p, w, h, b in rows]
 
     def path_of(self, image_id: str) -> str | None:
         row = self._db.execute("select path from images where id=?", (image_id,)).fetchone()
         return row[0] if row else None
 
-    def _filter(self, set_name: str, query: str) -> tuple[str, list]:
+    def _filter(self, set_name: str, query: str, missing: str = "") -> tuple[str, list]:
         where, args = "join members m on m.id=i.id where m.set_name=?", [set_name]
+        if missing:
+            if missing not in CHANNELS:
+                raise ValueError(f"unknown caption channel {missing!r}; choose from {CHANNELS}")
+            where += " and not exists(select 1 from captions c where c.id=i.id and c.channel=? and trim(c.text) != '')"
+            args.append(missing)
         if query.strip():
             like = f"%{query.strip()}%"
             where += " and (i.path like ? or exists(select 1 from captions c where c.id=i.id and c.text like ?))"
             args += [like, like]
         return where, args
 
-    def ids(self, set_name: str = DEFAULT_SET, *, query: str = "") -> list[str]:
-        where, args = self._filter(set_name, query)
+    def ids(self, set_name: str = DEFAULT_SET, *, query: str = "", missing: str = "") -> list[str]:
+        where, args = self._filter(set_name, query, missing)
         return [r[0] for r in self._db.execute(f"select i.id from images i {where} order by i.added desc, i.id", args)]
 
     def stats(self) -> dict:
         images, = self._db.execute("select count(*) from images").fetchone()
         sets = {n: c for n, c in self._db.execute("select set_name, count(*) from members group by set_name")}
         captioned = {ch: n for ch, n in self._db.execute("select channel, count(*) from captions where trim(text) != '' group by channel")}
-        return {"images": images, "sets": {n: sets.get(n, 0) for n in self.sets()}, "captioned": captioned}
+        total_bytes, = self._db.execute("select coalesce(sum(bytes), 0) from images").fetchone()
+        shape = {k: n for k, n in self._db.execute(
+            "select case when width*10 < height*9 then 'portrait' when width*9 > height*10 then 'landscape' else 'square' end, count(*) "
+            "from images group by 1")}
+        covers = [r[0] for r in self._db.execute("select id from images order by added desc, id limit 4")]
+        return {"images": images, "bytes": total_bytes, "sets": {n: sets.get(n, 0) for n in self.sets()}, "captioned": captioned,
+                "orientation": {k: shape.get(k, 0) for k in ("portrait", "square", "landscape")}, "covers": covers}
 
     # ----- editing -----
 
@@ -244,6 +264,8 @@ class ImageLibrary:
 
 def report(images: ImageSet, channel: str = "text", top_tags: int = 30) -> dict:
     """Problems worth seeing before a long run: size spread, empty captions, repeated captions, tag counts."""
+    if channel not in CHANNELS:
+        raise ValueError(f"unknown caption channel {channel!r}; choose from {CHANNELS}")
     sizes = Counter(images.sizes[i] for i in images.ids)
     captions = {i: images.caption(i, channel).strip() for i in images.ids}
     same: dict[str, list[str]] = {}

@@ -52,6 +52,15 @@ def main() -> None:
     check(status == 200 and page["total"] == 4 and len(page["items"]) == 2, "images come in pages with a total")
     check(call("/mine/images?q=n2")[1]["total"] == 1, "search matches captions")
     image_id = page["items"][0]["id"]
+    check(page["items"][0]["sets"] == [], "an image lists its sets")
+    check(call("/mine/images?missing=tags")[1]["total"] == 4 and call("/mine/images?missing=text")[1]["total"] == 0, "missing narrows to images without that caption")
+    check(call("/mine/images?missing=nope")[0] == 422, "a missing filter on an unknown channel is refused")
+    check(sorted(call("/mine/image-ids?q=n2")[1]["ids"]) == [i["id"] for i in call("/mine/images?q=n2")[1]["items"]], "the ids route follows the same filters")
+    status, rep = call("/mine/report")
+    check(status == 200 and rep["images"] == 4 and rep["distinct_captions"] == 4 and rep["empty_captions"] == [], "the report describes the dataset")
+    check(call("/mine/report?channel=nope")[0] == 422, "a report on an unknown channel is refused")
+    covers = call("")[1]["datasets"][0]["covers"]
+    check(len(covers) == 4 and call("")[1]["datasets"][0]["orientation"]["landscape"] == 4, "the list carries cover ids and orientation")
     status, _, body = asgi_request(app, f"/api/v1/datasets/mine/images/{image_id}/file?thumb=32")
     check(status == 200, "a thumbnail is served by image id")
     check(asgi_request(app, "/api/v1/datasets/mine/images/deadbeef/file")[0] == 404, "an unknown image id is a 404, never a path")

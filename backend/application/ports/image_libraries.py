@@ -13,7 +13,7 @@ from pathlib import Path
 class ImageLibraries(ABC):
     @abstractmethod
     def list(self) -> list[dict]:
-        """``{name, images, sets: {name: count}, captioned: {channel: count}, caches: [{vae, files, bytes}]}`` per library."""
+        """``{name, images, bytes, sets: {name: count}, captioned: {channel: count}, orientation: {portrait, square, landscape}, covers: [image id], caches: [{vae, files, bytes}]}`` per library."""
 
     @abstractmethod
     def create(self, name: str) -> dict:
@@ -24,8 +24,16 @@ class ImageLibraries(ABC):
         """Remove the library and its caches (never the image files). Raises ``DatasetNotFoundError``."""
 
     @abstractmethod
-    def page(self, name: str, *, set_name: str, query: str, offset: int, limit: int) -> dict:
-        """``{total, items: [{id, width, height, bytes, path, captions}]}`` of one set, newest first."""
+    def page(self, name: str, *, set_name: str, query: str, missing: str, offset: int, limit: int) -> dict:
+        """``{total, items: [{id, width, height, bytes, path, captions, sets}]}`` of one set, newest first; ``missing`` is a caption channel the images must lack."""
+
+    @abstractmethod
+    def ids(self, name: str, *, set_name: str, query: str, missing: str) -> list[str]:
+        """Every image id the same filters select, newest first."""
+
+    @abstractmethod
+    def report(self, name: str, channel: str) -> dict:
+        """Problems worth seeing before a run (size spread, empty and repeated captions, tag counts) for one caption channel."""
 
     @abstractmethod
     def image(self, name: str, image_id: str, *, thumb: int | None) -> tuple[bytes, str]:

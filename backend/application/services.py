@@ -54,8 +54,8 @@ from .use_cases.list_graphs import ListGraphs
 from .use_cases.make_asset_folder import MakeAssetFolder
 from .use_cases.node_diagnostics import NodeDiagnostics
 from .use_cases.image_libraries import (
-    AddToSet, CreateLibrary, DeleteCache, DeleteLibrary, DeleteSet, EditCaptions, ListImages, ListImports, ListLibraries, ReadImage,
-    RemoveImages, StartImport,
+    AddToSet, CreateLibrary, DeleteCache, DeleteLibrary, DeleteSet, EditCaptions, LibraryReport, ListImageIds, ListImages, ListImports,
+    ListLibraries, ReadImage, RemoveImages, StartImport,
 )
 from .use_cases.node_shapes import GetNodeCatalog, ListImageLibraries, ListModelFiles, ResolveNode
 from .use_cases.starters import BuildStarter, ListStarters
@@ -138,6 +138,8 @@ class LibraryServices:
     create: CreateLibrary
     delete: DeleteLibrary
     images: ListImages
+    image_ids: ListImageIds
+    report: LibraryReport
     read_image: ReadImage
     edit_captions: EditCaptions
     remove_images: RemoveImages

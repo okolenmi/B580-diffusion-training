@@ -94,8 +94,8 @@ from .infrastructure.image_libraries import FsImageLibraries
 from .infrastructure.events.callback_event_bus import CallbackEventBus
 from .infrastructure.file_asset_store import FileSystemAssetStore
 from .application.use_cases.image_libraries import (
-    AddToSet, CreateLibrary, DeleteCache, DeleteLibrary, DeleteSet, EditCaptions, ListImages, ListImports, ListLibraries, ReadImage,
-    RemoveImages, StartImport,
+    AddToSet, CreateLibrary, DeleteCache, DeleteLibrary, DeleteSet, EditCaptions, LibraryReport, ListImageIds, ListImages, ListImports,
+    ListLibraries, ReadImage, RemoveImages, StartImport,
 )
 from .application.use_cases.node_shapes import GetNodeCatalog, ListImageLibraries, ListModelFiles, ResolveNode
 from .application.use_cases.starters import BuildStarter, ListStarters
@@ -365,7 +365,7 @@ def build_container(settings: Settings) -> Container:
         ),
         libraries=LibraryServices(
             list=ListLibraries(image_libraries), create=CreateLibrary(image_libraries), delete=DeleteLibrary(image_libraries),
-            images=ListImages(image_libraries), read_image=ReadImage(image_libraries), edit_captions=EditCaptions(image_libraries),
+            images=ListImages(image_libraries), image_ids=ListImageIds(image_libraries), report=LibraryReport(image_libraries), read_image=ReadImage(image_libraries), edit_captions=EditCaptions(image_libraries),
             remove_images=RemoveImages(image_libraries), add_to_set=AddToSet(image_libraries), delete_set=DeleteSet(image_libraries),
             delete_cache=DeleteCache(image_libraries), start_import=StartImport(image_libraries), imports=ListImports(image_libraries),
         ),

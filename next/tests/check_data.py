@@ -455,6 +455,13 @@ def library_browsing() -> None:
     lib.edit_captions(ids, "text", "replace", "boy", find="girl")
     check(all("boy" in i["captions"]["text"] for i in lib.page()), "find and replace changes every caption")
     check(lib.add_to_set("pick", ids[:2]) == 2 and lib.count("pick") == 2 and lib.count() == 5, "a set holds some of the images")
+    check(sorted(i["sets"] for i in lib.page() if i["id"] in ids[:2]) == [["pick"], ["pick"]] and lib.page(limit=1)[0]["sets"] in ([], ["pick"]),
+          "each image lists the sets it is in, besides all")
+    lib.set_caption(ids[4], "", "text")
+    check(lib.count(missing="text") == 1 and lib.ids(missing="text") == [ids[4]] and lib.count(missing="tags") == 5, "missing keeps images without a caption in that channel")
+    raises(ValueError, lambda: lib.count(missing="nope"), "a missing filter on an unknown channel")
+    stats = lib.stats()
+    check(stats["bytes"] > 0 and sum(stats["orientation"].values()) == 5 and len(stats["covers"]) == 4, "stats carry size, orientation and cover images")
     lib.remove(ids[:1], "pick")
     check(lib.count("pick") == 1 and lib.count() == 5, "removing from a set keeps the image in the library")
     lib.remove(ids[1:2])

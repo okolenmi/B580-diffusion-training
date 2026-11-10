@@ -1,7 +1,7 @@
 # Local folders
 __pycache__/
 assets/
-datasets/
+/datasets/
 runs/
 archive/server/data/
 backend/data/

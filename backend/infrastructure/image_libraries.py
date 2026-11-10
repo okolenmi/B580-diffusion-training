@@ -88,10 +88,31 @@ class FsImageLibraries(ImageLibraries):
         except ValueError as exc:
             raise InvalidQueryError(str(exc)) from exc
 
-    def page(self, name: str, *, set_name: str, query: str, offset: int, limit: int) -> dict:
+    def page(self, name: str, *, set_name: str, query: str, missing: str, offset: int, limit: int) -> dict:
         lib = self._open(name)
         try:
-            return {"total": lib.count(set_name, query=query), "items": lib.page(set_name, query=query, offset=offset, limit=limit)}
+            return {"total": lib.count(set_name, query=query, missing=missing),
+                    "items": lib.page(set_name, query=query, missing=missing, offset=offset, limit=limit)}
+        except ValueError as exc:
+            raise InvalidQueryError(str(exc)) from exc
+        finally:
+            lib.close()
+
+    def ids(self, name: str, *, set_name: str, query: str, missing: str) -> list[str]:
+        lib = self._open(name)
+        try:
+            return lib.ids(set_name, query=query, missing=missing)
+        except ValueError as exc:
+            raise InvalidQueryError(str(exc)) from exc
+        finally:
+            lib.close()
+
+    def report(self, name: str, channel: str) -> dict:
+        lib = self._open(name)
+        try:
+            return tree.library_report(lib.snapshot(), channel)
+        except ValueError as exc:
+            raise InvalidQueryError(str(exc)) from exc
         finally:
             lib.close()
 

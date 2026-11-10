@@ -28,8 +28,18 @@ class DeleteLibrary(_UseCase):
 
 
 class ListImages(_UseCase):
-    def execute(self, name: str, *, set_name: str, query: str, offset: int, limit: int) -> dict:
-        return self._libraries.page(name, set_name=set_name, query=query, offset=offset, limit=limit)
+    def execute(self, name: str, *, set_name: str, query: str, missing: str, offset: int, limit: int) -> dict:
+        return self._libraries.page(name, set_name=set_name, query=query, missing=missing, offset=offset, limit=limit)
+
+
+class ListImageIds(_UseCase):
+    def execute(self, name: str, *, set_name: str, query: str, missing: str) -> list[str]:
+        return self._libraries.ids(name, set_name=set_name, query=query, missing=missing)
+
+
+class LibraryReport(_UseCase):
+    def execute(self, name: str, channel: str) -> dict:
+        return self._libraries.report(name, channel)
 
 
 class ReadImage(_UseCase):

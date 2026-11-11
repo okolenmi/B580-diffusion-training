@@ -75,6 +75,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..limits import GRAPH_FAILED_LOG_KEEP
+from ..ports.execution_metrics import ExecutionMetrics
 from ..ports.graph_execution_repository import GraphExecutionRepository
 from ...domain.value_objects import ExecutionId, GraphStatus
 
@@ -108,8 +109,10 @@ class SweepExecutionScratch:
         executions: GraphExecutionRepository,
         scratch_dir: Path,
         failed_log_keep: int = GRAPH_FAILED_LOG_KEEP,
+        metrics: ExecutionMetrics | None = None,
     ) -> None:
         self._executions = executions
+        self._metrics = metrics
         self._scratch_dir = scratch_dir
         self._failed_log_keep = max(0, failed_log_keep)
 
@@ -152,6 +155,7 @@ class SweepExecutionScratch:
             if self._is_live(run_id):
                 kept += 1
                 continue
+            self._keep_charts(run_id)
             if run_id in keep_logs:
                 # Keep the log, take the rest. The event file is the 62% and
                 # the graph is the 38% of what a run leaves behind; both are
@@ -175,6 +179,7 @@ class SweepExecutionScratch:
                 removed_files += files
                 removed_bytes += freed
 
+        self._drop_orphan_charts()
         if removed_files:
             logger.info(
                 "removed scratch for %d finished graph execution(s): "
@@ -196,6 +201,27 @@ class SweepExecutionScratch:
         return {"graph": base.with_suffix(".graph.json"),
                 "events": base.with_suffix(".events.jsonl"),
                 "log": base.with_suffix(".log")}
+
+    def _keep_charts(self, run_id: int) -> None:
+        """A finished run's monitor frames outlive its event file: the curves are what is worth keeping from a run."""
+        if self._metrics is None:
+            return
+        try:
+            if self._executions.get(ExecutionId(run_id)) is not None:
+                self._metrics.archive(run_id)
+        except Exception:  # noqa: BLE001 -- losing charts must not stop the sweep
+            logger.warning("could not keep the charts of execution %s", run_id, exc_info=True)
+
+    def _drop_orphan_charts(self) -> None:
+        """Archives of runs whose row is gone (history deleted, database replaced) are debris like their scratch."""
+        if self._metrics is None:
+            return
+        for run_id in self._metrics.ids():
+            try:
+                if self._executions.get(ExecutionId(run_id)) is None:
+                    self._metrics.remove(run_id)
+            except Exception:  # noqa: BLE001 -- unreadable is not absent: keep it
+                logger.debug("could not read execution %s to judge its charts", run_id, exc_info=True)
 
     def _ends_badly(self, run_id: int) -> bool:
         """Whether this run's row says it failed or was stopped.

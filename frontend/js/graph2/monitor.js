@@ -11,6 +11,9 @@
 
 import { createDisplay } from "../board/displays.js";
 import { LiveStreams } from "../board/live.js";
+import { StreamState } from "../board/series.js";
+import { api } from "../api.js";
+import { errText } from "../lib/errors.js";
 import { h } from "../lib/dom.js";
 
 const STORE = "graph2.monitor.modules";
@@ -35,9 +38,18 @@ class Section {
     this.grid = h("div", { class: "mon-grid" });
     this.el = h("section", { class: "mon-section" }, h("header", { class: "mon-head" }, this.title, this.chips), this.grid);
     const stream = monitor.live.acquire(`node:${node.uid}`, () => monitor.schedule(this));
+    this.liveState = stream.state;
     this.state = stream.state;
     this.release = stream.release;
     this.rename(node, info);
+    this.render();
+  }
+
+  /** Draw `state` (a replayed run), or the live stream again when null. */
+  useState(state) {
+    this.state = state ?? this.liveState;
+    for (const { display } of this.displays.values()) display.destroy();
+    this.displays.clear();
     this.render();
   }
 
@@ -103,6 +115,10 @@ export class Monitor {
     this.live = live;
     this.sections = new Map(); // uid -> Section
     this.empty = h("div", { class: "console-line info", text: "No node of this graph has live displays yet (add a Diffusion Trainer)." });
+    this.bar = h("div", { class: "mon-bar", hidden: true });
+    this.body = h("div", { class: "mon-sections" });
+    this.root.append(this.bar, this.body);
+    this._viewing = null;
     this._queued = new Set();
     this._frame = 0;
     for (const type of ["reset", "node:add", "node:remove", "node:title"]) doc.on(type, () => this.sync());
@@ -136,7 +152,46 @@ export class Monitor {
     for (const [uid, { node, info }] of wanted) {
       if (!this.sections.has(uid)) this.sections.set(uid, new Section(this, node, info));
     }
-    this.root.replaceChildren(...(this.sections.size ? [...this.sections.values()].map((s) => s.el) : [this.empty]));
+    this.body.replaceChildren(...(this.sections.size ? [...this.sections.values()].map((s) => s.el) : [this.empty]));
+  }
+
+  /**
+   * Show the curves of run `id` (finished or stopped), or the live ones when `id` is null or the run is still going.
+   * The server keeps what each node reported, so a past run can be looked at after a restart.
+   */
+  async showRun(id, live = false) {
+    const token = (this._viewing = Symbol("view"));
+    if (id == null || live) return this.showLive();
+    let note = `Curves of run #${id}`;
+    const states = new Map();
+    try {
+      for (const uid of this.sections.keys()) {
+        const { frames } = await api(`/graphs/executions/${id}/monitor/${encodeURIComponent(`node:${uid}`)}`);
+        if (this._viewing !== token) return;
+        const state = new StreamState();
+        for (const frame of frames) state.applyFrame(frame);
+        states.set(uid, frames.length ? state : null);
+      }
+    } catch (err) {
+      note = `Curves of run #${id} could not be read: ${errText(err)}`;
+    }
+    if (this._viewing !== token) return;
+    for (const [uid, section] of this.sections) {
+      const state = states.get(uid);
+      section.useState(state ?? new StreamState());
+    }
+    const none = this.sections.size && [...states.values()].every((s) => !s);
+    this.bar.replaceChildren(
+      h("span", { text: none ? `${note}: nothing was recorded for the nodes on the canvas.` : `${note}.` }),
+      h("button", { class: "btn small", type: "button", text: "Back to live", onclick: () => this.showLive() }),
+    );
+    this.bar.hidden = false;
+  }
+
+  showLive() {
+    this._viewing = null;
+    this.bar.hidden = true;
+    for (const section of this.sections.values()) section.useState(null);
   }
 
   /** The panel was opened: charts measured while hidden are drawn again. */

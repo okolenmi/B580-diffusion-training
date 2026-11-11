@@ -88,6 +88,7 @@ from backend.application.use_cases import (
     GetConfig,
     GetConfigOptions,
     GetGraph,
+    GetExecutionMetrics,
     GetGraphExecution,
     GetSettings,
     InspectAsset,
@@ -126,6 +127,7 @@ from backend.infrastructure.graph.memory_fields import memory_fields_resolver
 from backend.domain.graph import GraphDefinition
 from backend.infrastructure.graph.runtime import ContractGraphRuntime
 from backend.infrastructure.graph_event_stream import ExecutionEventTail
+from backend.infrastructure.execution_metrics import FileExecutionMetrics
 from backend.infrastructure.graph_task_gateway import InProcessGraphTaskGateway
 from backend.infrastructure.memory_peak_store import SqlitePeakStore
 from backend.infrastructure.monitor_bus import SharedMonitorBus
@@ -136,7 +138,7 @@ from backend.infrastructure.persistence.graph_library import SqliteGraphLibrary
 from backend.infrastructure.persistence.template_library import SqliteTemplateLibrary
 from backend.application.services import LibraryServices, TemplateServices
 from backend.application.use_cases.image_libraries import (
-    AddToSet, CreateLibrary, DeleteCache, DeleteLibrary, DeleteSet, EditCaptions, ListImages, ListImports, ListLibraries, ReadImage,
+    AddToSet, CreateLibrary, DeleteCache, DeleteLibrary, DeleteSet, EditCaptions, LibraryReport, ListImageIds, ListImages, ListImports, ListLibraries, ReadImage,
     RemoveImages, StartImport,
 )
 from backend.infrastructure.image_libraries import FsImageLibraries
@@ -676,6 +678,7 @@ def build_services(
     # still needs the path defined (the old nested assignment left it
     # unbound and the first use raised NameError).
     graph_scratch = project_root / "test-graph-scratch"
+    execution_metrics = FileExecutionMetrics(graph_scratch)
     # The test twin of bootstrap's peak store (MEM-04 #2): one store per
     # composition, next to the databases this build already owns, shared
     # by admission (reads) and the supervisor (files what a run reports).
@@ -819,7 +822,7 @@ def build_services(
         ),
         libraries=LibraryServices(
             list=ListLibraries(image_libraries), create=CreateLibrary(image_libraries), delete=DeleteLibrary(image_libraries),
-            images=ListImages(image_libraries), read_image=ReadImage(image_libraries), edit_captions=EditCaptions(image_libraries),
+            images=ListImages(image_libraries), image_ids=ListImageIds(image_libraries), report=LibraryReport(image_libraries), read_image=ReadImage(image_libraries), edit_captions=EditCaptions(image_libraries),
             remove_images=RemoveImages(image_libraries), add_to_set=AddToSet(image_libraries), delete_set=DeleteSet(image_libraries),
             delete_cache=DeleteCache(image_libraries), start_import=StartImport(image_libraries), imports=ListImports(image_libraries),
         ),
@@ -839,6 +842,7 @@ def build_services(
             start_execution=start_execution,
             list_executions=ListGraphExecutions(executions=graph_executions),
             get_execution=GetGraphExecution(executions=graph_executions),
+            execution_metrics=GetExecutionMetrics(executions=graph_executions, metrics=execution_metrics),
             stop_execution=StopGraphExecution(
                 executions=graph_executions,
                 writer=execution_writer,
@@ -848,7 +852,7 @@ def build_services(
             delete_executions=DeleteGraphExecutions(
                 executions=graph_executions, events=publisher,
                 scratch=SweepExecutionScratch(
-                    executions=graph_executions, scratch_dir=graph_scratch,
+                    executions=graph_executions, scratch_dir=graph_scratch, metrics=execution_metrics,
                 ),
                 memory_ledger=memory_ledger,
             ),

@@ -18,13 +18,14 @@ const TERMINAL = new Set(["finished", "failed", "stopped"]);
 const seconds = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`);
 
 export class Runs {
-  constructor(root, canvas, { onNote, onRunState, onIssues, onMemoryRefusal }) {
+  constructor(root, canvas, { onNote, onRunState, onIssues, onMemoryRefusal, onSelect }) {
     this.root = root;
     this.canvas = canvas;
     this.onNote = onNote;
     this.onRunState = onRunState;
     this.onIssues = onIssues;
     this.onMemoryRefusal = onMemoryRefusal || (() => {});
+    this.onSelect = onSelect || (() => {});
     this.items = [];
     this.selected = null;
     this.liveId = null;
@@ -58,6 +59,7 @@ export class Runs {
       this.canvas.clearStatuses();
       for (const r of detail.results || []) this.canvas.setNodeStatus(r.node_id, r.ok ? "done" : "error", seconds(r.duration_ms), r.error || "");
       if (detail.error) this.onNote(`Run #${id}: ${detail.error}`, "error");
+      this.onSelect(id, ACTIVE.has(detail.status));
     } catch (err) {
       this.onNote(errText(err), "error");
     }

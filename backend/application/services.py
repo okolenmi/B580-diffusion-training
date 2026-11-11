@@ -45,6 +45,7 @@ from .use_cases.delete_graph_executions import DeleteGraphExecutions
 from .use_cases.get_config import GetConfig
 from .use_cases.get_config_options import GetConfigOptions
 from .use_cases.get_graph import GetGraph
+from .use_cases.get_execution_metrics import GetExecutionMetrics
 from .use_cases.get_graph_execution import GetGraphExecution
 from .use_cases.get_settings import GetSettings
 from .use_cases.inspect_asset import InspectAsset
@@ -168,6 +169,8 @@ class GraphServices:
     start_execution: StartGraphExecution
     list_executions: ListGraphExecutions
     get_execution: GetGraphExecution
+    #: What a run (live or finished) reported to its monitors: the curves of a past run.
+    execution_metrics: GetExecutionMetrics
     stop_execution: StopGraphExecution
     delete_executions: DeleteGraphExecutions
     reconcile_executions: ReconcileGraphExecutions

@@ -29,6 +29,7 @@ from .delete_graph_executions import DeleteGraphExecutions
 from .get_config import GetConfig
 from .get_config_options import GetConfigOptions
 from .get_graph import GetGraph
+from .get_execution_metrics import GetExecutionMetrics
 from .get_graph_execution import GetGraphExecution
 from .get_settings import GetSettings
 from .inspect_asset import InspectAsset
@@ -75,6 +76,7 @@ __all__ = [
     "GetConfig",
     "GetConfigOptions",
     "GetGraph",
+    "GetExecutionMetrics",
     "GetGraphExecution",
     "GetSettings",
     "InspectAsset",

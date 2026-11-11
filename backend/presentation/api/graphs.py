@@ -34,7 +34,9 @@ from ..schemas import (
     MemoryPreviewOut,
     DiagnosticsIn,
     DiagnosticsOut,
+    ExecutionFramesOut,
     ExecutionListOut,
+    ExecutionStreamsOut,
     ExecutionOut,
     GraphRunIn,
     ExecutionSummaryOut,
@@ -151,6 +153,33 @@ def get_execution(
 ):
     """Full row: lifecycle, per-node results, submission snapshot."""
     return execution_out(services.graphs.get_execution.execute(execution_id))
+
+
+@router.get(
+    "/executions/{execution_id}/monitor",
+    response_model=ExecutionStreamsOut,
+    responses={404: _ERROR_404},
+)
+def execution_streams(
+    execution_id: int,
+    services: ApplicationServices = Depends(get_services),
+):
+    """Streams this run reported on (``node:<uid>`` for a node's displays); live runs and finished ones alike."""
+    return ExecutionStreamsOut(streams=services.graphs.execution_metrics.streams(execution_id))
+
+
+@router.get(
+    "/executions/{execution_id}/monitor/{stream:path}",
+    response_model=ExecutionFramesOut,
+    responses={404: _ERROR_404},
+)
+def execution_frames(
+    execution_id: int,
+    stream: str,
+    services: ApplicationServices = Depends(get_services),
+):
+    """The frames one stream of the run reported, in order, thinned to a few thousand; what the monitor boards replay."""
+    return ExecutionFramesOut(stream=stream, frames=services.graphs.execution_metrics.frames(execution_id, stream))
 
 
 @router.post(

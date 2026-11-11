@@ -652,6 +652,15 @@ class ExecutionListOut(BaseModel):
     count: int
 
 
+class ExecutionStreamsOut(BaseModel):
+    streams: list[str]
+
+
+class ExecutionFramesOut(BaseModel):
+    stream: str
+    frames: list[dict[str, Any]]
+
+
 class DeleteExecutionsOut(BaseModel):
     deleted: int
 

@@ -29,6 +29,15 @@ keys of `StepFinished.metrics`: `loss`, `lr`, `step_ms`, memory and timing keys.
 display modules (`MODULES` of a node class, in the catalog) name the keys they draw. The editor's Monitor panel
 (`frontend/js/graph2/monitor.js`) shows the modules of every node of the open graph that has some.
 
+### Frames of a past run
+
+`GET /api/v1/graphs/executions/{id}/monitor` lists the streams a run reported on; `GET .../monitor/{stream}` returns that stream's
+frames in order, thinned evenly to at most 4000 (first and last kept), `[]` for a stream the run never used, 404 for an unknown
+run. While a run is live or not swept yet they come from its event file; the startup sweep (`SweepExecutionScratch`) files each
+terminal run's monitor frames in `graph_executions/metrics/execution_<id>.json` before it deletes the event file, and drops the
+archive when the row is gone (history deleted). The editor shows them when a finished run is selected in the Runs list ("Back
+to live" returns).
+
 ## Result
 
 ```python

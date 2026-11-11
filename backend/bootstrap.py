@@ -64,6 +64,7 @@ from .application.use_cases import (
     GetConfig,
     GetConfigOptions,
     GetGraph,
+    GetExecutionMetrics,
     GetGraphExecution,
     GetSettings,
     InspectAsset,
@@ -103,6 +104,7 @@ from .infrastructure.graph.contract_catalog import ContractNodeCatalog, model_en
 from .infrastructure.graph.next_starters import NextStarters
 from .infrastructure.graph.memory_fields import memory_fields_resolver
 from .infrastructure.graph.runtime import ContractGraphRuntime
+from .infrastructure.execution_metrics import FileExecutionMetrics
 from .infrastructure.graph_event_stream import ExecutionEventTail
 from .infrastructure.graph_task_gateway import (
     InProcessGraphTaskGateway,
@@ -256,8 +258,10 @@ def build_container(settings: Settings) -> Container:
     graph_scratch.mkdir(parents=True, exist_ok=True)
     # N3-07: nothing else ever removed these files, so the directory grew by
     # one run's worth forever while the UI reported the history as cleared.
+    # What a run reported to its monitors outlives that scratch: the sweep files it first.
+    execution_metrics = FileExecutionMetrics(graph_scratch)
     sweep_scratch = SweepExecutionScratch(
-        executions=graph_executions, scratch_dir=graph_scratch,
+        executions=graph_executions, scratch_dir=graph_scratch, metrics=execution_metrics,
     )
     # Remembered peaks per configuration (MEM-04), in their own file
     # next to the database: one writer for peaks, shared by admission
@@ -385,6 +389,7 @@ def build_container(settings: Settings) -> Container:
             start_execution=start_execution,
             list_executions=ListGraphExecutions(executions=graph_executions),
             get_execution=GetGraphExecution(executions=graph_executions),
+            execution_metrics=GetExecutionMetrics(executions=graph_executions, metrics=execution_metrics),
             stop_execution=StopGraphExecution(
                 executions=graph_executions,
                 writer=execution_writer,

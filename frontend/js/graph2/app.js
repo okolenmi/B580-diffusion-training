@@ -152,6 +152,7 @@ async function boot() {
     onNote: log,
     onIssues: (list) => issues.show(list),
     onMemoryRefusal: (details, reason) => memory.refusal(details, reason),
+    onSelect: (id, live) => monitor.showRun(id, live),
     onRunState: (running) => {
       el("btn-stop").hidden = !running;
       if (running) el("monitor-section").open = true;

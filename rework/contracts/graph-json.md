@@ -28,7 +28,11 @@ format is read (plan 90 section 0). Python: `next/graph/document.py`.
     { "from_node": "n_a", "from_port": "epoch_ending",
       "to_node": "n_b",   "to_port": "epoch_ending" }
   ],
-  "views": [],                         // plan 60; opaque to graph/ (kept verbatim)
+  "views": [                           // plan 60; opaque to graph/ (kept verbatim), see "Views" below
+    { "id": "v1", "title": "Monitor", "mode": "monitor", "columns": 12,
+      "blocks": [ { "id": "b1", "ref": { "scope": "node", "node": "n_a", "kind": "display", "name": "loss" },
+                    "x": 0, "y": 0, "w": 12, "h": 6, "collapsed": false, "title": null, "options": {} } ] }
+  ],
   "addons": [                          // optional; addons of the graph itself (event addons only)
     { "id": "g1", "kind": "EveryNSteps", "enabled": true, "params": { "every": 250 } }
   ]
@@ -58,3 +62,17 @@ Rules:
     `kind` an addon class name. A disabled addon is neither built nor checked; its params stay. An addon's parameter that is
     wired is the port `<id>.<param>` of its host, and a slot filled by a wire is the port `slot:<slot>`. An event wire may end at
     `<uid>.<id>` or `graph.<id>`. Rules and issue codes (`addon_*`): `rework/31-node-addons.md`.
+
+## Views
+
+`views` is a list of boards that live in the graph document: `{id, title, mode: "page" | "monitor", columns, blocks}`. A block is
+`{id, ref, x, y, w, h, collapsed, title, options}` (the board's block, `frontend/js/board/model.js`); `ref` is
+`{scope: "node", node: <uid>, kind: "field" | "display", name}` or `{scope: "graph", kind, name}` (a graph setting such as
+`memory.vram_max_mb`, or the run status). A monitor view holds displays only; a page view also holds fields.
+
+* One truth: a field block edits the node parameter (or setting) of the open graph itself, so the canvas and the page show the
+  same value; Run on a page is the editor's Run. No snapshot of the graph is stored in a view.
+* Whether a block's target still exists is answered by `POST /templates/resolve` (a draft document whose `graph` is the open
+  graph); a block that lost its node is kept and shown as orphaned.
+* The runtime ignores views and a run payload strips them. Views are saved with the graph in the library and in the browser's draft.
+* Buttons other than Run/Stop (triggering an event input) wait for a control channel into the running process (plan 60 section 8).

@@ -164,3 +164,14 @@ g.selected > .g2-edge, .g2-edge.selected { stroke: var(--accent); stroke-width: 
 @media (max-width: 900px) { .mon-cell { grid-column: span 12; } }
 .mon-bar { display: flex; align-items: center; gap: 10px; margin: 2px 0 8px; padding: 5px 10px; font-size: 12.5px; background: var(--surface-alt); border: 1px solid var(--border); border-radius: var(--radius); }
 .mon-bar[hidden] { display: none; }
+
+/* ---- views: boards bound to the open graph ---- */
+.vw-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 2px 0 10px; }
+.vw-pick { min-width: 150px; }
+.tpl-seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.tpl-seg-btn { background: var(--surface-alt); color: var(--text-dim); border: 0; font: inherit; font-size: 12.5px; font-weight: 700; padding: 0.35rem 0.85rem; cursor: pointer; }
+.tpl-seg-btn + .tpl-seg-btn { border-left: 1px solid var(--border); }
+.tpl-seg-btn.active { background: var(--accent); color: var(--bg); }
+.tpl-state { color: var(--text-dim); font-size: 12.5px; }
+.tpl-work { display: flex; gap: 16px; align-items: flex-start; max-height: 60vh; overflow: auto; }
+.tpl-board { flex: 1; min-width: 0; }

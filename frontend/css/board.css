@@ -1,0 +1,166 @@
+/* The look of the board (board/board.js) and its blocks: grid, block frames, fields, live displays, the tray of blocks that can
+   be added. Shared by the templates page and the graph editor (its Monitor and Views). */
+
+.bd-empty { color: var(--text-dim); font-size: 12.5px; text-align: center; padding: 12px 0; }
+.bd-chart-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 4px; }
+.bd-chart { flex: 1; min-height: 0; position: relative; }
+/* window / freeze / export: the old Monitor page's chart controls */
+.bd-chart-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 11px; }
+.bd-counts { display: flex; gap: 3px; }
+.bd-btn {
+  font-family: var(--font-mono); font-size: 11px; padding: 2px 8px;
+  background: var(--surface-alt); color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 4px; cursor: pointer;
+}
+.bd-btn:hover { color: var(--text); border-color: var(--accent); }
+.bd-count.active { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 700; }
+.bd-freeze { min-width: 64px; text-align: center; }
+.bd-freeze.is-on { color: #ffb300; border-color: #ffb300; }
+.bd-window { font-family: var(--font-mono); color: var(--text-dim); white-space: nowrap; margin-left: auto; }
+.bd-csv { margin-left: 2px; }
+.bd-slider { display: block; width: 100%; height: 16px; margin: 0; cursor: pointer; accent-color: var(--accent); }
+.bd-slider:disabled { opacity: 0.4; cursor: default; }
+.bd-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+.bd-scalar { display: flex; flex-direction: column; justify-content: center; height: 100%; gap: 0; }
+.bd-scalar-value { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.bd-scalar-unit { color: var(--text-dim); font-size: 12px; min-height: 1em; }
+.bd-scalar-sub { color: var(--text-dim); font-size: 11.5px; }
+.bd-scalar.is-stale .bd-scalar-value { opacity: 0.6; }
+
+.bd-bars { display: flex; flex-direction: column; gap: 6px; justify-content: center; height: 100%; }
+.bd-bar-row { display: grid; grid-template-columns: minmax(48px, 22%) 1fr minmax(56px, auto); gap: 8px; align-items: center; font-size: 12px; }
+.bd-bar-label { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bd-bar-track { height: 10px; background: var(--bg); border-radius: 5px; overflow: hidden; }
+.bd-bar-fill { height: 100%; border-radius: 5px; transition: width var(--dur-med) ease; }
+.bd-bar-value { text-align: right; font-variant-numeric: tabular-nums; }
+
+.bd-text { font-family: var(--font-mono); font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.bd-progress { display: flex; flex-direction: column; justify-content: center; height: 100%; gap: 8px; }
+.bd-progress-head { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.bd-progress-eta { color: var(--text-dim); }
+.bd-progress-track { height: 12px; background: var(--bg); border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+.bd-progress-fill { height: 100%; background: var(--accent); transition: width var(--dur-med) ease; }
+.bd-progress.is-done .bd-progress-fill { background: var(--green); }
+
+.bd-status { display: flex; flex-direction: column; gap: 6px; justify-content: center; height: 100%; }
+.bd-status .status-badge { margin-top: 0; }
+.bd-status-line { color: var(--text-dim); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.bd-status-error { color: var(--red); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ---- 3. the board ---- */
+
+.bd-grid {
+    display: grid;
+    grid-template-columns: repeat(var(--bd-cols, 12), minmax(0, 1fr));
+    grid-auto-rows: var(--bd-row, 56px);
+    gap: var(--bd-gap, 10px);
+}
+.bd-grid-empty {
+    color: var(--text-dim); text-align: center; padding: 48px 16px; font-size: 13.5px;
+    border: 1px dashed var(--border); border-radius: var(--radius-lg);
+}
+.bd-block {
+    position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    overflow: hidden;
+}
+.bd-block.is-dragging { z-index: 4; box-shadow: var(--shadow-pop); border-color: var(--accent); opacity: 0.94; }
+.bd-block[data-status="wired"] { border-style: dashed; }
+.bd-block[data-status^="missing"], .bd-block[data-status="unknown_class"] {
+    border-color: rgba(239, 68, 68, 0.5); background: rgba(239, 68, 68, 0.05);
+}
+
+.bd-head {
+    display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 2px 6px 2px 10px;
+    border-bottom: 1px solid var(--border); background: var(--surface-alt); flex: none;
+}
+.bd-block.is-collapsed .bd-head { border-bottom: 0; height: 100%; }
+.bd-grip { display: none; color: var(--text-dim); letter-spacing: -2px; cursor: grab; user-select: none; }
+.bd-edit .bd-grip { display: inline; }
+.bd-edit .bd-head { cursor: grab; touch-action: none; }
+.bd-edit .bd-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.bd-titles { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.2; }
+.bd-title { font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bd-sub { font-size: 10.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bd-head .bd-rename { width: 100%; padding: 2px 6px; font-size: 13px; font-weight: 700; border-radius: var(--radius-sm); }
+.bd-badge {
+    font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;
+    padding: 2px 7px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); flex: none;
+}
+.bd-badge[data-status^="missing"], .bd-badge[data-status="unknown_class"] {
+    background: rgba(239, 68, 68, 0.15); color: var(--red);
+}
+.bd-tools { display: flex; gap: 2px; flex: none; }
+.bd-tool {
+    background: none; border: 0; color: var(--text-dim); cursor: pointer; font: inherit;
+    width: 26px; height: 26px; border-radius: var(--radius-sm); line-height: 1;
+}
+.bd-tool:hover { background: var(--border); color: var(--text); }
+.bd-tool:focus-visible { outline: 2px solid var(--accent); }
+.bd-edit-only { display: none; }
+.bd-edit .bd-edit-only { display: inline-block; }
+.bd-block.is-collapsed [aria-label="Collapse / expand"] { transform: rotate(-90deg); }
+
+.bd-body { flex: 1; min-height: 0; padding: 8px 12px; overflow: auto; }
+.bd-resize {
+    display: none; position: absolute; right: 0; bottom: 0; width: 18px; height: 18px;
+    cursor: nwse-resize; touch-action: none;
+    background: linear-gradient(135deg, transparent 50%, var(--text-dim) 50%, var(--text-dim) 58%, transparent 58%, transparent 72%, var(--text-dim) 72%, var(--text-dim) 80%, transparent 80%);
+    opacity: 0.7;
+}
+.bd-edit .bd-resize { display: block; }
+.bd-edit .bd-block.is-collapsed .bd-resize { display: none; }
+.bd-edit .bd-block { border-style: dashed; }
+.bd-edit .bd-block:hover { border-color: var(--accent); }
+
+/* ---- 4. block contents ---- */
+
+.bd-field { display: flex; flex-direction: column; gap: 6px; }
+.bd-field { --ctl-pad: 0.45rem 0.6rem; }
+.bd-field.is-inactive .bd-control { opacity: 0.45; }
+.bd-hint { font-size: 11.5px; color: var(--text-dim); }
+
+.bd-auto { display: flex; align-items: center; gap: 8px; }
+.bd-auto-label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; flex: none; }
+.bd-auto .cfg-input { flex: 1; min-width: 0; }
+.bd-unit { color: var(--text-dim); font-size: 12px; flex: none; }
+.bd-wired { color: var(--text-dim); font-size: 12.5px; }
+
+.bd-orphan { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-dim); }
+.bd-orphan strong { color: var(--red); }
+.bd-orphan-hint { font-size: 11.5px; }
+
+/* displays fill their block: the body hosts them edge to edge */
+.bd-block[data-kind="display"] .bd-body { padding: 6px 8px; display: flex; flex-direction: column; }
+/* ...and `hidden` (a collapsed block) must still win over that display rule. */
+.bd-block .bd-body[hidden] { display: none; }
+/* ---- 5. tray ---- */
+
+.tpl-tray {
+    width: 290px; flex: none; position: sticky; top: 56px; max-height: calc(100vh - 140px);
+    display: flex; flex-direction: column; gap: 8px; padding: 12px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+}
+.tpl-tray[hidden] { display: none; }
+.tpl-tray-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
+.tpl-adv { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); cursor: pointer; }
+#tray-search { padding: 0.45rem 0.6rem; font-size: 13px; }
+#tray-list { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; min-height: 0; flex: 1; }
+#tray-list details { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
+#tray-list summary { padding: 7px 10px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.tpl-tray-cap { padding: 4px 10px 2px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); }
+.tpl-tray-item {
+    display: flex; justify-content: space-between; gap: 8px; width: calc(100% - 8px); margin: 0 4px 2px;
+    background: none; border: 0; color: var(--text); font: inherit; font-size: 12.5px; text-align: left;
+    padding: 5px 6px; border-radius: var(--radius-sm); cursor: pointer;
+}
+.tpl-tray-item:hover:not(:disabled) { background: var(--accent-soft); }
+.tpl-tray-item:disabled { color: var(--text-dim); cursor: default; }
+.tpl-tray-item:focus-visible { outline: 2px solid var(--accent); }
+.tpl-tray-tag { color: var(--text-dim); font-size: 11px; flex: none; }
+.tpl-tray-empty { color: var(--text-dim); font-size: 12.5px; padding: 8px 2px; }
+.tpl-tray-foot { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); }
+.tpl-tray-foot { --ctl-pad: 0.3rem 0.5rem; --ctl-font: 12.5px; }
+.tpl-tray-foot input { width: 70px; }

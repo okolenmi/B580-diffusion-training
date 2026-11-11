@@ -17,6 +17,8 @@ import { GraphDoc, endpointHost } from "./doc.js";
 import { Inspector } from "./inspector.js";
 import { Library } from "./library.js";
 import { Monitor } from "./monitor.js";
+import { Views } from "./views.js";
+import { LiveStreams } from "../board/live.js";
 import { Palette, QuickAdd, compatibleClasses } from "./palette.js";
 import { IssuesPanel, MemoryPanel } from "./panels.js";
 import { Runs } from "./runs.js";
@@ -146,9 +148,17 @@ async function boot() {
   new SettingsPanel(el("graph-settings"), doc, catalog.settings || [], { note: log });
 
   const issues = new IssuesPanel(el("issues"), { onFocus: (uid) => canvas.focusNode(uid) });
-  const monitor = new Monitor(el("monitor"), doc, shapes);
+  const live = new LiveStreams();
+  const monitor = new Monitor(el("monitor"), doc, shapes, { live });
+  let runs = null;
+  const startRun = () => {
+    if (!doc.nodes.size) return log("Canvas is empty.", "warn");
+    return runs.run(doc.runPayload());
+  };
+  const views = new Views(el("views"), doc, live, { onRun: startRun, onStop: () => runs.stop(), onNote: log, execution: () => runs?.current() ?? null });
+  el("views-section").addEventListener("toggle", () => views.shown());
   el("monitor-section").addEventListener("toggle", () => monitor.shown());
-  const runs = new Runs(el("exec-list"), canvas, {
+  runs = new Runs(el("exec-list"), canvas, {
     onNote: log,
     onIssues: (list) => issues.show(list),
     onMemoryRefusal: (details, reason) => memory.refusal(details, reason),
@@ -156,6 +166,7 @@ async function boot() {
     onRunState: (running) => {
       el("btn-stop").hidden = !running;
       if (running) el("monitor-section").open = true;
+      views.running(running);
       memory.refreshLater();
     },
   });
@@ -224,10 +235,7 @@ async function boot() {
       logError(err);
     }
   });
-  el("btn-run").addEventListener("click", () => {
-    if (!doc.nodes.size) return log("Canvas is empty.", "warn");
-    return runs.run(doc.runPayload());
-  });
+  el("btn-run").addEventListener("click", startRun);
   el("btn-stop").addEventListener("click", () => runs.stop());
   el("btn-wipe-exec").addEventListener("click", () => runs.wipe());
   el("btn-fit").addEventListener("click", () => canvas.fit());

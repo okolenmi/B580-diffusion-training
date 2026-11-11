@@ -51,6 +51,11 @@ export class Runs {
     }
   }
 
+  /** The run being looked at (or running), as the status display reads it; null before the first. */
+  current() {
+    return this.items.find((e) => e.execution_id === (this.selected ?? this.liveId)) || this.items[0] || null;
+  }
+
   async select(id) {
     this.selected = id;
     this.render();

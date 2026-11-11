@@ -4,11 +4,8 @@
    Sections:
      1. page chrome: list view (new form, cards)
      2. page view: toolbar, issues strip, work area (board + tray)
-     3. the board: grid, blocks, header, edit-mode affordances
-     4. block contents: fields, displays (chart, scalar, bars, progress,
-        status, text), orphans
-     5. tray
-     6. narrow screens + pop-out window mode
+     3. narrow screens + pop-out window mode
+   The board itself (grid, blocks, contents, tray) is css/board.css, shared with the graph editor's views.
    Tokens come from style.css; nothing here hard-codes the palette except the
    few semantic tints (warning amber, error red) the rest of the app also uses.
    --------------------------------------------------------------------------- */
@@ -76,123 +73,7 @@
 .tpl-work { display: flex; gap: 16px; align-items: flex-start; }
 .tpl-board { flex: 1; min-width: 0; }
 
-/* ---- 3. the board ---- */
-
-.bd-grid {
-    display: grid;
-    grid-template-columns: repeat(var(--bd-cols, 12), minmax(0, 1fr));
-    grid-auto-rows: var(--bd-row, 56px);
-    gap: var(--bd-gap, 10px);
-}
-.bd-grid-empty {
-    color: var(--text-dim); text-align: center; padding: 48px 16px; font-size: 13.5px;
-    border: 1px dashed var(--border); border-radius: var(--radius-lg);
-}
-.bd-block {
-    position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0;
-    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-    overflow: hidden;
-}
-.bd-block.is-dragging { z-index: 4; box-shadow: var(--shadow-pop); border-color: var(--accent); opacity: 0.94; }
-.bd-block[data-status="wired"] { border-style: dashed; }
-.bd-block[data-status^="missing"], .bd-block[data-status="unknown_class"] {
-    border-color: rgba(239, 68, 68, 0.5); background: rgba(239, 68, 68, 0.05);
-}
-
-.bd-head {
-    display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 2px 6px 2px 10px;
-    border-bottom: 1px solid var(--border); background: var(--surface-alt); flex: none;
-}
-.bd-block.is-collapsed .bd-head { border-bottom: 0; height: 100%; }
-.bd-grip { display: none; color: var(--text-dim); letter-spacing: -2px; cursor: grab; user-select: none; }
-.bd-edit .bd-grip { display: inline; }
-.bd-edit .bd-head { cursor: grab; touch-action: none; }
-.bd-edit .bd-head:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.bd-titles { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.2; }
-.bd-title { font-size: 13px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bd-sub { font-size: 10.5px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.bd-head .bd-rename { width: 100%; padding: 2px 6px; font-size: 13px; font-weight: 700; border-radius: var(--radius-sm); }
-.bd-badge {
-    font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;
-    padding: 2px 7px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); flex: none;
-}
-.bd-badge[data-status^="missing"], .bd-badge[data-status="unknown_class"] {
-    background: rgba(239, 68, 68, 0.15); color: var(--red);
-}
-.bd-tools { display: flex; gap: 2px; flex: none; }
-.bd-tool {
-    background: none; border: 0; color: var(--text-dim); cursor: pointer; font: inherit;
-    width: 26px; height: 26px; border-radius: var(--radius-sm); line-height: 1;
-}
-.bd-tool:hover { background: var(--border); color: var(--text); }
-.bd-tool:focus-visible { outline: 2px solid var(--accent); }
-.bd-edit-only { display: none; }
-.bd-edit .bd-edit-only { display: inline-block; }
-.bd-block.is-collapsed [aria-label="Collapse / expand"] { transform: rotate(-90deg); }
-
-.bd-body { flex: 1; min-height: 0; padding: 8px 12px; overflow: auto; }
-.bd-resize {
-    display: none; position: absolute; right: 0; bottom: 0; width: 18px; height: 18px;
-    cursor: nwse-resize; touch-action: none;
-    background: linear-gradient(135deg, transparent 50%, var(--text-dim) 50%, var(--text-dim) 58%, transparent 58%, transparent 72%, var(--text-dim) 72%, var(--text-dim) 80%, transparent 80%);
-    opacity: 0.7;
-}
-.bd-edit .bd-resize { display: block; }
-.bd-edit .bd-block.is-collapsed .bd-resize { display: none; }
-.bd-edit .bd-block { border-style: dashed; }
-.bd-edit .bd-block:hover { border-color: var(--accent); }
-
-/* ---- 4. block contents ---- */
-
-.bd-field { display: flex; flex-direction: column; gap: 6px; }
-.bd-field { --ctl-pad: 0.45rem 0.6rem; }
-.bd-field.is-inactive .bd-control { opacity: 0.45; }
-.bd-hint { font-size: 11.5px; color: var(--text-dim); }
-
-.bd-auto { display: flex; align-items: center; gap: 8px; }
-.bd-auto-label { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; flex: none; }
-.bd-auto .cfg-input { flex: 1; min-width: 0; }
-.bd-unit { color: var(--text-dim); font-size: 12px; flex: none; }
-.bd-wired { color: var(--text-dim); font-size: 12.5px; }
-
-.bd-orphan { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--text-dim); }
-.bd-orphan strong { color: var(--red); }
-.bd-orphan-hint { font-size: 11.5px; }
-
-/* displays fill their block: the body hosts them edge to edge */
-.bd-block[data-kind="display"] .bd-body { padding: 6px 8px; display: flex; flex-direction: column; }
-/* ...and `hidden` (a collapsed block) must still win over that display rule. */
-.bd-block .bd-body[hidden] { display: none; }
-/* ---- 5. tray ---- */
-
-.tpl-tray {
-    width: 290px; flex: none; position: sticky; top: 56px; max-height: calc(100vh - 140px);
-    display: flex; flex-direction: column; gap: 8px; padding: 12px;
-    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
-}
-.tpl-tray[hidden] { display: none; }
-.tpl-tray-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
-.tpl-adv { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); cursor: pointer; }
-#tray-search { padding: 0.45rem 0.6rem; font-size: 13px; }
-#tray-list { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; min-height: 0; flex: 1; }
-#tray-list details { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
-#tray-list summary { padding: 7px 10px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
-.tpl-tray-cap { padding: 4px 10px 2px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); }
-.tpl-tray-item {
-    display: flex; justify-content: space-between; gap: 8px; width: calc(100% - 8px); margin: 0 4px 2px;
-    background: none; border: 0; color: var(--text); font: inherit; font-size: 12.5px; text-align: left;
-    padding: 5px 6px; border-radius: var(--radius-sm); cursor: pointer;
-}
-.tpl-tray-item:hover:not(:disabled) { background: var(--accent-soft); }
-.tpl-tray-item:disabled { color: var(--text-dim); cursor: default; }
-.tpl-tray-item:focus-visible { outline: 2px solid var(--accent); }
-.tpl-tray-tag { color: var(--text-dim); font-size: 11px; flex: none; }
-.tpl-tray-empty { color: var(--text-dim); font-size: 12.5px; padding: 8px 2px; }
-.tpl-tray-foot { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); }
-.tpl-tray-foot { --ctl-pad: 0.3rem 0.5rem; --ctl-font: 12.5px; }
-.tpl-tray-foot input { width: 70px; }
-
-/* ---- 6. narrow + pop-out ---- */
+/* ---- 3. narrow + pop-out ---- */
 
 @media (max-width: 900px) {
     .tpl-work { flex-direction: column; }

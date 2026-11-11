@@ -16,6 +16,7 @@ import { arrange, isUnplaced } from "./layout.js";
 import { GraphDoc, endpointHost } from "./doc.js";
 import { Inspector } from "./inspector.js";
 import { Library } from "./library.js";
+import { Monitor } from "./monitor.js";
 import { Palette, QuickAdd, compatibleClasses } from "./palette.js";
 import { IssuesPanel, MemoryPanel } from "./panels.js";
 import { Runs } from "./runs.js";
@@ -145,12 +146,15 @@ async function boot() {
   new SettingsPanel(el("graph-settings"), doc, catalog.settings || [], { note: log });
 
   const issues = new IssuesPanel(el("issues"), { onFocus: (uid) => canvas.focusNode(uid) });
+  const monitor = new Monitor(el("monitor"), doc, shapes);
+  el("monitor-section").addEventListener("toggle", () => monitor.shown());
   const runs = new Runs(el("exec-list"), canvas, {
     onNote: log,
     onIssues: (list) => issues.show(list),
     onMemoryRefusal: (details, reason) => memory.refusal(details, reason),
     onRunState: (running) => {
       el("btn-stop").hidden = !running;
+      if (running) el("monitor-section").open = true;
       memory.refreshLater();
     },
   });

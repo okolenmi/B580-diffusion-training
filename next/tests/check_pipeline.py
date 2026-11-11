@@ -94,6 +94,9 @@ def full_run():
         check(len(printed.getvalue().strip().splitlines()) == len(graph(tmp, steps=4).nodes), "the command line reports every finished node")
         check(validation.ok, f"the graph validates ({[i.message for i in validation.errors][:2]})")
         check(outcome.ok and not outcome.stopped, f"the run finishes ({outcome.error})")
+        flat = [f for st, f in trace.frames if st.startswith("node:") and "step" in f and "kind" not in f]
+        check(len(flat) == 4 and [f["step"] for f in flat] == [1, 2, 3, 4] and all(f["total"] == 4 and "loss" in f and "lr" in f for f in flat),
+              f"the trainer reports one flat frame per step on its own stream, the shape the monitor boards read ({len(flat)} frames)")
         saved = sorted(p.name for p in (tmp / "out").glob("*.safetensors"))
         check(saved == ["toy_step000002.safetensors", "toy_step000004.safetensors"], f"a file every 2 steps, the last one at the end ({saved})")
         state, meta = TinyFamily().read_adapter(str(tmp / "out" / "toy_step000004.safetensors"))

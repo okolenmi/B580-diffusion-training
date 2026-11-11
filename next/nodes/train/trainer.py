@@ -25,6 +25,7 @@ from ...engine.step.schedule import LRSchedule
 from ...engine.step.regional import RegionalUpdate
 from ...engine.step.trainer import Trainer
 from ...graph import AddonSlot, Completion, EventOut, Group, Node, Port
+from ...graph.modules import DisplayModule, Series
 from ...graph.events import CheckpointDue, StepFinished
 from .addons import ConditionerBound, ModelBound, RegionPolicy
 
@@ -97,8 +98,33 @@ class DiffusionTrainerNode(Node):
                        doc="Measure each phase of the step (synchronizes the device, so it slows training slightly)."),
     }
     OUTPUTS = {"model": Port("model", TrainableDenoiser, doc="The model after training (or after stopping).")}
+    # Every key is one of the step's metrics (engine/step/trainer.py); a key a step does not carry is a gap in the chart.
+    MODULES = (
+        DisplayModule("progress", "progress", "Progress", value_key="step", total_key="total", size=(12, 2), doc="Optimizer step out of the run's total."),
+        DisplayModule("loss", "chart", "Loss", scale="symlog", size=(12, 6),
+                      series=(Series("loss", "loss", "#6c8cff"), Series("loss_t_low", "t low", "#4caf50"), Series("loss_t_mid", "t mid", "#ffb300"),
+                              Series("loss_t_high", "t high", "#ff5252")),
+                      doc="Training loss and the loss over the low, mid and high third of the timestep range (a third no sample hit is a gap)."),
+        DisplayModule("lr", "chart", "Learning rate", series=(Series("lr", "lr", "#ab47bc"),)),
+        DisplayModule("speed", "chart", "Step time", size=(6, 4), series=(Series("step_ms", "step", "#cfd8dc", "ms"),),
+                      doc="Wall time of one optimizer step."),
+        DisplayModule("memory", "chart", "Device memory", size=(12, 6),
+                      series=(Series("device_mb", "in use", "#6c8cff", "MB"), Series("step_peak_mb", "step peak", "#ff9800", "MB"),
+                              Series("reserved_mb", "reserved", "#4caf50", "MB")),
+                      doc="What the step used on the device, its peak inside the step, and what the allocator holds."),
+        DisplayModule("loss_now", "scalar", "Loss (latest)", size=(3, 2), series=(Series("loss", "loss", "#6c8cff"),)),
+        DisplayModule("loss_by_t", "bars", "Loss by timestep", size=(6, 3),
+                      series=(Series("loss_t_low", "t low", "#4caf50"), Series("loss_t_mid", "t mid", "#ffb300"), Series("loss_t_high", "t high", "#ff5252"))),
+        DisplayModule("timing", "chart", "Step phases", size=(12, 5), pattern="*_ms", exclude=("step_ms",),
+                      doc="Milliseconds per phase of the step (present with `timing` on)."),
+    )
     EVENTS_OUT = {"step_finished": EventOut(StepFinished, doc="After every optimizer step."),
                   "ended": EventOut(CheckpointDue, doc="Once when training ends, finished or stopped: wire it to a saver for the final file.")}
+
+    def _step_finished(self, event: StepFinished) -> None:
+        """The event for wired nodes, and the flat per-step report the monitor boards draw (`step`, `total`, then the metrics)."""
+        self.context.report(f"node:{self.uid}", {"step": event.step, "total": event.total, **event.metrics})
+        self.emit("step_finished", event)
 
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
@@ -117,7 +143,7 @@ class DiffusionTrainerNode(Node):
                           optimizer=inputs["optimizer"], schedule=inputs["schedule"], weighting=inputs["weighting"],
                           steps=total, accumulation=inputs.get("accumulation", 1), device=model.device,
                           gate=model.gate, gate_window=model.gate_window,
-                          emit=lambda event: self.emit("step_finished", event), should_stop=self.context.should_cancel,
+                          emit=self._step_finished, should_stop=self.context.should_cancel,
                           synchronize=accelerator.synchronize,
                           timed=bool(inputs.get("timing") or self.context.settings.get("runtime.profile")),
                           residency=residency, density=density, placement=placement, balance=inputs.get("balance"),

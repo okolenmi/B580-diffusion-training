@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="/ui/css/style.css">
     <link rel="stylesheet" href="/ui/css/shell.css">
     <link rel="stylesheet" href="/ui/css/editor.css">
+    <link rel="stylesheet" href="/ui/css/board_displays.css">
     <link rel="stylesheet" href="/ui/css/graph2.css">
 </head>
 <body class="editor-body">
@@ -48,6 +49,10 @@
             <button id="btn-clear" class="btn btn-secondary btn-small">Clear canvas</button>
         </div>
         <div id="g2-canvas" class="ed-canvas g2-canvas"></div>
+        <details class="ed-section ed-monitor" id="monitor-section">
+            <summary class="ed-section-head"><span>Monitor</span></summary>
+            <div id="monitor" class="mon-sections"></div>
+        </details>
         <details class="ed-section ed-executions" id="exec-section">
             <summary class="ed-section-head"><span>Runs</span></summary>
             <button id="btn-wipe-exec" class="btn btn-secondary btn-small ed-exec-wipe">Wipe history</button>

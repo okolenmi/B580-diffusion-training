@@ -22,6 +22,13 @@ Frame on stream `graph:run` for every transition:
 Run frames: `run_started`, `run_finished`, `run_failed`, `run_stopped` as
 `{"kind":"run","state":"...","t":...,"error":null}`.
 
+## Step report
+
+The trainer also reports one flat frame per optimizer step on its own stream `node:<uid>`: `{"step", "total", **metrics}` (the
+keys of `StepFinished.metrics`: `loss`, `lr`, `step_ms`, memory and timing keys...). It is the shape the monitor boards read;
+display modules (`MODULES` of a node class, in the catalog) name the keys they draw. The editor's Monitor panel
+(`frontend/js/graph2/monitor.js`) shows the modules of every node of the open graph that has some.
+
 ## Result
 
 ```python

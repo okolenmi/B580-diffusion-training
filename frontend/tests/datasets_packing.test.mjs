@@ -1,84 +1,85 @@
+/* The balanced layout (packing.js): pictures of different shapes get about the same area, nothing overlaps, and
+   adding pictures never moves the ones already placed. */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { pack } from "../js/datasets/packing.js";
+import { ColumnPacker, pack, readingOrder } from "../js/datasets/packing.js";
 import { rowsLayout } from "../js/datasets/layout.js";
 
-/** Pictures like a character dataset: mostly tall, some wide, a few square. */
+/** Pictures like a mixed dataset: tall, square and wide, with varied proportions. */
 function sample(count, seed = 7) {
   let s = seed;
   const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
   return Array.from({ length: count }, () => {
     const u = rnd();
-    return u < 0.7 ? 0.5 + rnd() * 0.3 : u < 0.93 ? 1.3 + rnd() * 0.5 : 0.95 + rnd() * 0.1;
+    return u < 0.45 ? 0.5 + rnd() * 0.4 : u < 0.55 ? 0.9 + rnd() * 0.2 : 1.2 + rnd() * 0.8;
   });
 }
-const spread = (areas) => {
-  const logs = areas.map(Math.log);
-  const mean = logs.reduce((a, b) => a + b) / logs.length;
-  return Math.sqrt(logs.reduce((a, b) => a + (b - mean) ** 2, 0) / logs.length);
-};
+const areas = (boxes) => boxes.map((b) => b.w * b.h).sort((a, b) => a - b);
+const quantile = (sorted, q) => sorted[Math.floor(q * (sorted.length - 1))];
+const apart = (a, b) => a.x + a.w <= b.x + 1e-6 || b.x + b.w <= a.x + 1e-6 || a.y + a.h <= b.y + 1e-6 || b.y + b.h <= a.y + 1e-6;
 
-test("every picture keeps its exact proportions (no gap, no crop)", () => {
-  const ratios = sample(60);
-  const { boxes } = pack(ratios, 1200, 180, 0);
-  boxes.forEach((b, n) => assert.ok(Math.abs(b.w / b.h - ratios[n]) < 1e-9, `picture ${n}`));
+test("every picture keeps its exact proportions (no gap)", () => {
+  const ratios = sample(80);
+  pack(ratios, 1200, 180, 0).boxes.forEach((b, n) => assert.ok(Math.abs(b.w / b.h - ratios[n]) < 1e-9, `picture ${n}`));
 });
 
-test("pictures fill the width and never overlap", () => {
-  const ratios = sample(90);
-  const { boxes, height } = pack(ratios, 1200, 180, 0);
+test("pictures stay inside the width and never overlap", () => {
+  const { boxes, height } = pack(sample(120), 1200, 180, 6);
   for (const b of boxes) assert.ok(b.x >= -1e-6 && b.x + b.w <= 1200 + 1e-6 && b.y >= -1e-6 && b.y + b.h <= height + 1e-6);
-  for (let i = 0; i < boxes.length; i++) {
-    for (let j = i + 1; j < boxes.length; j++) {
-      const a = boxes[i], b = boxes[j];
-      const apart = a.x + a.w <= b.x + 1e-6 || b.x + b.w <= a.x + 1e-6 || a.y + a.h <= b.y + 1e-6 || b.y + b.h <= a.y + 1e-6;
-      assert.ok(apart, `pictures ${i} and ${j} overlap`);
+  for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) assert.ok(apart(boxes[i], boxes[j]), `${i} and ${j} overlap`);
+});
+
+test("tall and wide pictures come out at similar sizes: the 5th-95th percentile spread stays under 1.8x, far below rows", () => {
+  const ratios = sample(500);
+  for (const width of [900, 1300]) {
+    for (const size of [150, 180, 220]) {
+      const packed = areas(pack(ratios, width, size, 6).boxes);
+      const rows = areas(rowsLayout(ratios, width, size, 6).boxes);
+      const spread = quantile(packed, 0.95) / quantile(packed, 0.05);
+      assert.ok(spread < 1.8, `${width}/${size}: spread ${spread.toFixed(2)}`);
+      assert.ok(spread < 0.7 * (quantile(rows, 0.95) / quantile(rows, 0.05)), `${width}/${size}: not better than rows`);
     }
   }
 });
 
-test("a gap leaves that much between neighbours and the outer edge stays flush", () => {
-  const { boxes } = pack(sample(40), 1000, 180, 8);
-  assert.ok(Math.min(...boxes.map((b) => b.x)) >= -1e-6);
-  assert.ok(Math.max(...boxes.map((b) => b.x + b.w)) <= 1000 + 1e-6);
+test("little is left empty: the packed height is close to what the picture areas need", () => {
+  const ratios = sample(500);
+  const { boxes, height } = pack(ratios, 1200, 180, 0);
+  const used = boxes.reduce((sum, b) => sum + b.w * b.h, 0);
+  assert.ok(used / (1200 * height) > 0.88, `filled ${(used / (1200 * height)).toFixed(2)}`);
 });
 
-test("tall and wide pictures come out close to the same area, much closer than in rows", () => {
-  const ratios = sample(400);
-  for (const size of [150, 180, 260]) {
-    const packed = pack(ratios, 1400, size, 6).boxes.map((b) => b.w * b.h);
-    const rows = rowsLayout(ratios, 1400, size, 6).boxes.map((b) => b.w * b.h);
-    assert.ok(spread(packed) < 0.6 * spread(rows), `size ${size}: packed ${spread(packed).toFixed(2)} vs rows ${spread(rows).toFixed(2)}`);
-  }
+test("pictures added later never move the earlier ones", () => {
+  const ratios = sample(200);
+  const packer = new ColumnPacker(1206, 180, ratios.slice(0, 60));
+  const first = ratios.slice(0, 60).map((r) => packer.place(r));
+  ratios.slice(60).forEach((r) => packer.place(r));
+  const again = new ColumnPacker(1206, 180, ratios.slice(0, 60));
+  assert.deepEqual(ratios.slice(0, 60).map((r) => again.place(r)), first);
 });
 
-test("order is a permutation, and pictures of one shape keep their relative order", () => {
-  const ratios = sample(120);
-  const { order } = pack(ratios, 1200, 180, 6);
-  assert.deepEqual([...order].sort((a, b) => a - b), ratios.map((_, n) => n));
-  for (const same of [(r) => r < 0.85, (r) => r >= 0.85 && r < 1.18, (r) => r >= 1.18]) {
-    const seq = order.filter((n) => same(ratios[n]));
-    assert.deepEqual(seq, [...seq].sort((a, b) => a - b));
-  }
+test("wide pictures get wider columns than tall ones", () => {
+  const ratios = sample(300);
+  const { boxes } = pack(ratios, 1300, 180, 0);
+  const mean = (list) => list.reduce((a, b) => a + b, 0) / list.length;
+  const tall = mean(boxes.filter((_, n) => ratios[n] < 0.8).map((b) => b.w));
+  const wide = mean(boxes.filter((_, n) => ratios[n] > 1.4).map((b) => b.w));
+  assert.ok(wide > 1.3 * tall);
 });
 
-test("while more pictures are coming, an unfinished block waits instead of being stretched", () => {
+test("reading order is a permutation that goes top to bottom", () => {
   const ratios = sample(100);
-  const waiting = pack(ratios, 1200, 180, 6, false);
-  const done = pack(ratios, 1200, 180, 6, true);
-  assert.ok(waiting.boxes.some((b) => b === null));
-  assert.equal(waiting.order.length, waiting.boxes.filter(Boolean).length);
-  assert.ok(done.boxes.every((b) => b !== null));
-  assert.equal(done.order.length, ratios.length);
+  const { boxes, order } = pack(ratios, 1200, 180, 6);
+  assert.deepEqual([...order].sort((a, b) => a - b), ratios.map((_, n) => n));
+  assert.deepEqual(readingOrder(boxes, 180), order);
+  const tops = order.map((n) => boxes[n].y);
+  for (let k = 1; k < tops.length; k++) assert.ok(tops[k] >= tops[k - 1] - 90 - 1e-6);
 });
 
-test("the same input gives the same layout, and a narrower space gives a taller one", () => {
+test("deterministic, taller when narrower, and fine with one picture or none", () => {
   const ratios = sample(80);
   assert.deepEqual(pack(ratios, 1200, 180, 6), pack(ratios, 1200, 180, 6));
   assert.ok(pack(ratios, 600, 180, 6).height > pack(ratios, 1200, 180, 6).height);
-});
-
-test("one picture, and none, are fine", () => {
   assert.equal(pack([1.5], 800, 180, 6).boxes.length, 1);
   assert.deepEqual(pack([], 800, 180, 6).boxes, []);
 });

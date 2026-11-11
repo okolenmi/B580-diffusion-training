@@ -6,7 +6,7 @@ import { h } from "../lib/dom.js";
 import { CHANNELS, datasets } from "./client.js";
 import { icon } from "./icons.js";
 import { rowsLayout } from "./layout.js";
-import { pack } from "./packing.js";
+import { ColumnPacker, inset, readingOrder } from "./packing.js";
 
 const THUMB = 384;
 const GAP = 6;
@@ -23,6 +23,9 @@ export class Mosaic {
     this.shown = [];
     this.size = 180;
     this.mode = "balanced";
+    this.packer = null; // the balanced layout keeps its columns while pictures are only appended
+    this.cells = [];
+    this.packKey = "";
     this.grid = h("div", { class: "mosaic", role: "listbox", "aria-multiselectable": "true" });
     this.sentinel = h("div", { class: "mosaic-end" });
     this.empty = h("div", { class: "mosaic-empty", hidden: true });
@@ -59,8 +62,7 @@ export class Mosaic {
     const items = this.items();
     if (!width || !items.length) return;
     const ratios = items.map((i) => i.width / i.height);
-    const complete = items.length >= this.state.total;
-    const result = this.mode === "rows" ? rowsLayout(ratios, width, this.size, GAP) : pack(ratios, width, this.size, GAP, complete);
+    const result = this.mode === "rows" ? rowsLayout(ratios, width, this.size, GAP) : this.columns(ratios, width);
     this.boxes.clear();
     items.forEach((item, n) => {
       const tile = this.tiles.get(item.id);
@@ -77,6 +79,19 @@ export class Mosaic {
 
   items() { return this.state.items; }
 
+  /** Balanced layout: columns are shaped once and later pictures only join them, so scrolling in more never moves what is on screen. */
+  columns(ratios, width) {
+    const key = `${width}|${this.size}`;
+    if (!this.packer || key !== this.packKey) {
+      this.packer = new ColumnPacker(width + GAP, this.size, ratios);
+      this.packKey = key;
+      this.cells = [];
+    }
+    while (this.cells.length < ratios.length) this.cells.push(this.packer.place(ratios[this.cells.length]));
+    const boxes = this.cells.map((c) => inset(c, GAP));
+    return { boxes, order: readingOrder(boxes, this.size), height: Math.max(0, this.packer.height - GAP) };
+  }
+
   /* ---- drawing ---- */
 
   render() {
@@ -86,6 +101,7 @@ export class Mosaic {
     if (!continues) {
       this.grid.replaceChildren();
       this.tiles.clear();
+      this.packer = null;
     }
     for (const item of items.slice(continues ? this.shown.length : 0)) {
       const tile = this.makeTile(item);

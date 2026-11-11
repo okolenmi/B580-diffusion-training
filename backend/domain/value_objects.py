@@ -117,6 +117,8 @@ ExecutionId = int
 class GraphStatus(str, Enum):
     """Lifecycle states of one node-graph execution.
 
+    ``planned``  -- accepted but waiting for room: no claim, no child; the
+                    scheduler admits it when memory allows
     ``queued``   -- row created, worker thread not yet claimed it
     ``running``  -- worker claimed the row, nodes are building
     ``finished`` -- every node built successfully
@@ -125,6 +127,7 @@ class GraphStatus(str, Enum):
                     before its thread ever started)
     """
 
+    PLANNED = "planned"
     QUEUED = "queued"
     RUNNING = "running"
     FINISHED = "finished"
@@ -138,6 +141,9 @@ class GraphStatus(str, Enum):
 
 
 GRAPH_TRANSITIONS: dict[GraphStatus, frozenset[GraphStatus]] = {
+    GraphStatus.PLANNED: frozenset(
+        {GraphStatus.QUEUED, GraphStatus.STOPPED, GraphStatus.ERROR}
+    ),
     # ERROR is reachable from QUEUED: startup reconciliation fails rows a
     # dead process never got to, and validation-layer surprises can fail a
     # row before its thread claims it.

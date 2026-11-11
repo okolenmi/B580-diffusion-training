@@ -12,8 +12,7 @@
 import { api, ApiError } from "../api.js";
 import { errText } from "../lib/errors.js";
 
-const ACTIVE = new Set(["pending", "running", "stopping"]);
-const TERMINAL = new Set(["finished", "failed", "stopped"]);
+const ACTIVE = new Set(["planned", "queued", "running"]);
 
 const seconds = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`);
 
@@ -28,7 +27,6 @@ export class Runs {
     this.onSelect = onSelect || (() => {});
     this.items = [];
     this.selected = null;
-    this.liveId = null;
     this._timer = null;
     this._queued = false;
   }
@@ -45,15 +43,15 @@ export class Runs {
       this.render();
       clearTimeout(this._timer);
       if (this.items.some((e) => ACTIVE.has(e.status))) this._timer = setTimeout(() => this.refresh(), 2500);
-      this.onRunState(this.items.some((e) => e.status === "running"));
+      this.onRunState(this.items.some((e) => ACTIVE.has(e.status)));
     } catch (err) {
       this.onNote(errText(err), "error");
     }
   }
 
-  /** The run being looked at (or running), as the status display reads it; null before the first. */
+  /** The run being looked at, as the status display reads it; null before the first. */
   current() {
-    return this.items.find((e) => e.execution_id === (this.selected ?? this.liveId)) || this.items[0] || null;
+    return this.items.find((e) => e.execution_id === this.selected) || this.items[0] || null;
   }
 
   async select(id) {
@@ -70,14 +68,14 @@ export class Runs {
     }
   }
 
-  async run(graph) {
+  /** `mode`: what to do when the card has no room -- "auto" plans the run, "parallel" refuses, "queue" waits its turn. */
+  async run(graph, mode = "auto") {
     try {
-      const exec = await api("/graphs/run", { method: "POST", body: { graph } });
-      this.liveId = exec.execution_id;
+      const exec = await api("/graphs/run", { method: "POST", body: { graph, mode } });
       this.canvas.clearStatuses();
       await this.refresh();
       this.select(exec.execution_id);
-      this.onNote(`Run #${exec.execution_id} started.`, "success");
+      this.onNote(exec.status === "planned" ? `Run #${exec.execution_id} planned: it starts when there is room.` : `Run #${exec.execution_id} started.`, "success");
       return exec;
     } catch (err) {
       if (err instanceof ApiError && err.code === "graph_invalid") {
@@ -87,9 +85,6 @@ export class Runs {
       } else if (err instanceof ApiError && err.code === "memory_unavailable") {
         this.onMemoryRefusal(err.details, errText(err));
         this.onNote(errText(err), "error");
-      } else if (err instanceof ApiError && err.code === "graph_execution_active") {
-        this.onNote("Another run is active -- stop it first.", "warn");
-        this.refresh();
       } else {
         this.onNote(errText(err), "error");
       }
@@ -97,13 +92,12 @@ export class Runs {
     }
   }
 
-  async stop() {
-    let target = this.selected;
-    if (target === null || !ACTIVE.has((this.items.find((e) => e.execution_id === target) || {}).status)) {
-      const running = this.items.find((e) => ACTIVE.has(e.status));
-      if (!running) return this.onNote("No active run to stop.", "warn");
-      target = running.execution_id;
-    }
+  /** Stop (or cancel, when it is still planned) one run: the given one, else the one looked at, else the newest active. */
+  async stop(id = null) {
+    const active = (n) => ACTIVE.has((this.items.find((e) => e.execution_id === n) || {}).status);
+    let target = id ?? (this.selected !== null && active(this.selected) ? this.selected : null);
+    target ??= this.items.find((e) => ACTIVE.has(e.status))?.execution_id ?? null;
+    if (target === null) return this.onNote("No active run to stop.", "warn");
     try {
       const exec = await api(`/graphs/executions/${target}/stop`, { method: "POST" });
       this.onNote(`Run #${exec.execution_id} stopped.`, "warn");
@@ -129,11 +123,10 @@ export class Runs {
   /** Feed parsed `/events` messages here; everything but graph runs is ignored. */
   onEvent(ev) {
     if (!ev || typeof ev.type !== "string" || !ev.type.startsWith("graph_execution")) return;
-    if (ev.type === "graph_execution_progressed" && ev.execution_id === this.liveId) {
+    if (ev.type === "graph_execution_progressed" && ev.execution_id === this.selected) {
       this.canvas.setNodeStatus(ev.node_id, ev.ok ? "done" : "error", seconds(ev.duration_ms || 0));
       return;
     }
-    if (TERMINAL.has(ev.type.replace("graph_execution_", "")) && ev.execution_id === this.liveId) this.liveId = null;
     if (ev.type === "graph_execution_failed" && ev.error) this.onNote(`Run #${ev.execution_id} failed: ${ev.error}`, "error");
     if (ev.type === "graph_execution_finished") this.onNote(`Run #${ev.execution_id} finished (${ev.nodes} nodes).`, "success");
     if (this._queued) return;
@@ -157,6 +150,12 @@ export class Runs {
       const status = Object.assign(document.createElement("span"), { className: `exec-status st-${e.status}`, textContent: e.status + (e.error ? ` -- ${e.error}` : "") });
       const meta = Object.assign(document.createElement("span"), { className: "exec-meta", textContent: ago(e.created_at) });
       row.append(id, status, meta);
+      if (ACTIVE.has(e.status)) {
+        const label = e.status === "planned" ? "Cancel this planned run" : "Stop this run";
+        const stop = Object.assign(document.createElement("button"), { className: "btn btn-danger btn-small exec-stop", type: "button", textContent: "\u25A0", title: label });
+        stop.addEventListener("click", (ev) => { ev.stopPropagation(); this.stop(e.execution_id); });
+        row.append(stop);
+      }
       row.addEventListener("click", () => this.select(e.execution_id));
       this.root.append(row);
     }

@@ -222,7 +222,7 @@ check(
     f"the 422 points at the offending key (got {loc})",
 )
 
-# -- single-active + stop --------------------------------------------------
+# -- a second run waits, then stop --------------------------------------------------
 status, _, body = asgi_request(
     app, f"{GRAPH}/run",
     method="POST",
@@ -233,8 +233,8 @@ slow_id = body["execution_id"]
 
 status, _, body = asgi_request(app, f"{GRAPH}/run", method="POST",
                                json_body=run_body(valid_graph()))
-expect_error(status, body, 409, "graph_execution_active",
-             "second run refused while one is active")
+check(status == 201 and body["status"] == "planned",
+      f"second run waits for room while the first holds the card (got {status} {body.get('status')})")
 
 status, _, body = asgi_request(app, f"{GRAPH}/executions/{slow_id}/stop",
                                method="POST")

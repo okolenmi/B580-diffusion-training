@@ -18,6 +18,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from .bootstrap import build_container
+from .infrastructure.planned_runs_pump import PlannedRunsPump
 from .config import Settings
 from .presentation.app import create_app
 from .python_floor import require_python
@@ -89,6 +90,8 @@ def main(argv: list[str] | None = None) -> int:
     # Discovering the node classes imports the ML stack; doing it while the server starts keeps
     # that cost out of the first page load.
     threading.Thread(target=warm_catalog, args=(container.services,), name="catalog-warmup", daemon=True).start()
+
+    PlannedRunsPump(container.services.graphs.start_execution.promote_planned).start()
 
     uvicorn.run(app, host=settings.host, port=settings.port, log_level="info")
     return 0

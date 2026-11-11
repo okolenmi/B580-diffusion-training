@@ -1,5 +1,5 @@
 """``ceilings [--device xpu]`` measures what the card can do; ``report FOLDER`` re-renders a saved report.json (findings included)
-after the rules changed; ``bench`` and ``hardware`` and ``allocator`` measure one thing each; ``hwcheck -- TRAIN ARGS`` runs them all with the default scenarios; ``matrix FILE`` runs scenarios; ``compare A B`` prints what changed between two report folders."""
+after the rules changed; ``bench`` and ``hardware`` and ``allocator`` and ``ipc`` measure one thing each; ``hwcheck -- TRAIN ARGS`` runs them all with the default scenarios; ``matrix FILE`` runs scenarios; ``compare A B`` prints what changed between two report folders."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from .findings import findings_for
 from .comparison import Comparison
 from .bench import SUITES, BenchRunner, context_for
 from .hardware import AllocatorProbe, HardwareReport
+from .ipc_probe import IpcProbe
 from .hwcheck import HwCheck, TrainArguments
 from .probe import EventsProbe
 from .matrix import Matrix, MatrixSpec, SubprocessRunner
@@ -39,6 +40,10 @@ def build_parser() -> argparse.ArgumentParser:
     allocator = sub.add_parser("allocator", help="print what the allocator reserves in a fragmenting pattern (run under different PYTORCH_ALLOC_CONF)")
     allocator.add_argument("--device", default="xpu")
     allocator.add_argument("--quick", action="store_true")
+    ipc = sub.add_parser("ipc", help="can two processes share weights that sit once on the card? (gates of rework/76)")
+    ipc.add_argument("--device", default="xpu")
+    ipc.add_argument("--quick", action="store_true")
+    ipc.add_argument("--out", default="perf-ipc")
     events = sub.add_parser("events", help="known operations under the profiler: do launches link to operators on this build?")
     events.add_argument("--device", default="xpu")
     events.add_argument("--out", default="perf-events")
@@ -77,6 +82,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "allocator":
         print(json.dumps(AllocatorProbe(args.device, args.quick).run()))
+        return 0
+    if args.command == "ipc":
+        probe = IpcProbe(args.device, args.quick)
+        print(probe.write(probe.run(), args.out))
         return 0
     if args.command == "events":
         probe = EventsProbe(args.device)

@@ -61,12 +61,13 @@ class GraphExecutionRepository(ABC):
 
     @abstractmethod
     def find_active(self) -> GraphExecution | None:
-        """The newest ``queued``/``running`` execution, or None.
+        """The newest ``queued``/``running`` execution, or None: "is the
+        device in use by a run" (several may live; planned rows do not count)."""
+        raise NotImplementedError
 
-        Active counts as single-slot: a second ``StartGraphExecution``
-        must be refused while one lives (one B580, in-process training
-        nodes -- see doc 05 section 5).
-        """
+    @abstractmethod
+    def list_planned(self) -> list[GraphExecution]:
+        """All ``planned`` rows, oldest first (the scheduler's queue)."""
         raise NotImplementedError
 
     @abstractmethod

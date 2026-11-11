@@ -40,6 +40,12 @@ SCOPES: tuple[str, ...] = ("node", "graph")
 KINDS: tuple[str, ...] = ("field", "display")
 
 
+def run_stream_id(execution_id: int, stream: str) -> str:
+    """The same stream as seen for one run: runs that live at once share node uids, so a page that looks at one run
+    reads these; the plain ids carry the most recently started run (the old pages' view)."""
+    return f"run:{execution_id}:{stream}"
+
+
 def node_stream_id(node_id: str) -> str:
     """The monitor-bus stream of one node instance's display modules."""
     return f"{NODE_STREAM_PREFIX}{node_id}"

@@ -61,3 +61,21 @@ test("closeAll closes everything", () => {
   assert.ok(opened.every((s) => s.closed));
   assert.deepEqual(live.openIds, []);
 });
+
+test("a scope points the open streams at one run's own copy, keeping the shared state objects", () => {
+  const { opened, live } = fake();
+  const a = live.acquire("node:t", () => {});
+  msg(opened[0], { type: "connected" });
+  msg(opened[0], { step: 1, loss: 2 });
+  assert.equal(a.state.rows.length, 1);
+  live.setScope(7);
+  assert.equal(opened[0].closed, true);
+  assert.equal(opened[1].id, "run:7:node:t");
+  assert.equal(a.state.rows.length, 0);              // refilled by the server's replay
+  assert.equal(a.state.conn, "connecting");
+  live.setScope(7);
+  assert.equal(opened.length, 2);                    // same scope: nothing reconnects
+  live.setScope(null);
+  assert.equal(opened[2].id, "node:t");
+  assert.equal(live.acquire("graph:run", () => {}) && opened[3].id, "graph:run");
+});

@@ -10,6 +10,11 @@
    `onChange(id)` is called after every frame that changed state; the board
    coalesces those into at most one redraw per animation frame.
 
+   A scope (an execution id) points every stream at that run's own copy of it, `run:<id>:<stream>`: runs alive at once
+   share node uids, so a page that looks at one run must not read the plain streams, which carry the latest start.
+   Changing the scope reconnects the open streams in place; the shared states stay the same objects and refill from the
+   server's replay.
+
    The EventSource is injectable so the lifecycle is testable without a
    browser (frontend/tests/board_live.test.mjs).
    --------------------------------------------------------------------------- */
@@ -29,23 +34,43 @@ export class LiveStreams {
     this._open = open;
     this._now = now;
     this._streams = new Map(); // id -> {state, source, listeners:Set}
+    this._scope = null;
+  }
+
+  /** Which run the streams show (null: the plain streams, the latest start). */
+  get scope() { return this._scope; }
+
+  setScope(scope) {
+    if (scope === this._scope) return;
+    this._scope = scope;
+    for (const [id, entry] of this._streams) {
+      try { entry.source.close(); } catch { /* already closed */ }
+      entry.state.reset();
+      entry.state.setConn("connecting");
+      entry.source = this._connect(id, entry);
+      entry.listeners.forEach((fn) => fn(id));
+    }
+  }
+
+  _connect(id, entry) {
+    const busId = this._scope == null ? id : `run:${this._scope}:${id}`;
+    const notify = () => entry.listeners.forEach((fn) => fn(id));
+    return this._open(busId, {
+      onMessage: (ev) => {
+        const r = entry.state.applyRaw(ev.data, this._now());
+        if (r.kind !== "ignored") notify();
+      },
+      onError: () => { entry.state.setConn("disconnected"); notify(); },
+    });
   }
 
   /** Connect (or join) a stream. Returns `{state, release}`. */
   acquire(id, onChange) {
     let entry = this._streams.get(id);
     if (!entry) {
-      const state = new StreamState();
-      entry = { state, source: null, listeners: new Set() };
+      entry = { state: new StreamState(), source: null, listeners: new Set() };
       this._streams.set(id, entry);
-      const notify = () => entry.listeners.forEach((fn) => fn(id));
-      entry.source = this._open(id, {
-        onMessage: (ev) => {
-          const r = state.applyRaw(ev.data, this._now());
-          if (r.kind !== "ignored") notify();
-        },
-        onError: () => { state.setConn("disconnected"); notify(); },
-      });
+      entry.source = this._connect(id, entry);
     }
     entry.listeners.add(onChange);
     let released = false;

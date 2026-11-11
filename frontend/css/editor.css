@@ -432,7 +432,9 @@ body.editor-body {
 .exec-row.selected { border-color: var(--accent); }
 .exec-meta { color: var(--text-dim); font-size: 0.72rem; }
 .exec-status { font-weight: 600; }
-.st-queued, .st-stopped { color: var(--text-dim); }
+.st-queued, .st-stopped, .st-planned { color: var(--text-dim); }
+.st-planned { font-style: italic; }
+.exec-stop { padding: 0 0.4rem; line-height: 1.2; }
 .st-running { color: var(--accent); }
 .st-finished { color: var(--green); }
 .st-error { color: var(--red); }

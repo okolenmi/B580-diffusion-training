@@ -46,7 +46,7 @@ from typing import Any
 
 from ..domain.events import GraphExecutionProgressed
 from ..domain.graph import GraphDefinition, NodeResult
-from ..domain.modules import GRAPH_STREAM, node_stream_id
+from ..domain.modules import GRAPH_STREAM, node_stream_id, run_stream_id
 from ..domain.value_objects import ExecutionId, GraphStatus
 from .memory_admission import LedgerSource, graph_owner, release
 from .ports.graph_task_stream import EventKind
@@ -633,10 +633,10 @@ class GraphExecutionSupervisor(ExecutionLauncher):
                 if not catch_up:
                     self._record_node(execution_id, event.payload)
             elif kind is EventKind.MONITOR:
-                self._republish_monitor(event.payload)
+                self._republish_monitor(execution_id, event.payload)
             elif kind is EventKind.MEMORY:
                 self._record_peak(execution_id, event.payload)
-                self._republish_memory(event.payload)
+                self._republish_memory(execution_id, event.payload)
             else:  # OUTCOME
                 outcomes.append(event.payload)
         return outcomes
@@ -751,7 +751,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
                 "result itself is stored", node_id, execution_id,
             )
 
-    def _republish_monitor(self, payload: dict) -> None:
+    def _republish_monitor(self, execution_id: ExecutionId, payload: dict) -> None:
         """Put a child's monitor report onto this server's own bus.
 
         The child's bus is unreachable -- a per-process deque of asyncio
@@ -762,9 +762,9 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         if self._monitor_bus is None:
             return
         try:
-            self._monitor_bus.report(
-                str(payload.get("monitor_id", "")), dict(payload.get("data") or {})
-            )
+            stream, data = str(payload.get("monitor_id", "")), dict(payload.get("data") or {})
+            self._monitor_bus.report(stream, data)
+            self._monitor_bus.report(run_stream_id(execution_id, stream), data)
         except Exception:  # noqa: BLE001 -- telemetry must not abort the run
             logger.exception("republishing a monitor report failed")
 
@@ -773,7 +773,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         "t", "reserved_mb", "allocated_mb", "peak_mb", "budget_mb", "event", "mb",
     )
 
-    def _republish_memory(self, payload: dict) -> None:
+    def _republish_memory(self, execution_id: ExecutionId, payload: dict) -> None:
         """Put a child's memory frame onto the graph-scope stream.
 
         This is the data behind the "Device memory" chart a page can show
@@ -784,10 +784,9 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         if self._monitor_bus is None:
             return
         try:
-            self._monitor_bus.report(
-                GRAPH_STREAM,
-                {k: payload[k] for k in self._MEMORY_FRAME_KEYS if k in payload},
-            )
+            frame = {k: payload[k] for k in self._MEMORY_FRAME_KEYS if k in payload}
+            self._monitor_bus.report(GRAPH_STREAM, frame)
+            self._monitor_bus.report(run_stream_id(execution_id, GRAPH_STREAM), frame)
         except Exception:  # noqa: BLE001 -- telemetry must not abort the run
             logger.exception("republishing a memory frame failed")
 

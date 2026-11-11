@@ -55,7 +55,7 @@ from ..schemas import (
 router = APIRouter(prefix="/api/v1/graphs", tags=["graphs"])
 
 _ERROR_404 = {"description": "execution or saved graph not found"}
-_ERROR_409 = {"description": "an execution is already active / already terminal"}
+_ERROR_409 = {"description": "no room on the device (mode parallel) / the execution is already terminal"}
 _ERROR_422 = {"description": "graph_invalid: every issue, or invalid limit/name"}
 
 
@@ -110,9 +110,9 @@ def validate_graph(
 def run_graph(
     body: GraphRunIn, services: ApplicationServices = Depends(get_services)
 ):
-    """Validate (422 with all issues if bad), refuse while one runs
-    (409), then queue and start the execution on a worker thread.
-    ``memory_overrides`` are this run's overrides of the graph's memory
+    """Validate (422 with all issues if bad), then admit against device memory and start the execution (201, status
+    ``queued``), or, when there is no room and ``mode`` allows waiting, store it as ``planned`` (201); ``parallel``
+    refuses instead (409 ``memory_unavailable``). ``memory_overrides`` are this run's overrides of the graph's memory
     settings; the effective values land on the execution row."""
     return execution_summary_out(
         services.graphs.start_execution.execute(
@@ -121,6 +121,7 @@ def run_graph(
                 body.memory_overrides.as_overrides()
                 if body.memory_overrides else None
             ),
+            mode=body.mode,
         )
     )
 

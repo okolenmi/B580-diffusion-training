@@ -197,16 +197,6 @@ class GraphExecutionNotFoundError(ApplicationError):
     status_code = 404
 
 
-class GraphExecutionActiveError(ApplicationError):
-    """Another execution is queued or running; single-active holds.
-
-    ``details`` carries the blocking execution's id/status.
-    """
-
-    code = "graph_execution_active"
-    status_code = 409
-
-
 class GraphExecutionNotActiveError(ApplicationError):
     """The action needs a live execution; this one already ended.
 

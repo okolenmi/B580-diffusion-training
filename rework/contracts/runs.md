@@ -75,6 +75,17 @@ The fingerprint is unknown, never defaulted, when no node names a dataset, a dec
 required one is not set, or no node declares anything. An unknown fingerprint is not a zero peak: the run is admitted as
 exploratory.
 
+## Parallel runs
+
+Several runs may live at once; memory admission is the only gate. `POST /graphs/run` takes `mode`: `parallel` starts or
+refuses (409 `memory_unavailable` with the breakdown), `auto` (default) starts or stores the run as `planned`, `queue`
+stores it as `planned` whenever anything else lives or waits. `planned` holds no memory and has no child; planned rows
+start in order of creation (the head is never overtaken) as soon as admission passes, and a planned row can be stopped
+(cancelled) like a running one. A refusal that cannot clear by itself (device total unknown, or nothing else holds
+memory) is answered at once and never planned. Every run's frames are also on `run:<execution_id>:<stream>`; the plain
+`node:<uid>` and `graph:run` streams carry the most recent start (old pages). The bus keeps the history of every run's
+streams until the server restarts; a finished run's curves come from `/executions/{id}/monitor` after that.
+
 ## Display streams
 
 A node with `MODULES` reports its frames on `node:<uid>`; the monitor boards and the template editor read them there.

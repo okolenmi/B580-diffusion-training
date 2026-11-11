@@ -99,6 +99,22 @@ class GraphExecution:
         )
 
     @classmethod
+    def plan(
+        cls,
+        *,
+        graph: GraphDefinition,
+        created_at: datetime,
+        memory: EffectiveMemory,
+    ) -> GraphExecution:
+        """Register an execution that waits for room: ``planned``, no claim."""
+        return cls(
+            status=GraphStatus.PLANNED,
+            graph=graph,
+            created_at=created_at,
+            memory=memory,
+        )
+
+    @classmethod
     def restore(cls, **fields: object) -> GraphExecution:
         """Rebuild an execution from a persisted row, cross-field rules
         checked (see ``Run.restore`` for why: a loaded aggregate can be
@@ -197,6 +213,16 @@ class GraphExecution:
                 occurred_at=self._created_at,
             ),
         )
+
+    def promote(
+        self, *, at: datetime, memory: EffectiveMemory, reserved_mb: float | None
+    ) -> None:
+        """Room was found: ``planned`` -> ``queued`` with the claim taken now."""
+        self.require_id()
+        self._life.move(GraphStatus.QUEUED)
+        self._memory = memory
+        self._reserved_mb = reserved_mb
+        self._updated_at = at
 
     def mark_running(self, *, at: datetime) -> None:
         """Worker claimed the row: ``queued`` -> ``running``."""

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -544,6 +544,9 @@ class GraphRunIn(BaseModel):
 
     graph: dict[str, Any]
     memory_overrides: MemoryOverridesIn | None = None
+    #: What a start does when the card has no room: ``parallel`` refuses, ``auto`` plans the run, ``queue`` plans it
+    #: whenever anything else lives or waits (``/validate`` ignores it).
+    mode: Literal["auto", "parallel", "queue"] = "auto"
 
     @model_validator(mode="after")
     def _graph_reads_and_override_stays_in_range(self) -> GraphRunIn:

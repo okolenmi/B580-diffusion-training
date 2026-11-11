@@ -88,10 +88,9 @@ per declared type; `tuple` accepts list or tuple; `Path` accepts `str` or
 1. `runtime.validate(graph)` -- any error severity -> 422
    `graph_invalid`, `details.issues` (issue dicts via
    `issue_to_dict`, one shared converter);
-2. `find_active()` -- a live execution exists -> 409
-   `graph_execution_active` (**deliberate divergence**: legacy allowed
-   parallel runs; one B580 + in-process training nodes makes that an OOM
-   waiting to happen, consistent with single-run/single-task rules);
+2. (no single-active rule any more: several runs may live at once, memory
+   admission below is the gate; `mode` decides between refusing and
+   planning when there is no room, see rework/76);
 3. insert `queued` row, publish `GraphExecutionQueued`;
 4. `supervisor.launch(execution_id, graph)` -> spawn the run, return
    201 `{execution_id, status: "queued"}`.

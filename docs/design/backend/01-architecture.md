@@ -311,9 +311,10 @@ sweep, which meant reading dataset A rewrote rows of dataset B
   [`13-process-isolation.md`](../13-process-isolation.md) for the
   channel, the stop semantics, adoption across a restart, and the
   measured cost. `StartGraphExecution` holds a lock across validate +
-  active-check + insert, and **one execution may be active at a time**
-  (409 `graph_execution_active`) -- deliberate: one B580, and graph
-  nodes can build real training loops. Cancellation is cooperative
+  admission + insert, and **several executions may be live at once**:
+  memory admission is the only gate, and a start that does not fit is
+  refused (`parallel`) or stored as `planned` (`auto`, `queue`) and
+  started in order by `promote_planned` (rework/76). Cancellation is cooperative
   twice: the stop use case signals the child first (`SIGINT`, so its
   runtime notices between steps), then CASes `queued|running ->
   stopped` (3 refetch attempts for the claim race); a run that ignores

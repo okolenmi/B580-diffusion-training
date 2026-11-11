@@ -26,7 +26,7 @@ from backend.application.event_publisher import EventPublisher
 from backend.application.graph_supervisor import GraphExecutionSupervisor
 from backend.application.lifecycle_writer import ExecutionLifecycleWriter
 from backend.application.errors import (
-    GraphExecutionActiveError,
+    MemoryUnavailableError,
     GraphExecutionNotFoundError,
     GraphExecutionNotActiveError,
     GraphInvalidError,
@@ -424,17 +424,17 @@ check(
     "failed node reported in results",
 )
 
-# Single-active: a second start is refused while one runs.
+# A second start while one runs: memory admission decides (the first, with no known demand, holds the whole card),
+# so the default mode plans it instead of refusing; parallel mode refuses with the breakdown.
 slow = graphs.start_execution.execute(make(node("slow", "SlowNode", seconds=0.4)))
+second = graphs.start_execution.execute(VALID)
+check(second.status is GraphStatus.PLANNED, f"second start waits for room (got {second.status.value})")
 try:
-    graphs.start_execution.execute(VALID)
-    check(False, "second start refused while an execution is active")
-except GraphExecutionActiveError as exc:
-    check(
-        exc.code == "graph_execution_active"
-        and exc.details["execution_id"] == slow.execution_id,
-        "second start refused while an execution is active",
-    )
+    graphs.start_execution.execute(VALID, mode="parallel")
+    check(False, "parallel start refused when there is no room")
+except MemoryUnavailableError as exc:
+    check(exc.code == "memory_unavailable", "parallel start refused when there is no room")
+graphs.stop_execution.execute(second.execution_id)
 
 # Stop: signal, then CAS. Returns the stopped row.
 #
@@ -632,7 +632,7 @@ orphan_result = orphan_sweep.execute()
 check(
     orphan_repo.get(orphan.id).status is GraphStatus.RUNNING,
     "a row whose child is still alive is left running, so the "
-    f"single-active check still refuses a second run (got "
+    f"a second run still has to wait (got "
     f"{orphan_repo.get(orphan.id).status.value})",
 )
 check(orphan_result.cleaned == 0 and orphan_result.still_running == 1,

@@ -28,7 +28,11 @@ _COLUMNS = (
 )
 
 # id is generated; graph is immutable (the submission snapshot).
-_MUTABLE = ("status", "results", "error", "updated_at", "started_at", "finished_at")
+_MUTABLE = (
+    "status", "results", "error", "updated_at", "started_at", "finished_at",
+    # Set when a planned row is admitted; every other transition leaves them as they were.
+    "memory_json", "reserved_mb",
+)
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -134,6 +138,11 @@ class SqliteGraphExecutionRepository(GraphExecutionRepository):
             execution.updated_at.isoformat(),
             execution.started_at.isoformat() if execution.started_at else None,
             execution.finished_at.isoformat() if execution.finished_at else None,
+            (
+                json.dumps(execution.memory.as_dict())
+                if execution.memory is not None else None
+            ),
+            execution.reserved_mb,
         )
 
     def get(self, execution_id: ExecutionId) -> GraphExecution | None:
@@ -199,6 +208,15 @@ class SqliteGraphExecutionRepository(GraphExecutionRepository):
                 (GraphStatus.QUEUED.value, GraphStatus.RUNNING.value),
             ).fetchone()
         return _row_to_execution(row) if row else None
+
+    def list_planned(self) -> list[GraphExecution]:
+        with self._db.connection() as conn:
+            rows = conn.execute(
+                f"SELECT {_COLUMNS} FROM graph_executions "
+                "WHERE status = ? ORDER BY id ASC",
+                (GraphStatus.PLANNED.value,),
+            ).fetchall()
+        return [_row_to_execution(row) for row in rows]
 
     def list_unfinished(self) -> list[GraphExecution]:
         with self._db.connection() as conn:

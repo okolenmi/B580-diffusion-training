@@ -151,9 +151,13 @@ async function boot() {
   const live = new LiveStreams();
   const monitor = new Monitor(el("monitor"), doc, shapes, { live });
   let runs = null;
+  const modeBox = el("run-mode");
+  const MODE_KEY = "graph2.runMode";
+  try { modeBox.value = localStorage.getItem(MODE_KEY) || "auto"; } catch { /* private window: the default stays */ }
+  modeBox.addEventListener("change", () => { try { localStorage.setItem(MODE_KEY, modeBox.value); } catch { /* not remembered */ } });
   const startRun = () => {
     if (!doc.nodes.size) return log("Canvas is empty.", "warn");
-    return runs.run(doc.runPayload());
+    return runs.run(doc.runPayload(), modeBox.value);
   };
   const views = new Views(el("views"), doc, live, { onRun: startRun, onStop: () => runs.stop(), onNote: log, execution: () => runs?.current() ?? null });
   el("views-section").addEventListener("toggle", () => views.shown());
@@ -162,7 +166,7 @@ async function boot() {
     onNote: log,
     onIssues: (list) => issues.show(list),
     onMemoryRefusal: (details, reason) => memory.refusal(details, reason),
-    onSelect: (id, live) => monitor.showRun(id, live),
+    onSelect: (id, active) => { live.setScope(id); monitor.showRun(id, active); },
     onRunState: (running) => {
       el("btn-stop").hidden = !running;
       if (running) el("monitor-section").open = true;

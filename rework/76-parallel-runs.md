@@ -1,6 +1,6 @@
 # 76. Parallel runs, instances, and weights shared between processes
 
-Status: **design agreed in direction (owner, 2026-11-11). Built and CPU-tested: modes, planned runs, the scheduler, per-run streams, the Run mode switch and a stop per run. Not built: the instance view, the `WeightSource` seam, the broker (waits for the hardware gates).** Parallel
+Status: **gates run on the B580 (2026-11-12): torch cannot share device tensors between processes, so runs use separate copies of the weights (`PrivateWeights`); the shared-weights broker is deferred. Built and CPU-tested: modes, planned runs, the scheduler, per-run streams, the Run mode switch and a stop per run. Not built: the instance view and the `WeightSource` seam.**
 runs are wanted for stronger cards and for a later in-app image generator that should not push the user to ComfyUI; on a 12 GB card they only make sense if the
 big read-only parts (frozen model, VAE, encoders) sit on the device once. The owner chose the hard route first: share the weights, and fall back to full
 separation per weight set if the card or driver does not allow it.
@@ -60,7 +60,22 @@ If G1 fails and no other route works, parallel runs fall back to `PrivateWeights
 second run is admitted only when its whole footprint fits beside the first. One process running several runs as threads is not offered: the step is launch
 bound (rework/74), so threads under one interpreter lock would slow every run.
 
+## Gate results (B580, torch 2.12.1+xpu, 2026-11-12)
+| Gate | Result | Meaning |
+|---|---|---|
+| inventory | no XPU entry in `torch.multiprocessing.reductions`; DLPack device kind 14 (oneAPI) works; `libze_loader.so.1` present | plain sharing is absent; a native route is conceivable |
+| G1 | failed: the tensor never arrived (the owner's queue feeder cannot pickle an XPU tensor; the borrower timed out) | no torch-native sharing; G2 and G3 could not run |
+| G4 | one process 4856 it/s; two together 2382 + 2390 (sum 0.98 of one) | the card time-slices fairly and loses nothing, but two runs each go at half speed: **parallel is "fit both", never "faster"** |
+| G5 | 1 GB down 0.19 s, up 0.19 s (5.3 GB/s pinned; 4.4 pageable) | a lessee whose weights were parked waits about a second per 5 GB, small against a multi-second step |
+
+What is left of the shared route is native glue: a Level Zero IPC handle (`zeMemGetIpcHandle`/`zeMemOpenIpcHandle`) must be taken in the *same* Level Zero
+context PyTorch allocated from, which Python does not expose, so it needs a C++ extension built with the oneAPI compiler, then wrapped by DLPack (kind 14).
+Without a measured need that is not worth building: since two runs share the card's time, the only gain of sharing is that two base models fit at once
+(the 12 GB card holds one SDXL base plus activations, not two), and training runs queue just as fast. **Decision:** parallel runs mean separate copies and are
+admitted only when both fit (the ledger already says so); the broker part of this document stays as a design for a stronger card or for an image generator that
+holds a small model beside a training run. If that need appears, the next step is a small native probe of the context question, not the broker.
+
 ## Order of work
 1. Scheduler, per-run streams, Run mode (**built**); then the instance view: read-only canvas from the run's snapshot, own Monitor, "Copy to editor", names, views kept in the snapshot (**next**).
 2. The `WeightSource` seam in the load nodes with `PrivateWeights` as the only implementation (behaviour unchanged).
-3. Owner runs the gates. Pass -> broker and `SharedWeights`; fail -> stop here and say so in this document.
+3. Gates run: failed (see above), so there is no broker. The `WeightSource` seam is only worth adding when a second implementation exists; it is not built.

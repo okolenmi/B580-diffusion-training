@@ -244,8 +244,8 @@ Rollback: git. (There are no users to protect, which is the point of the decisio
 Answered 2026-10-14: old app, dataset format, spot checks, optimizers, phase order
 (section 0.1). Still open:
 
-1. Will you supply, for phase 8, a real Anima safetensors **header** (a script that
-   extracts it without weights will be provided) and later one short real run?
+1. Will you supply, for phase 8, a real Anima safetensors **header** (the script is
+   `scripts/dump_header.py`; `rework/tester-brief.md` mission 6 runs it) and later one short real run?
 2. May the editor work run beside the Python phases when work spans several sessions,
    or strictly one phase at a time? (Default: beside, after the catalog contract is
    frozen.)

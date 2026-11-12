@@ -45,5 +45,11 @@ report the sizes of the smallest and largest tile in "Balanced" (ratio is enough
 `TESTING.md` items 61 to 75 are lab runs: queue them with `python -m next.lab run <files>` (see the item), check in once per hour with `tail -n 5`, and report the
 result files the item names. They resume from the last saved state after a power cut: run the same command again.
 
+## Mission 6: headers of the Anima files (about 15 minutes, almost no tokens)
+The Anima family is written from memory of ComfyUI's code; real files decide whether it is right. In the owner's models folders find the Anima transformer
+(file names with `anima` or `cosmos`), the Qwen3 text encoder (`qwen`), the Wan-style VAE (`wan`, `qwen_image_vae`), and, as a control, one SDXL checkpoint. Run
+`python scripts/dump_header.py <each file> --out scratch/headers` (reads only the header, a few hundred KB each) and give the owner the `scratch/headers/*.json`
+files plus the printed lines. Do not open the JSON in the chat. If a file does not exist, say which kind is missing; do not download models.
+
 ## When you are done
 List what you could not do and why, in five lines. The owner pastes the reports to the developer; do not summarise results into advice about the code.

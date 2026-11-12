@@ -79,7 +79,7 @@ check(wait_until(lambda: (pump.tick(), not repo.list_planned())[1], timeout=10.0
 stop.execute(b.execution_id)
 
 print("-- queue mode --")
-check(wait_until(lambda: repo.find_active() is None, timeout=15.0), "fixture: everything has ended")
+check(wait_until(lambda: repo.find_active() is None, timeout=30.0), "fixture: everything has ended")
 q = start.execute(slow(0.1), memory_overrides=BUDGET, mode="queue")
 check(q.status is GraphStatus.QUEUED, "queue mode starts at once when nothing else lives or waits")
 

@@ -19,6 +19,7 @@ import { Library } from "./library.js";
 import { Monitor } from "./monitor.js";
 import { Views } from "./views.js";
 import { LiveStreams } from "../board/live.js";
+import { InstanceView } from "./instance.js";
 import { Palette, QuickAdd, compatibleClasses } from "./palette.js";
 import { IssuesPanel, MemoryPanel } from "./panels.js";
 import { Runs } from "./runs.js";
@@ -151,13 +152,26 @@ async function boot() {
   const live = new LiveStreams();
   const monitor = new Monitor(el("monitor"), doc, shapes, { live });
   let runs = null;
+  let saver = null;
+  const instance = new InstanceView({
+    doc, canvas,
+    saver: { hold: (on) => saver?.hold(on), flush: () => saver?.flush() },
+    bar: el("instance-bar"), title: el("instance-title"), copyBtn: el("instance-copy"), backBtn: el("instance-back"),
+    onNote: log,
+    onChange: (open) => {
+      document.body.classList.toggle("is-instance", open);
+      el("btn-run").disabled = open || !doc.nodes.size;
+    },
+    onLeave: () => runs.deselect(),
+  });
   const modeBox = el("run-mode");
   const MODE_KEY = "graph2.runMode";
   try { modeBox.value = localStorage.getItem(MODE_KEY) || "auto"; } catch { /* private window: the default stays */ }
   modeBox.addEventListener("change", () => { try { localStorage.setItem(MODE_KEY, modeBox.value); } catch { /* not remembered */ } });
   const startRun = () => {
+    if (instance.open) return log("This is a frozen run. Copy it to the editor to run it again.", "warn");
     if (!doc.nodes.size) return log("Canvas is empty.", "warn");
-    return runs.run(doc.runPayload(), modeBox.value);
+    return runs.run(doc.toJSON(), modeBox.value);
   };
   const views = new Views(el("views"), doc, live, { onRun: startRun, onStop: () => runs.stop(), onNote: log, execution: () => runs?.current() ?? null });
   el("views-section").addEventListener("toggle", () => views.shown());
@@ -166,7 +180,8 @@ async function boot() {
     onNote: log,
     onIssues: (list) => issues.show(list),
     onMemoryRefusal: (details, reason) => memory.refusal(details, reason),
-    onSelect: (id, active) => { live.setScope(id); monitor.showRun(id, active); },
+    onSelect: (id, active) => { live.setScope(id); if (id === null) monitor.showLive(); else monitor.showRun(id, active); },
+    onOpen: (detail) => instance.enter(detail),
     onRunState: (running) => {
       el("btn-stop").hidden = !running;
       if (running) el("monitor-section").open = true;
@@ -209,7 +224,7 @@ async function boot() {
   doc.on("settings", () => resolveAll());
   doc.on("reset", resolveAll);
   doc.on("change", () => {
-    el("btn-run").disabled = !doc.nodes.size;
+    el("btn-run").disabled = instance.open || !doc.nodes.size;
     memory.refreshLater();
   });
 
@@ -223,7 +238,7 @@ async function boot() {
       log(`The kept canvas could not be restored: ${errText(err)}`, "warn");
     }
   }
-  const saver = new DraftSaver(doc);
+  saver = new DraftSaver(doc);
   window.addEventListener("pagehide", () => saver.flush());
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saver.flush(); });
   el("btn-run").disabled = !doc.nodes.size;

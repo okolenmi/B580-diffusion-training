@@ -17,7 +17,7 @@ const ACTIVE = new Set(["planned", "queued", "running"]);
 const seconds = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`);
 
 export class Runs {
-  constructor(root, canvas, { onNote, onRunState, onIssues, onMemoryRefusal, onSelect }) {
+  constructor(root, canvas, { onNote, onRunState, onIssues, onMemoryRefusal, onSelect, onOpen }) {
     this.root = root;
     this.canvas = canvas;
     this.onNote = onNote;
@@ -25,6 +25,7 @@ export class Runs {
     this.onIssues = onIssues;
     this.onMemoryRefusal = onMemoryRefusal || (() => {});
     this.onSelect = onSelect || (() => {});
+    this.onOpen = onOpen || (() => {});
     this.items = [];
     this.selected = null;
     this._timer = null;
@@ -34,7 +35,7 @@ export class Runs {
   /** After the event stream (re)opens: nothing is replayed, so the list and the open run are read again. */
   async resync() {
     await this.refresh();
-    if (this.selected !== null) await this.select(this.selected);
+    if (this.selected !== null) await this.select(this.selected, { open: false });
   }
 
   async refresh() {
@@ -54,11 +55,14 @@ export class Runs {
     return this.items.find((e) => e.execution_id === this.selected) || this.items[0] || null;
   }
 
-  async select(id) {
+  /** Look at a run: its curves and statuses follow. `open` also puts the run's own frozen graph on the canvas (an
+   *  instance); a run just started from the canvas is followed without that, the canvas already is its graph. */
+  async select(id, { open = false } = {}) {
     this.selected = id;
     this.render();
     try {
       const detail = await api(`/graphs/executions/${id}`);
+      if (open) this.onOpen(detail);
       this.canvas.clearStatuses();
       for (const r of detail.results || []) this.canvas.setNodeStatus(r.node_id, r.ok ? "done" : "error", seconds(r.duration_ms), r.error || "");
       if (detail.error) this.onNote(`Run #${id}: ${detail.error}`, "error");
@@ -90,6 +94,14 @@ export class Runs {
       }
       return null;
     }
+  }
+
+  /** Stop looking at any run: the canvas goes back to the live streams. */
+  deselect() {
+    this.selected = null;
+    this.render();
+    this.canvas.clearStatuses();
+    this.onSelect(null, false);
   }
 
   /** Stop (or cancel, when it is still planned) one run: the given one, else the one looked at, else the newest active. */
@@ -156,7 +168,7 @@ export class Runs {
         stop.addEventListener("click", (ev) => { ev.stopPropagation(); this.stop(e.execution_id); });
         row.append(stop);
       }
-      row.addEventListener("click", () => this.select(e.execution_id));
+      row.addEventListener("click", () => this.select(e.execution_id, { open: true }));
       this.root.append(row);
     }
   }

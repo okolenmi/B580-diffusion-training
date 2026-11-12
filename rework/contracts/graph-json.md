@@ -57,7 +57,7 @@ Rules:
 7. `layout` and `views` are presentation; the runtime ignores them; the server stores
    them verbatim. `layout.groups` maps a group id to its collapsed/expanded override.
 8. Unknown top-level keys are preserved on a round trip.
-9. A run payload strips `views` and `layout`.
+9. A check or a memory preview strips `views` and `layout`; a run is sent the whole document and its stored snapshot keeps both, so the run can be shown as it was drawn (an instance). The runtime and the memory fingerprint ignore them.
 10. `addons` (on a node, and at the top level for the graph): ordered; `id` is stable inside its host (`[a-z][a-z0-9_]*`),
     `kind` an addon class name. A disabled addon is neither built nor checked; its params stay. An addon's parameter that is
     wired is the port `<id>.<param>` of its host, and a slot filled by a wire is the port `slot:<slot>`. An event wire may end at

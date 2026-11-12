@@ -44,6 +44,13 @@ export function endpointHost(endpoint) {
   return endpoint.split(".", 1)[0];
 }
 
+/** Every method that changes the document's content; `readOnly` turns them into no-ops (a frozen run's graph).
+ *  `load` is not among them (it is how a frozen graph gets in) and neither is `setGroupOpen` (looking, not editing). */
+const EDITS = ["clear", "addNode", "removeNode", "moveNode", "setTitle", "setLayout", "setParam", "connect", "disconnect", "reorderInto",
+  "connectEvent", "disconnectEvent", "addAddon", "setAddon", "setAddonParam", "removeAddon", "setSetting", "setViews", "paste"];
+
+const QUIET = new Set(["moveNode", "setLayout"]); // refused without a redraw: they fire on every mouse move
+
 const clone = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
 const sameEdge = (a, b) => a.from_node === b.from_node && a.from_port === b.from_port && a.to_node === b.to_node && a.to_port === b.to_port;
 
@@ -60,6 +67,16 @@ export class GraphDoc {
     this.addons = [];
     this.extras = {};
     this._handlers = new Map();
+    this.readOnly = false;
+    for (const name of EDITS) {
+      const edit = this[name];
+      this[name] = (...args) => {
+        if (!this.readOnly) return edit.apply(this, args);
+        // A widget may already show what the user typed; drawing the true document again takes it back.
+        if (!QUIET.has(name)) this._emit({ type: "reset" });
+        return null;
+      };
+    }
   }
 
   /* ----- events ----- */

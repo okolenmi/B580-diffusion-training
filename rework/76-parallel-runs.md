@@ -1,6 +1,6 @@
 # 76. Parallel runs, instances, and weights shared between processes
 
-Status: **gates run on the B580 (2026-11-12): torch cannot share device tensors between processes, so runs use separate copies of the weights (`PrivateWeights`); the shared-weights broker is deferred. Built and CPU-tested: modes, planned runs, the scheduler, per-run streams, the Run mode switch and a stop per run. Not built: the instance view and the `WeightSource` seam.**
+Status: **gates run on the B580 (2026-11-12): torch cannot share device tensors between processes, so runs use separate copies of the weights (`PrivateWeights`); the shared-weights broker is deferred. Built and CPU-tested: modes, planned runs, the scheduler, per-run streams, the Run mode switch and a stop per run. Instance view built (CPU- and browser-checked). Not built: run names, the `WeightSource` seam.**
 runs are wanted for stronger cards and for a later in-app image generator that should not push the user to ComfyUI; on a 12 GB card they only make sense if the
 big read-only parts (frozen model, VAE, encoders) sit on the device once. The owner chose the hard route first: share the weights, and fall back to full
 separation per weight set if the card or driver does not allow it.
@@ -76,6 +76,6 @@ admitted only when both fit (the ledger already says so); the broker part of thi
 holds a small model beside a training run. If that need appears, the next step is a small native probe of the context question, not the broker.
 
 ## Order of work
-1. Scheduler, per-run streams, Run mode (**built**); then the instance view: read-only canvas from the run's snapshot, own Monitor, "Copy to editor", names, views kept in the snapshot (**next**).
+1. Scheduler, per-run streams, Run mode (**built**); then the instance view (**built**, `frontend/js/graph2/instance.js`): clicking a run in the list puts its frozen graph, with layout and views, in the editor's document, read-only (`GraphDoc.readOnly`; refused edits redraw the true document; the draft is held), under a bar with "Copy to editor" and "Back to editor"; the Monitor and Views follow that run's streams. A run just started from the canvas is followed without leaving the editable graph. Run names are not built (runs are `#id`).
 2. The `WeightSource` seam in the load nodes with `PrivateWeights` as the only implementation (behaviour unchanged).
 3. Gates run: failed (see above), so there is no broker. The `WeightSource` seam is only worth adding when a second implementation exists; it is not built.

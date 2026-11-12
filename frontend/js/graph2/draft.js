@@ -26,15 +26,24 @@ export class DraftSaver {
     this.wait = wait;
     this.timers = timers;
     this._timer = null;
+    this._held = false;
     doc.on("change", () => this.notify());
   }
 
+  /** While held nothing is kept: the canvas shows something that is not the user's own work (a frozen run). */
+  hold(on) {
+    this._held = on;
+    if (on && this._timer) { this.timers.clear(this._timer); this._timer = null; }
+  }
+
   notify() {
+    if (this._held) return;
     if (this._timer) this.timers.clear(this._timer);
     this._timer = this.timers.set(() => this.flush(), this.wait);
   }
 
   flush() {
+    if (this._held) return;
     if (this._timer) this.timers.clear(this._timer);
     this._timer = null;
     try {

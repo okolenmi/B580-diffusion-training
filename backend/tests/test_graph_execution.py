@@ -384,6 +384,16 @@ check(detail.graph == VALID.as_dict(), "stored snapshot is the submitted graph")
 check("graph_execution_finished" in codes(events.published), "finished event published")
 progressed = [t for t in codes(events.published) if t == "graph_execution_progressed"]
 check(len(progressed) == 2, "one progress event per node")
+
+# An instance shows the graph as the user drew it: positions and views survive in the stored snapshot, and neither
+# changes what the run is (the runtime ignores them).
+drawn = VALID.as_dict()
+drawn["nodes"][0]["layout"] = {"x": 12, "y": 34}
+drawn["views"] = [{"id": "v1", "name": "Look", "mode": "monitor", "blocks": []}]
+shown = graphs.start_execution.execute(GraphDefinition.from_dict(drawn))
+kept = graphs.get_execution.execute(shown.execution_id).graph
+check(kept["nodes"][0]["layout"] == {"x": 12, "y": 34} and kept["views"] == drawn["views"], "the snapshot keeps layout and views")
+wait_until(lambda: graphs.get_execution.execute(shown.execution_id).status.is_terminal, timeout=10.0)  # its claim goes with it
 check(releases["n"] >= 1, "memory released after the run")
 
 # Invalid start: full issue list, no row, no launch.

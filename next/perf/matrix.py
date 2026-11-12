@@ -38,6 +38,7 @@ class Scenario:
     name: str
     args: tuple[str, ...] = ()
     env: tuple[tuple[str, str], ...] = ()
+    exit_code: int = 0  # the exit code a good run ends with (a scenario that must be refused ends with 1)
 
     @property
     def slug(self) -> str:
@@ -109,7 +110,7 @@ class SubprocessRunner:
                 handle.write("$ " + " ".join(full) + "\n")
                 handle.flush()
                 done = subprocess.run(full, stdout=handle, stderr=subprocess.STDOUT, env={**os.environ, **dict(scenario.env)}, timeout=self.timeout_s, check=False)
-            error = "" if done.returncode == 0 else f"exit code {done.returncode}"
+            error = "" if done.returncode == scenario.exit_code else f"exit code {done.returncode}, expected {scenario.exit_code}"
         except subprocess.TimeoutExpired:
             error = f"timed out after {self.timeout_s:.0f} s"
         return Outcome(scenario, not error, time.monotonic() - started, folder, log, error)
@@ -141,7 +142,7 @@ class Matrix:
             self.say(f"[{i}/{len(self.spec.scenarios)}] {scenario.name} ...")
             outcome = self.runner.run(scenario, where)
             outcome.report = load_report(where)
-            if outcome.ok and outcome.report is None:
+            if outcome.ok and outcome.report is None and scenario.exit_code == 0:
                 outcome.ok, outcome.error = False, "the run finished but wrote no report (it ended before the profiled window?)"
             self.say(f"    {'ok' if outcome.ok else 'FAILED: ' + outcome.error} in {outcome.seconds:.0f} s")
             self.outcomes.append(outcome)

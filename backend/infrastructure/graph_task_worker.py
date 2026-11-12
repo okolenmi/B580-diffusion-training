@@ -122,7 +122,8 @@ def build_runtime(writer, registry=None, memory=None, env=None):
         reporter=_EventReporter(writer),
         env=env if env is not None else process_environment(),
         runtime_factory=tree.make_runtime,
-        overrides={} if budget is None else {"memory.vram_max_mb": budget},
+        # The budget is allocator MB (what admission counted); the card-wide limit is left to the card.
+        overrides={} if budget is None else {"memory.allocator_mb": budget, "memory.vram_max_mb": "auto"},
     )
 
 
@@ -305,6 +306,16 @@ def apply_allocator_backstop(memory, device) -> str:
 MEMORY_TELEMETRY_INTERVAL_S = 1.0
 
 
+def _engine_high_water_mb() -> float:
+    """What the engine saw before it reset its peak counters (it resets them after every step, so a sample of the
+    counters alone misses the preparation phase and whatever peaked between two samples)."""
+    try:
+        from next.engine.devices import high_water_mb
+    except Exception:  # noqa: BLE001 - a child without the engine on its path reports the counters only
+        return 0.0
+    return high_water_mb()
+
+
 class MemoryTelemetry:
     """The child's fixed-interval memory producer (MEM-05 #4).
 
@@ -347,7 +358,7 @@ class MemoryTelemetry:
             # The high-water mark of what the process *held* -- reserved
             # includes the allocator's cache, which is what admission's
             # remembered demand has to assume stays held.
-            peak_mb=max(stats["peak_allocated_mb"], stats["peak_reserved_mb"]),
+            peak_mb=max(stats["peak_allocated_mb"], stats["peak_reserved_mb"], _engine_high_water_mb()),
             budget_mb=self._memory.budget_mb,
             backstop=self._backstop,
         )
@@ -408,7 +419,7 @@ def wire_memory_events(memory, writer, device, backstop) -> None:
         writer.memory(
             reserved_mb=stats["reserved_mb"],
             allocated_mb=stats["allocated_mb"],
-            peak_mb=max(stats["peak_allocated_mb"], stats["peak_reserved_mb"]),
+            peak_mb=max(stats["peak_allocated_mb"], stats["peak_reserved_mb"], _engine_high_water_mb()),
             budget_mb=memory.budget_mb,
             backstop=backstop,
             event=event,

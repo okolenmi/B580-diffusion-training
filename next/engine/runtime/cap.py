@@ -76,6 +76,8 @@ class AllocatorCap:
             return
         assumed = outside_mb + margin_mb
         cap = max(self.limit_mb - assumed, stats.get("allocated", 0.0) + margin_mb)
+        if self.policy.allocator_mb is not None:
+            cap = min(cap, max(self.policy.allocator_mb, stats.get("allocated", 0.0) + margin_mb))
         if self.cap_mb is not None and abs(cap - self.cap_mb) < self.CHANGE_MB:
             return
         if self.accelerator.cap_allocator(cap):

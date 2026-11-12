@@ -29,7 +29,8 @@ class DeviceResident(ABC):
 
 @dataclass
 class Claim:
-    """One resident of a run and what it is kept for. Lower ranks move off the device first; pinned ones never move."""
+    """One resident of a run and what it is kept for. Lower ranks move off the device first; pinned ones never move,
+    except the ``lendable`` ones, and only when work between steps (loading the text encoders) cannot fit otherwise."""
 
     resident: DeviceResident
     purpose: str
@@ -37,6 +38,7 @@ class Claim:
     pinned: bool
     parked: bool = False  # offloaded after every step, reloaded before the next
     away: bool = False
+    lendable: bool = False
 
 
 def tensor_bytes(tensors: Iterable[Tensor | None]) -> int:

@@ -74,6 +74,9 @@ class GraphExecutionDTO:
     updated_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+    #: What admission decided for this run (effective settings, demand and where it came from) and what it holds in
+    #: the ledger; None for a row that predates the columns.
+    memory: dict | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +108,7 @@ def to_execution_dto(execution: GraphExecution) -> GraphExecutionDTO:
         updated_at=execution.updated_at,
         started_at=execution.started_at,
         finished_at=execution.finished_at,
+        memory=None if execution.memory is None else {**execution.memory.as_dict(), "reserved_mb": execution.reserved_mb},
     )
 
 

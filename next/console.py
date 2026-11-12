@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 
-from .engine.devices import Accelerator
+from .engine.devices import Accelerator, high_water_mb
 from .engine.runtime.sampler import MemorySampler
 
 
@@ -128,7 +128,9 @@ class NodeTrace:
 
     def node_done(self, result) -> None:
         stats = self.accelerator.memory()
-        memory = (f"  allocated {stats['allocated']:.0f}, reserved {stats['reserved']:.0f}, device {stats['device_used']:.0f} MB"
+        peak = max(stats.get("peak_reserved", 0.0), stats.get("peak_allocated", 0.0), high_water_mb())
+        memory = (f"  allocated {stats['allocated']:.0f}, reserved {stats['reserved']:.0f}, device {stats['device_used']:.0f} MB, "
+                  f"allocator peak so far {peak:.0f} MB"
                   if "device_used" in stats and "allocated" in stats and "reserved" in stats else "")
         print(f"[{time.monotonic() - self.t0:6.1f}s] {self.names.get(result.uid, result.uid)}: {result.duration_ms / 1000:.1f}s{memory}", flush=True)
 

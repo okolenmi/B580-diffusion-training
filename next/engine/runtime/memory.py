@@ -59,6 +59,7 @@ class ResidencyManager:
         self._planned: tuple[float, int] | None = None  # live memory and pixel count the coming step was planned with
         self._largest: tuple[float, int] | None = None  # the same for the largest step seen or expected so far; never cleared
         self._started = False
+        self.addresses_fixed = False  # a captured graph replays kernels on the weights' memory: nothing may move after that
 
     @property
     def limit_mb(self) -> float | None:
@@ -74,12 +75,14 @@ class ResidencyManager:
 
     # -- claims -------------------------------------------------------------------------------------------------
 
-    def claim(self, name: str, resident: DeviceResident, *, purpose: str, rank: int = 0, pinned: bool = False) -> None:
+    def claim(self, name: str, resident: DeviceResident, *, purpose: str, rank: int = 0, pinned: bool = False,
+              lendable: bool = False) -> None:
         """Every part of a run that keeps memory on the device says what it keeps and why. Lower ranks move off the
-        device first; pinned claims never move."""
+        device first; pinned claims never move, unless they are ``lendable``: those leave only for work between steps
+        that cannot fit otherwise (``make_room(..., borrow=True)``) and are back before the next step."""
         if not purpose.strip():
             raise ValueError(f"the claim {name!r} must say what the memory is for")
-        self._claims[name] = Claim(resident, purpose, rank, pinned)
+        self._claims[name] = Claim(resident, purpose, rank, pinned, lendable=lendable)
 
     def ledger(self, stats: Mapping[str, float] | None = None) -> list[dict]:
         return card.ledger_rows(self._claims, stats if stats is not None else self.accelerator.memory())
@@ -101,6 +104,9 @@ class ResidencyManager:
         if not self._started:
             self._started = True
             self.cap.settle()
+
+    def fix_addresses(self) -> None:
+        self.addresses_fixed = True
 
     def ensure_started(self) -> None:
         """Nodes that bring anything to the device before training call this first, so the allocator is capped
@@ -200,21 +206,27 @@ class ResidencyManager:
 
     # -- making room --------------------------------------------------------------------------------------------
 
-    def make_room(self, mb: float, why: str) -> list[str]:
+    def make_room(self, mb: float, why: str, *, borrow: bool = False) -> list[str]:
         """Offload unpinned residents, lowest rank first, until ``mb`` more fits under the ceiling and the allocator's
-        cap; refuse (naming where the memory is) when it does not fit even then."""
+        cap. With ``borrow`` (work between steps only: the caller restores them after) lendable pinned residents go too,
+        when that is the only way; refuse (naming where the memory is) when it does not fit even then."""
         moved: list[str] = []
-        for name, claim in sorted(self._claims.items(), key=lambda kv: kv[1].rank):
+        order = sorted(self._claims.items(), key=lambda kv: kv[1].rank)
+        for name, claim in order:
             if self.cap.fits(self.accelerator.memory(), mb, hard=False):
                 break
-            if claim.pinned or claim.away or claim.resident.footprint_bytes() == 0:
-                continue
-            claim.resident.offload()
-            claim.away = True
-            self.give_back(f"{name} moved off the device")
-            moved.append(name)
+            if not claim.pinned and self._evict(name, claim):
+                moved.append(name)
+        lent: list[str] = []
+        if borrow and not self.addresses_fixed and not self.cap.fits(self.accelerator.memory(), mb, hard=True):
+            for name, claim in reversed(order):  # the largest holders first: fewest trips for the room
+                if self.cap.fits(self.accelerator.memory(), mb, hard=False):
+                    break
+                if claim.pinned and claim.lendable and self._evict(name, claim):
+                    lent.append(name)
+        moved += lent
         if moved:
-            self._note("evict", why=why, moved=moved)
+            self._note("evict", why=why, moved=moved, lent=lent)
         if not self.cap.fits(self.accelerator.memory(), mb, hard=True):
             used = self.used_mb()
             raise MemoryBudgetExceeded(
@@ -222,6 +234,14 @@ class ResidencyManager:
                 f"allocator cap {self.cap.cap_mb or 0:.0f} MB; {self.breakdown()}). Raise memory.vram_max_mb, lower memory.margin_mb, "
                 "or train a smaller model state (rank, batch size, int8 base weights).")
         return moved
+
+    def _evict(self, name: str, claim: Claim) -> bool:
+        if claim.away or claim.resident.footprint_bytes() == 0:
+            return False
+        claim.resident.offload()
+        claim.away = True
+        self.give_back(f"{name} moved off the device")
+        return True
 
     def restore(self, names: list[str]) -> None:
         for name in names:

@@ -324,6 +324,30 @@ def int8_base_weights():
     raises(ValueError, lambda: make_backend("nope", "cpu"), "an unknown backend is refused", "nope")
 
 
+def staged_conversion():
+    """A base waiting on the host reaches the card one layer at a time: converted layers move just before they convert, the rest stays."""
+    from ..families.general.quantize.backends import TorchBackend
+    from ..families.general.quantize.int8 import Int8Quantizer
+
+    log: list[str] = []
+    net = nn.Sequential(nn.Linear(512, 64), nn.Linear(100, 64), nn.Linear(512, 64))
+    for i in (0, 2):
+        net[i] = make("lora", net[i])
+    for i, layer in enumerate(net):
+        real = layer.to
+        layer.to = lambda *a, _i=i, _real=real, **k: (log.append(f"to {_i}"), _real(*a, **k))[1]
+    report = Int8Quantizer(TorchBackend(), min_params=0).run(net, move_to="cpu")
+    check(log == ["to 0", "to 2"] and report.layers == 2, f"only the layers that convert are moved, each before its conversion ({log})")
+    log.clear()
+    Int8Quantizer(TorchBackend(), min_params=0).run(nn.Sequential(make("lora", nn.Linear(512, 64))))
+    check(log == [], "without a target device nothing is moved")
+    torch.manual_seed(3)
+    there = AdaptedLinear(nn.Linear(16, 8), kind="lora", rank=4, factor_device="cpu")
+    torch.manual_seed(3)
+    ref = AdaptedLinear(nn.Linear(16, 8), kind="lora", rank=4)
+    check(torch.equal(there.lora_A, ref.lora_A), "factors drawn on a named device are the ones drawn where the weight is when that is the same device")
+
+
 def nf4_base_weights():
     from types import SimpleNamespace
 
@@ -619,4 +643,4 @@ def lora_cleaner():
 
 
 if __name__ == "__main__":
-    run(scaling_and_gate, layer_cases, merging_into_weights, aligned_start, int8_base_weights, nf4_base_weights, activation_compute, continue_from_file, lora_cleaner, sdxl_plan_and_injection)
+    run(scaling_and_gate, layer_cases, merging_into_weights, aligned_start, int8_base_weights, staged_conversion, nf4_base_weights, activation_compute, continue_from_file, lora_cleaner, sdxl_plan_and_injection)

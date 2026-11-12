@@ -81,8 +81,8 @@ class AdaptedLayer(nn.Module):
             return self._nf4.dense(self.base_weight, self.base_scale, self.base_scale2, self.base_offset)
         return self.base_weight
 
-    def _init_factors(self, a_shape: tuple[int, ...], b_shape: tuple[int, ...]) -> None:
-        device = self.base_weight.device
+    def _init_factors(self, a_shape: tuple[int, ...], b_shape: tuple[int, ...], device: str | torch.device | None = None) -> None:
+        device = device or self.base_weight.device
         self.lora_A = nn.Parameter(torch.empty(*a_shape, device=device, dtype=torch.float32))
         self.lora_B = nn.Parameter(torch.zeros(*b_shape, device=device, dtype=torch.float32))
         nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
@@ -144,11 +144,11 @@ class AdaptedLayer(nn.Module):
 class AdaptedLinear(AdaptedLayer):
     def __init__(self, original: nn.Linear, kind: str = "lora", rank: int = 64, alpha: float = 1.0,
                  policy: str = "classic", dropout: float = 0.0, weight: float = 1.0,
-                 gate: TimestepGate | None = None) -> None:
+                 gate: TimestepGate | None = None, factor_device: str | torch.device | None = None) -> None:
         super().__init__()
         self.in_features, self.out_features = original.in_features, original.out_features
         self._setup(original, kind, rank, alpha, policy, dropout, weight, gate)
-        self._init_factors((rank, self.in_features), (self.out_features, rank))
+        self._init_factors((rank, self.in_features), (self.out_features, rank), factor_device)
 
     def _delta(self) -> Tensor:
         return (self.lora_B @ self.lora_A) * self.scaling
@@ -209,13 +209,13 @@ class AdaptedLinear(AdaptedLayer):
 class AdaptedConv2d(AdaptedLayer):
     def __init__(self, original: nn.Conv2d, kind: str = "lora", rank: int = 64, alpha: float = 1.0,
                  policy: str = "classic", dropout: float = 0.0, weight: float = 1.0,
-                 gate: TimestepGate | None = None) -> None:
+                 gate: TimestepGate | None = None, factor_device: str | torch.device | None = None) -> None:
         super().__init__()
         self.in_channels, self.out_channels = original.in_channels, original.out_channels
         self.kernel_size, self.stride, self.padding = original.kernel_size, original.stride, original.padding
         self.dilation, self.groups = original.dilation, original.groups
         self._setup(original, kind, rank, alpha, policy, dropout, weight, gate)
-        self._init_factors((rank, self.in_channels // self.groups, *self.kernel_size), (self.out_channels, rank, 1, 1))
+        self._init_factors((rank, self.in_channels // self.groups, *self.kernel_size), (self.out_channels, rank, 1, 1), factor_device)
 
     def _conv(self, x: Tensor, weight: Tensor, bias: Tensor | None) -> Tensor:
         return F.conv2d(x, weight, bias, self.stride, self.padding, self.dilation, self.groups)

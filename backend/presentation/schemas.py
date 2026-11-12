@@ -651,6 +651,7 @@ class ExecutionSummaryOut(BaseModel):
 class ExecutionOut(ExecutionSummaryOut):
     results: list[NodeResultOut]
     graph: dict[str, Any]
+    memory: dict[str, Any] | None = None
 
 
 class ExecutionRenameIn(BaseModel):
@@ -760,6 +761,7 @@ def execution_out(dto: GraphExecutionDTO) -> ExecutionOut:
             for result in dto.results
         ],
         graph=dict(dto.graph),
+        memory=None if dto.memory is None else dict(dto.memory),
     )
 
 

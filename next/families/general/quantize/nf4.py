@@ -57,6 +57,6 @@ class Nf4Quantizer(FrozenQuantizer):
         return module, module.stored_bytes
 
 
-def quantize_frozen(module: nn.Module, *, backend: str = "auto", device="cpu", min_params: int = 1 << 20, double_quant: bool = False):
+def quantize_frozen(module: nn.Module, *, backend: str = "auto", device="cpu", min_params: int = 1 << 20, double_quant: bool = False, move_to=None):
     """Convert the eligible linear layers of ``module`` to NF4 frozen weights. ``device`` is where it computes (decides ``auto``)."""
-    return Nf4Quantizer(make_nf4_backend(backend, device), min_params, double_quant).run(module)
+    return Nf4Quantizer(make_nf4_backend(backend, device), min_params, double_quant).run(module, move_to)

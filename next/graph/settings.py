@@ -88,6 +88,11 @@ CORE_SETTINGS: tuple[SettingSpec, ...] = (
                 minimum=256, step=256, group="Memory",
                 doc="Most device memory in use on the card, as the driver reports it (other programs included). "
                     "'auto' is the whole card, with head-room kept by the safety margin; a number above the card is refused."),
+    SettingSpec("memory.allocator_mb", "Allocator budget", "float", AUTO, allow_auto=True, unit="MB",
+                minimum=256, step=256, group="Memory", advanced=True,
+                doc="Most this process's allocator may hold (tensors and cached blocks), whatever else the card carries. 'auto' "
+                    "derives it from the VRAM budget minus the memory outside the allocator and the margin. The server sets it "
+                    "from the run's admitted demand; the card's physical limit still applies on top."),
     SettingSpec("memory.margin_mb", "Memory margin", "float", 512, unit="MB", minimum=0, step=64, group="Memory", advanced=True,
                 doc="The one safety margin: memory kept free below the budget for what cannot be predicted (kernels of a new shape, "
                     "driver growth). The allocator cap, the checkpoint tuner, block placement and the planner all use "

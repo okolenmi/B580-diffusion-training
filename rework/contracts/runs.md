@@ -92,6 +92,15 @@ streams until the server restarts; a finished run's curves come from `/execution
 with `{"name": ...}` sets or clears it in any status (404 for an unknown run). It is outside the lifecycle: a rename never races a status change.
 The editor sends the Library name box as the name of a started run and renames on a double-click in the Runs list.
 
+## Memory of a run
+
+`GET /graphs/executions/{id}` carries a `memory` block (null for rows older than the columns): the effective settings, `demand_mb` with
+`demand_source` (`stated`, `observed` or `unknown`) and `reserved_mb`, what the ledger holds for the run. Demand is allocator MB. A stated budget (graph
+setting or `memory_overrides.vram_max_mb`) is honoured as given, even below the observed peak; the observed peak (the engine's high-water mark, which
+survives its per-step counter resets, so the preparation phase counts) plus 150 MB is used only when nothing was stated. The child receives the demand
+as `memory.allocator_mb` (a cap on the allocator) and leaves `memory.vram_max_mb` at the whole card, so the memory outside the allocator and other
+programs are not subtracted from it a second time.
+
 ## Display streams
 
 A node with `MODULES` reports its frames on `node:<uid>`; the monitor boards and the template editor read them there.

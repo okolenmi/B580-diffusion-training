@@ -27,10 +27,13 @@ class MemoryPolicy:
     margin_mb: float = 512.0
     calibration_steps: int = 3
     empty_cache_every: int = 1
+    allocator_mb: float | None = None  # a cap on the allocator itself; the card-wide limit still applies on top
 
     @classmethod
     def from_settings(cls, settings: Any) -> MemoryPolicy:
         limit = settings.get("memory.vram_max_mb")
+        allocator = settings.get("memory.allocator_mb")
         return cls(None if limit in (None, AUTO) else float(limit), float(settings.get("memory.vram_min_mb") or 0),
                    bool(settings.get("memory.strict")), float(settings.get("memory.margin_mb")),
-                   int(settings.get("runtime.residency.calibration_steps")), int(settings.get("runtime.empty_cache_every_n_steps")))
+                   int(settings.get("runtime.residency.calibration_steps")), int(settings.get("runtime.empty_cache_every_n_steps")),
+                   None if allocator in (None, AUTO) else float(allocator))

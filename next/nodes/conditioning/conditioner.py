@@ -100,7 +100,7 @@ class ConditionerNode(Node):
             self.conditioner.cache.retain(universe)
             return
         self.kit.hold = not self.release or not self.conditioner.cache.fits(len(universe))
-        with self.kit.session(), self.context.task("Encoding prompts", total=len(universe)):
+        with self.kit.session(between_steps=True), self.context.task("Encoding prompts", total=len(universe)):
             self.conditioner.on_prompts_changed(event, universe)
         cache = self.conditioner.cache
         if cache.store is not None:

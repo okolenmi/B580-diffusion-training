@@ -65,7 +65,10 @@ class FrozenQuantizer:
             return f"under {self.min_params:,} parameters"
         return self.shape_problem(weight.shape)
 
-    def run(self, module: nn.Module) -> QuantizeReport:
+    def run(self, module: nn.Module, move_to=None) -> QuantizeReport:
+        """``move_to``: the network still waits on the host; each layer goes to that device just before it converts, so
+        the card never holds the dense network, only the converted part and one dense layer. What stays unconverted is
+        left on the host for the caller to move."""
         problem = self.backend.problem()
         if problem is not None:
             raise RuntimeError(f"{self.label} base weights: {problem}")
@@ -79,6 +82,8 @@ class FrozenQuantizer:
                     if why != "already quantized":
                         report.skipped[why] = report.skipped.get(why, 0) + 1
                     continue
+                if move_to is not None:
+                    child.to(move_to)
                 weight = child.base_weight if isinstance(child, AdaptedLinear) else child.weight
                 before = weight.numel() * weight.element_size()
                 if isinstance(child, AdaptedLinear):

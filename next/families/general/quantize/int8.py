@@ -49,6 +49,6 @@ class Int8Quantizer(FrozenQuantizer):
         return module, module.weight_int8.numel() + module.weight_scale.numel() * 4
 
 
-def quantize_frozen(module: nn.Module, *, backend: str = "auto", device="cpu", min_params: int = 1 << 20, grad: str = "dense") -> QuantizeReport:
+def quantize_frozen(module: nn.Module, *, backend: str = "auto", device="cpu", min_params: int = 1 << 20, grad: str = "dense", move_to=None) -> QuantizeReport:
     """Convert the eligible linear layers of ``module`` to int8 frozen weights. ``device`` is where it computes (decides ``auto``)."""
-    return Int8Quantizer(make_backend(backend, device), min_params, grad).run(module)
+    return Int8Quantizer(make_backend(backend, device), min_params, grad).run(module, move_to)

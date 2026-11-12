@@ -152,6 +152,32 @@ def making_room():
     raises(MemoryBudgetExceeded, lambda: m.make_room(6000, "huge"), "refuses when even moving everything movable is not enough", "do not fit")
 
 
+def borrowing_the_model():
+    """Work between steps may send the pinned model to the host when nothing else makes room; nothing else may."""
+    def setup(**kw):
+        device = FakeDevice(ours=6000)
+        model, grads, enc = Blob(device, 5000), Blob(device, 1000), Blob(device, 1500)
+        m = manager(device, limit_mb=7600, margin_mb=0)
+        m.claim("model", model, rank=10, pinned=True, lendable=kw.get("lendable", True), purpose="test")
+        m.claim("gradients", grads, pinned=True, purpose="test")
+        m.start()
+        return device, m, model, grads, enc
+    device, m, model, grads, enc = setup()
+    raises(MemoryBudgetExceeded, lambda: m.make_room(1500, "load the text encoders"), "without borrowing a pinned model stays and the load is refused", "do not fit")
+    moved = m.make_room(1500, "load the text encoders", borrow=True)
+    check(moved == ["model"] and not model.on_device and grads.on_device, f"borrowing sends the lendable model away and nothing else ({moved})")
+    m.restore(moved)
+    check(model.on_device, "the model comes back when the encoders leave")
+    device, m, model, grads, enc = setup(lendable=False)
+    raises(MemoryBudgetExceeded, lambda: m.make_room(1500, "x", borrow=True), "a pinned resident that is not lendable never moves", "do not fit")
+    device, m, model, grads, enc = setup()
+    m.fix_addresses()
+    raises(MemoryBudgetExceeded, lambda: m.make_room(1500, "x", borrow=True), "after a graph is captured the weights stay where the graph recorded them", "do not fit")
+    device, m, model, grads, enc = setup()
+    m.make_room(500, "small", borrow=True)
+    check(model.on_device, "the model is not borrowed when the room exists without it")
+
+
 def room_by_physical_limit():
     """With plenty of card left, making room must not refuse because the safety margin is crossed."""
     device = FakeDevice(total=11930, foreign=4300, ours=5600)
@@ -225,6 +251,18 @@ def cached_blocks_are_not_pressure():
     again.start()
     again.after_step(0)
     check(capped.cache_emptied == 0, "under an allocator cap the cache is not emptied every step: the allocator frees it at the cap")
+
+
+def allocator_budget():
+    """A budget stated for the allocator is the cap itself; the card's physical limit can only lower it."""
+    device = FakeDevice(ours=5000, foreign=1200)
+    m = manager(device, allocator_mb=7000)
+    m.start()
+    check(device.caps == [7000], f"the allocator is capped at its own budget, not at a card limit minus the outside share ({device.caps})")
+    tight = FakeDevice(ours=5000, foreign=6000)
+    t = manager(tight, allocator_mb=9000)
+    t.start()
+    check(tight.caps[-1] < 9000, f"a card that has less to give lowers the cap below the stated budget ({tight.caps})")
 
 
 def allocator_cap():
@@ -466,7 +504,7 @@ def on_demand_encoders():
         moved = ["optimizer"]
         restored: list = []
 
-        def make_room(self, mb, why):
+        def make_room(self, mb, why, borrow=False):
             return self.moved
 
         def restore(self, names):
@@ -768,4 +806,4 @@ def tuned_checkpointing():
 
 
 if __name__ == "__main__":
-    run(limits, pressure, making_room, room_by_physical_limit, one_margin, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_cap, graph_room, out_of_memory_retry, breakdown, attribution, checkpoint_density, on_demand_encoders, sampling, xpu_environment, training, tuned_checkpointing, planning_with_fixed_cost, cache_thrash, measured_placement, measured_checkpointing_in_trainer, deterministic_mode)
+    run(limits, pressure, making_room, borrowing_the_model, room_by_physical_limit, one_margin, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_budget, allocator_cap, graph_room, out_of_memory_retry, breakdown, attribution, checkpoint_density, on_demand_encoders, sampling, xpu_environment, training, tuned_checkpointing, planning_with_fixed_cost, cache_thrash, measured_placement, measured_checkpointing_in_trainer, deterministic_mode)

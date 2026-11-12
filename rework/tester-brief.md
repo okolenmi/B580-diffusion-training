@@ -31,6 +31,9 @@ finished scenarios are kept. Report `accept/verdict.md` (the table as it is) and
    If two runs do run side by side, report each one's step time from the event file against a run alone (`graph_executions/execution_N.events.jsonl`: `step_ms`).
    Stop all runs when done (`POST /api/v1/graphs/executions/{id}/stop`).
 
+## Mission 7: preparation on a tight budget (TESTING 85-87; about 1 hour)
+Repeat Mission 2 steps 3 and 5 with the NF4 graph (batch 1) at budgets 4996, 5716 and 6500, then the native graph at 6302 and 5900. For every run report: status, the first error line if any, and the node lines of the console/log (`allocator peak so far`). Also rerun only the speed suite with more steps for steadier medians: `python -m next.accept run --suites speed --steps 80 ...` (same paths as Mission 1) and report its two FAIL rows.
+
 ## Mission 3: the editor in a browser (TESTING 76, 79, 80, 82, 83; about 1.5 hours)
 Needs Playwright (`pip install playwright && playwright install chromium`); if it cannot be installed, skip the mission and say so. Open
 `http://127.0.0.1:<port>/graph2`, and for each item in `TESTING.md` (read only items 76, 79, 80, 82, 83) do what it says through Playwright and report PASS/FAIL per

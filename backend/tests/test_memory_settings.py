@@ -256,7 +256,7 @@ def test_save_graph_rejects_bad_memory_setting():
 
 
 def test_effective_memory_stated_beats_observed():
-    """Stated beats observed (held = max of the two)."""
+    """A stated budget is honoured as given."""
     settings = MemorySettings(vram_max_mb=8000.0)
     peak_record = {"fp_key": 7000.0}
     result = effective_memory(
@@ -267,13 +267,15 @@ def test_effective_memory_stated_beats_observed():
     assert result.demand_source == "stated"
 
 
-def test_effective_memory_observed_when_higher():
-    """Observed wins when it's higher than stated (with pillow)."""
-    settings = MemorySettings(vram_max_mb=7000.0)
-    peak_record = {"fp_key": 8000.0}
-    result = effective_memory(
-        settings, None, peak_record, "fp_key", 12000.0
-    )
+def test_effective_memory_stated_below_observed_is_honoured():
+    """A stated budget below the observed peak is the person's decision (a training-phase budget); it is not raised."""
+    result = effective_memory(MemorySettings(vram_max_mb=7000.0), None, {"fp_key": 8000.0}, "fp_key", 12000.0)
+    assert result.demand_mb == 7000.0 and result.demand_source == "stated"
+
+
+def test_effective_memory_observed_when_nothing_stated():
+    """With no stated budget the observed peak plus pillow is the demand."""
+    result = effective_memory(MemorySettings(), None, {"fp_key": 8000.0}, "fp_key", 12000.0)
     assert result.demand_mb == 8150.0  # 8000 + 150 pillow
     assert result.demand_source == "observed"
 
@@ -579,7 +581,8 @@ def main() -> None:
         test_run_in_rejects_prose_for_auto,
         test_save_graph_rejects_bad_memory_setting,
         test_effective_memory_stated_beats_observed,
-        test_effective_memory_observed_when_higher,
+        test_effective_memory_stated_below_observed_is_honoured,
+        test_effective_memory_observed_when_nothing_stated,
         test_effective_memory_unknown_uses_capacity,
         test_effective_memory_overrides_win,
         test_effective_memory_no_overrides,

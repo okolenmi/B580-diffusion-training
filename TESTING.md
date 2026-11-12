@@ -187,5 +187,14 @@ In a view (Edit), the tray has a *Note* button: it adds a text block; type somet
 ## 83. Instances in `/graph2`
 Run a graph, then edit the canvas (change a parameter, move a node), start it again and click the *first* run in the Runs list: the canvas should show the graph as it was when that run started (its own parameters and positions), under a blue bar, with Run disabled and the parameter fields and the Graph settings unresponsive. The Monitor and Views should show that run's curves, not the newer run's. "Back to editor" returns your own graph exactly as you left it (a reload while an instance is open must also bring back *your* graph, not the run's). "Copy to editor" makes the run's graph the editable canvas (it asks first when your canvas has content). Report anything that can still be edited in an instance, or any case where your own graph was lost.
 
+## 85. NF4 and int8 preparation on a tight budget
+Run the NF4 graph (batch 1, 512 px) from the backend with `memory_overrides: {"vram_max_mb": 4996}` (what failed in preparation before), once alone and once with 5716. Expected now: no out-of-memory before step 1; the console line of the Inject Adapter node shows `allocator peak so far` well under the old 5716 MB (the dense model is no longer on the card); training reaches steady steps. Then the int8 graph the same way. Report the peak per node line and whether the first step matches the earlier loss curve (the adapter factors are drawn the same way; if the first losses differ from a native run with the same seed, say so).
+
+## 86. Text encoders with a model that fills the card
+Run the native graph through the backend with `vram_max_mb` 6302 and then 5900 (the runs that died at the prompt refresh). Expected: the console/events show a `memory` `evict` record naming `model` as lent, the run starts and trains, and the step time after the first step is the same as with a roomy budget. Report the time the refresh took (the model goes out and back, about a second per 5 GB each way) and any run where it still fails (the message lists where the memory is).
+
+## 87. Observed demand and explicit budgets
+After one finished run, start the same graph with no override: it must not die in preparation any more (its budget is the observed allocator peak plus 150 MB). Then with an override below the observed peak: the run is admitted at that number (`GET /api/v1/graphs/executions/{id}` now has a `memory` block with `demand_source` `stated`) instead of being raised to the observed one. With NF4 started and training steadily, a second run asking its training-phase budget should be admitted when it really fits; report what the ledger says.
+
 ## Reading a bundle automatically
 `python -m next.accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m next.perf hwcheck` without running anything.

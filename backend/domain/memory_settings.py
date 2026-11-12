@@ -169,8 +169,7 @@ class EffectiveMemory:
     strict: bool
     policy: str
     ram_max_mb: float | str
-    #: The demand in allocator MB: stated beats observed (held = max of
-    #: the two, as in `Reservation.held_mb`); observed = recorded peak +
+    #: The demand in allocator MB: stated beats observed; observed = recorded peak +
     #: pillow. The caller that turns a demand into a device claim adds
     #: the per-process overhead (start_graph_execution), which is what
     #: makes this number the allocator's side and not the device's.
@@ -267,8 +266,8 @@ def effective_memory(
 ) -> EffectiveMemory:
     """Compute the effective memory settings for one execution.
 
-    The one place defaults are computed. `stated` beats `observed` (held =
-    max of the two, as in `Reservation.held_mb`); `observed` = recorded
+    The one place defaults are computed. `stated` beats `observed` (a stated
+    number is honoured even below the observed peak); `observed` = recorded
     peak + pillow. Unknown is never a zero claim.
 
     `request_overrides` may carry `vram_min_mb`, `vram_max_mb`, `strict`,
@@ -303,18 +302,14 @@ def effective_memory(
     if fingerprint_key and peak_record and fingerprint_key in peak_record:
         observed_mb = float(peak_record[fingerprint_key]) + pillow_mb
 
-    # Held = max of stated and observed (as in Reservation.held_mb)
+    # A number the person stated is their decision and is honoured, even below what was observed (a budget for the
+    # training phase alone, say); the observed peak only fills in when nothing was stated.
     demand_mb: float | None = None
     demand_source = "unknown"
-    if stated_mb is not None and observed_mb is not None:
-        demand_mb = max(stated_mb, observed_mb)
-        demand_source = "stated" if stated_mb >= observed_mb else "observed"
-    elif stated_mb is not None:
-        demand_mb = stated_mb
-        demand_source = "stated"
+    if stated_mb is not None:
+        demand_mb, demand_source = stated_mb, "stated"
     elif observed_mb is not None:
-        demand_mb = observed_mb
-        demand_source = "observed"
+        demand_mb, demand_source = observed_mb, "observed"
 
     # If demand is unknown, use capacity as an exploratory exclusive
     # claim. A None capacity (no probe reading) leaves the demand None

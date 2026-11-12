@@ -26,6 +26,14 @@ def resolve_dtype(name: str, default: torch.dtype) -> torch.dtype:
     return DTYPES[name]
 
 
+_high_water_mb = 0.0
+
+
+def high_water_mb() -> float:
+    """The most the allocator held in this process at any time, including stretches whose peak counters were reset since."""
+    return _high_water_mb
+
+
 class Accelerator:
     """Synchronize and memory statistics for whichever backend the device uses (all no-ops on the CPU)."""
 
@@ -49,7 +57,11 @@ class Accelerator:
         return None
 
     def reset_peak(self) -> None:
+        global _high_water_mb
         if self.module is not None and hasattr(self.module, "reset_peak_memory_stats"):
+            for name in ("max_memory_allocated", "max_memory_reserved"):
+                if hasattr(self.module, name):
+                    _high_water_mb = max(_high_water_mb, getattr(self.module, name)() / 2**20)
             self.module.reset_peak_memory_stats()
 
     def cap_allocator(self, mb: float) -> bool:

@@ -211,7 +211,7 @@ class DiffusionTrainerNode(Node):
     @staticmethod
     def _claim_memory(residency, model: TrainableDenoiser, optimizer: Optimizer) -> None:
         """Everything that stays on the device for the whole run is claimed first, then the cache is handed back once."""
-        residency.claim("model", model, rank=10, pinned=True,
+        residency.claim("model", model, rank=10, pinned=True, lendable=True,
                         purpose="frozen weights, adapter factors and whatever else the denoiser keeps")
         residency.claim("optimizer", optimizer, rank=1, purpose="optimizer state (moments), one set per adapter factor")
         residency.claim("gradients", optimizer.hold_grads(), pinned=True,
@@ -289,5 +289,6 @@ class DiffusionTrainerNode(Node):
                                             graph_api=xpu if capturable else None, synchronize=accelerator.synchronize,
                                             max_graphs=limit, attentions=attentions, clock=time.perf_counter,
                                             fits=residency.graph_fits if residency is not None else None,
+                                            captured=residency.fix_addresses if residency is not None else None,
                                             used=lambda: accelerator.memory().get("device_used", 0.0),
                                             say=lambda text: self.context.report("graph", {"node": self.uid, "message": text}))

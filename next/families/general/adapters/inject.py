@@ -68,9 +68,12 @@ COMPUTE = ("float32", "activation")
 
 
 def inject(model: nn.Module, plan: AdapterPlan, *, kind: str = "lora", policy: str = "classic",
-           dropout: float = 0.0, gate: TimestepGate | None = None, compute: str = "float32") -> AdaptedPart:
+           dropout: float = 0.0, gate: TimestepGate | None = None, compute: str = "float32",
+           factor_device: str | None = None) -> AdaptedPart:
     """Freeze ``model`` and wrap every planned module. The model is modified in place. ``compute``: "float32" runs the low-rank path in
-    float32, "activation" in the dtype of the activations (see ``AdaptedLayer.compute_in_activation``)."""
+    float32, "activation" in the dtype of the activations (see ``AdaptedLayer.compute_in_activation``). ``factor_device``: where the
+    adapter factors are created and drawn (default: where each layer's weight is); a base model still on the host is wrapped with
+    factors drawn on the device, so the numbers do not depend on where the base waited."""
     if compute not in COMPUTE:
         raise ValueError(f"unknown adapter compute {compute!r}; choose from {COMPUTE}")
     gate = gate or TimestepGate()
@@ -86,7 +89,7 @@ def inject(model: nn.Module, plan: AdapterPlan, *, kind: str = "lora", policy: s
         if cls is None:
             raise TypeError(f"{planned.path} is a {type(original).__name__}; adapters wrap Linear and Conv2d only")
         layer = cls(original, kind=kind, rank=planned.rank, alpha=planned.alpha, policy=policy, dropout=dropout,
-                    weight=planned.weight, gate=gate)
+                    weight=planned.weight, gate=gate, factor_device=factor_device)
         layer.compute_in_activation(compute == "activation")
         setattr(parent, leaf, layer)
         layers[planned.path] = layer

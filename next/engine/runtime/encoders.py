@@ -25,14 +25,18 @@ class OnDemandKit:
         self._depth = 0
         self._on_device = False
         self._moved: list[str] = []
+        self._borrow = False
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._kit, name)
 
     @contextmanager
-    def session(self) -> Iterator[None]:
+    def session(self, between_steps: bool = False) -> Iterator[None]:
         """Encodes inside share one visit; the encoders move to the device at the first encode, so a session whose
-        prompts all come from a cache never loads them."""
+        prompts all come from a cache never loads them. ``between_steps`` says no step is in flight, so the model may
+        step aside for the visit when the encoders fit no other way (it returns when they leave)."""
+        if self._depth == 0:
+            self._borrow = between_steps and not self.hold
         self._depth += 1
         try:
             yield
@@ -44,7 +48,7 @@ class OnDemandKit:
     def _ensure_on_device(self) -> None:
         if not self._on_device:
             if self._residency is not None:
-                self._moved = self._residency.make_room(self._resident.size_bytes() / 2**20, "load the text encoders")
+                self._moved = self._residency.make_room(self._resident.size_bytes() / 2**20, "load the text encoders", borrow=self._borrow)
             self._resident.reload()
             self._on_device = True
 

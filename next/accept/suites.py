@@ -120,8 +120,8 @@ class SuiteBook:
 
     def features(self) -> Suite:
         """Short runs of the options TESTING.md lists one by one: each must start, finish, and say what its item expects."""
-        def run(name, *args):
-            return Scenario(name, args)
+        def run(name, *args, exit_code=0):
+            return Scenario(name, args, exit_code=exit_code)
         int8 = ("--param", "adapter.base_precision=int8")
         splitting = ("--set", "runtime.deterministic=false")  # the runs that test a memory cap need steps that may split; a deterministic run refuses to
         scenarios = [
@@ -130,7 +130,7 @@ class SuiteBook:
             run("blend fixed 0.5", "--set", "blend.strength_min=0.5", "--set", "blend.strength_max=0.5", "--persist-conditioning"),
             run("cap 9216 no prewarm", "--set", "memory.vram_max_mb=9216", "--set", "conditioning.prewarm=false", *splitting),
             run("three settings", "--set", "memory.vram_max_mb=10240", "--set", "trainer.graph=true", "--set", "blend.strength_max=0.5", *splitting),
-            run("setting typo", "--set", "trainr.graph=true"),
+            run("setting typo", "--set", "trainr.graph=true", exit_code=1),
             run("pad zero", "--pad-fill", "zero"),
             run("pad mirror", "--pad-fill", "mirror"),
             run("int8 torch backend", *int8, "--param", "adapter.int8_backend=torch"),

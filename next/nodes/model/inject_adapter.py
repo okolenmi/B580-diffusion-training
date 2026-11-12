@@ -163,8 +163,11 @@ class InjectAdapterNode(Node):
                                        include=parse_list(inputs.get("include", "")),
                                        exclude=parse_list(inputs.get("exclude", "")))
         rank, alpha = inputs.get("rank") or 16, float(inputs.get("alpha") if inputs.get("alpha") is not None else 16.0)
+        precision = inputs.get("base_precision") or "native"
+        # a quantized base is converted layer by layer on the card, so the dense network is never there all at once
+        staged = precision in ("int8", "nf4") and (inputs.get("kind") or "lora") == "lora" and not part.merges and torch.device(device).type != "cpu"
         with self.context.task("Loading the denoiser"):
-            denoiser = family.load_denoiser(part, device=device, dtype=dtype)
+            denoiser = family.load_denoiser(part, device="cpu" if staged else device, dtype=dtype)
         for merge in part.merges:
             with self.context.task(f"Merging {merge.file}"):
                 self._merge(family, denoiser, merge)
@@ -173,20 +176,23 @@ class InjectAdapterNode(Node):
         with self.context.task("Injecting the adapter"):
             adapted = family.inject_denoiser(denoiser, selection, rank=rank, alpha=alpha, kind=kind,
                                              policy=inputs.get("scaling") or "classic", dropout=inputs.get("dropout") or 0.0,
-                                             compute=compute)
+                                             compute=compute, **({'factor_device': device} if staged else {}))
         adapted.up_ratio = float(inputs.get("lora_plus") or 1.0)
         for warning in adapted.plan.warnings:
             self.context.report("warning", {"node": self.uid, "message": warning})
         loaded = self._start_from(family, adapted, inputs.get("init_adapter") or "")
-        precision = inputs.get("base_precision") or "native"
         if precision in ("int8", "nf4"):
             with self.context.task(f"Converting the frozen weights to {precision}"):
                 if precision == "int8":
                     report = family.quantize_frozen(denoiser.module(), backend=inputs.get("int8_backend") or "auto", device=device,
-                                                    min_params=inputs.get("int8_min_params") or 0, grad=inputs.get("int8_grad") or "dense")
+                                                    min_params=inputs.get("int8_min_params") or 0, grad=inputs.get("int8_grad") or "dense",
+                                                    move_to=device if staged else None)
                 else:
                     report = family.quantize_frozen_nf4(denoiser.module(), backend=inputs.get("nf4_backend") or "auto", device=device,
-                                                        min_params=inputs.get("nf4_min_params") or 0, double_quant=bool(inputs.get("nf4_double_quant")))
+                                                        min_params=inputs.get("nf4_min_params") or 0, double_quant=bool(inputs.get("nf4_double_quant")),
+                                                        move_to=device if staged else None)
+                if staged:
+                    denoiser.to(device)  # what stayed unconverted (norms, convolutions, small layers)
             Accelerator(device).empty_cache()  # the dense temporaries of the conversion would otherwise stay cached between live blocks
             self.context.report("quantization", {"node": self.uid, "message": report.summary()})
             if report.backend == "torch" and torch.device(device).type == "xpu":

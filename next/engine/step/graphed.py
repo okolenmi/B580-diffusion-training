@@ -64,13 +64,15 @@ class GraphedCompute(StepPhase):
     def __init__(self, *, eager: list[StepPhase], denoiser: Any, weighting: LossWeighting, balance: Any, optimizer: Any,
                  accumulation: int, graph_api: Any | None, synchronize: Callable[[], None], max_graphs: int = 8,
                  warmup: int = 3, wanted: frozenset | None = None, attentions: list[Callable[[], AbstractContextManager]] | None = None, say: Callable[[str], None] = print,
-                 clock: Callable[[], float] | None = None, fits: Callable[[float, int], bool] | None = None, used: Callable[[], float] | None = None):
+                 clock: Callable[[], float] | None = None, fits: Callable[[float, int], bool] | None = None, used: Callable[[], float] | None = None,
+                 captured: Callable[[], None] | None = None):
         self._eager, self._denoiser, self._weighting, self._balance = eager, denoiser, weighting, balance
         self._optimizer, self._scale, self._api, self._sync = optimizer, 1.0 / accumulation, graph_api, synchronize
         self._max, self._warmup, self._wanted = max_graphs, warmup, wanted  # wanted: (samples, h, w) allowed a graph; None = first come
         self._attentions = attentions or [contextlib.nullcontext]  # tried in order; the first that captures stays
         self._say, self._clock = say, clock  # a clock turns on the check that a graph is faster than eager
         self._fits, self._used = fits, used  # fits(mb, pixels): room for a graph that takes this much and whose pool holds a step of that many latent pixels; used(): device memory in use now
+        self._captured = captured  # told after a capture succeeds: from then on the weights must stay where they are
         self._cost_mb = 400.0  # what the next capture is assumed to take outside the allocator, until one has been measured
         self._slots: dict[tuple, _Slot] = {}
         self._off: set[tuple] = set()
@@ -211,6 +213,8 @@ class GraphedCompute(StepPhase):
             self._cost_mb = max(self._used() - before, 100.0)
         self._optimizer.zero_grad()
         self.captures += 1
+        if self._captured is not None:
+            self._captured()
         self._say(f"[graph] captured shape {key[0]} ({self.captures} graph(s))")
         return True
 

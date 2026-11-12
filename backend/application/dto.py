@@ -67,6 +67,7 @@ class GraphExecutionDTO:
     execution_id: int
     status: GraphStatus
     error: str | None
+    name: str | None
     results: tuple[NodeResult, ...]
     graph: dict  # {"format": 1, "nodes": [...], "edges": [...]}
     created_at: datetime
@@ -82,6 +83,7 @@ class GraphExecutionSummaryDTO:
     execution_id: int
     status: GraphStatus
     error: str | None
+    name: str | None
     created_at: datetime
     updated_at: datetime
     started_at: datetime | None
@@ -96,6 +98,7 @@ def to_execution_dto(execution: GraphExecution) -> GraphExecutionDTO:
         execution_id=execution.id,
         status=execution.status,
         error=execution.error,
+        name=execution.name,
         results=execution.results,
         graph=execution.graph.as_dict(),
         created_at=execution.created_at,
@@ -112,6 +115,7 @@ def to_execution_summary_dto(execution: GraphExecution) -> GraphExecutionSummary
         execution_id=execution.id,
         status=execution.status,
         error=execution.error,
+        name=execution.name,
         created_at=execution.created_at,
         updated_at=execution.updated_at,
         started_at=execution.started_at,

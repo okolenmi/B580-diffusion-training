@@ -47,6 +47,7 @@ from .sweep_execution_scratch import (
 )
 from .save_graph import SaveGraph
 from .start_graph_execution import StartGraphExecution
+from .rename_graph_execution import RenameGraphExecution
 from .stop_graph_execution import StopGraphExecution
 from .subscribe_monitor import SubscribeMonitor
 from .update_config import UpdateConfig
@@ -95,6 +96,7 @@ __all__ = [
     "SweepExecutionScratch",
     "SweepExecutionScratchResult",
     "StartGraphExecution",
+    "RenameGraphExecution",
     "StopGraphExecution",
     "SubscribeMonitor",
     "UpdateConfig",

@@ -41,7 +41,7 @@ export class InstanceView {
     this.runId = detail.execution_id;
     this.doc.readOnly = true;
     this.saver.hold(true);
-    this.title.textContent = `Run #${this.runId} -- a frozen copy of its graph; it cannot be edited`;
+    this.title.textContent = `Run #${this.runId}${detail.name ? " " + detail.name : ""} -- a frozen copy of its graph; it cannot be edited`;
     this.bar.hidden = false;
     this.canvas.fit();
     this.onChange(true);

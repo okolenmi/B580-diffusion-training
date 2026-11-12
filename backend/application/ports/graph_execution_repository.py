@@ -66,6 +66,11 @@ class GraphExecutionRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    def rename(self, execution_id: int, name: str | None) -> bool:
+        """Set (or clear) the run's name; False when there is no such run."""
+        raise NotImplementedError
+
+    @abstractmethod
     def list_planned(self) -> list[GraphExecution]:
         """All ``planned`` rows, oldest first (the scheduler's queue)."""
         raise NotImplementedError

@@ -27,6 +27,7 @@ from ..errors import GraphInvalidError, MemoryUnavailableError
 from ..execution_admission import ExecutionAdmission
 from ..graph_peak_source import PeakSource
 from ..memory_admission import LedgerSource, graph_owner
+from .rename_graph_execution import clean_name
 from ..ports.clock import Clock
 from ..ports.execution_launcher import ExecutionLauncher
 from ..lifecycle_writer import ExecutionLifecycleWriter
@@ -74,6 +75,7 @@ class StartGraphExecution:
         *,
         memory_overrides: dict | None = None,
         mode: str = "auto",
+        name: str | None = None,
     ) -> GraphExecutionSummaryDTO:
         """Admit and launch one run, or plan it (see the module docstring).
 
@@ -95,16 +97,17 @@ class StartGraphExecution:
                     details=[issue_to_dict(issue) for issue in issues],
                 )
             memory = self._admission.memory_for(graph, memory_overrides)
+            name = clean_name(name)
             if mode == "queue" and self._anything_live_or_planned():
-                return self._plan(graph, memory)
+                return self._plan(graph, memory, name)
             if mode != "parallel" and self._executions.list_planned():
-                return self._plan(graph, memory)  # never overtake the line
+                return self._plan(graph, memory, name)  # never overtake the line
             try:
-                return self._launch(graph, memory, planned=None)
+                return self._launch(graph, memory, planned=None, name=name)
             except MemoryUnavailableError as refusal:
                 if mode == "parallel" or not self._admission.worth_waiting(refusal):
                     raise
-                return self._plan(graph, memory)
+                return self._plan(graph, memory, name)
 
     def promote_planned(self) -> int:
         """Start planned rows, oldest first, while the next one is admitted. Returns how many started."""
@@ -132,13 +135,13 @@ class StartGraphExecution:
             "policy": memory.policy, "ram_max_mb": memory.ram_max_mb,
         }
 
-    def _plan(self, graph: GraphDefinition, memory: EffectiveMemory) -> GraphExecutionSummaryDTO:
-        execution = GraphExecution.plan(graph=graph, created_at=self._clock.now(), memory=memory)
+    def _plan(self, graph: GraphDefinition, memory: EffectiveMemory, name: str | None) -> GraphExecutionSummaryDTO:
+        execution = GraphExecution.plan(graph=graph, created_at=self._clock.now(), memory=memory, name=name)
         self._writer.insert(execution)
         return to_execution_summary_dto(execution)
 
     def _launch(
-        self, graph: GraphDefinition, memory: EffectiveMemory, *, planned: GraphExecution | None
+        self, graph: GraphDefinition, memory: EffectiveMemory, *, planned: GraphExecution | None, name: str | None = None
     ) -> GraphExecutionSummaryDTO:
         """Claim, persist (a new row, or the planned one moving to queued) and start the child."""
         claim = self._admission.claim(memory)
@@ -146,7 +149,7 @@ class StartGraphExecution:
         try:
             if planned is None:
                 execution = GraphExecution.create(
-                    graph=graph, created_at=self._clock.now(), memory=memory, reserved_mb=claim.grant.mb
+                    graph=graph, created_at=self._clock.now(), memory=memory, reserved_mb=claim.grant.mb, name=name
                 )
                 self._writer.insert(execution)  # binds id, buffers Queued, announces
             else:

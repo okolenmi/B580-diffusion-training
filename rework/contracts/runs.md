@@ -86,6 +86,12 @@ memory) is answered at once and never planned. Every run's frames are also on `r
 `node:<uid>` and `graph:run` streams carry the most recent start (old pages). The bus keeps the history of every run's
 streams until the server restarts; a finished run's curves come from `/executions/{id}/monitor` after that.
 
+## Run names
+
+`name` (optional, trimmed, at most 80 characters) is part of `POST /graphs/run` and of every execution payload; `PATCH /graphs/executions/{id}`
+with `{"name": ...}` sets or clears it in any status (404 for an unknown run). It is outside the lifecycle: a rename never races a status change.
+The editor sends the Library name box as the name of a started run and renames on a double-click in the Runs list.
+
 ## Display streams
 
 A node with `MODULES` reports its frames on `node:<uid>`; the monitor boards and the template editor read them there.

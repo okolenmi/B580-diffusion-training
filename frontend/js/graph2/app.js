@@ -171,7 +171,7 @@ async function boot() {
   const startRun = () => {
     if (instance.open) return log("This is a frozen run. Copy it to the editor to run it again.", "warn");
     if (!doc.nodes.size) return log("Canvas is empty.", "warn");
-    return runs.run(doc.toJSON(), modeBox.value);
+    return runs.run(doc.toJSON(), modeBox.value, el("lib-name").value.trim() || null);
   };
   const views = new Views(el("views"), doc, live, { onRun: startRun, onStop: () => runs.stop(), onNote: log, execution: () => runs?.current() ?? null });
   el("views-section").addEventListener("toggle", () => views.shown());

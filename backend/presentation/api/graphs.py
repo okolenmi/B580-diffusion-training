@@ -36,6 +36,7 @@ from ..schemas import (
     DiagnosticsOut,
     ExecutionFramesOut,
     ExecutionListOut,
+    ExecutionRenameIn,
     ExecutionStreamsOut,
     ExecutionOut,
     GraphRunIn,
@@ -122,6 +123,7 @@ def run_graph(
                 if body.memory_overrides else None
             ),
             mode=body.mode,
+            name=body.name,
         )
     )
 
@@ -141,6 +143,20 @@ def delete_executions(services: ApplicationServices = Depends(get_services)):
     return DeleteExecutionsOut(
         deleted=services.graphs.delete_executions.execute().deleted
     )
+
+
+@router.patch(
+    "/executions/{execution_id}",
+    response_model=ExecutionSummaryOut,
+    responses={404: _ERROR_404},
+)
+def rename_execution(
+    execution_id: int,
+    body: ExecutionRenameIn,
+    services: ApplicationServices = Depends(get_services),
+):
+    """Name (or, with a blank name, unname) a run; allowed in any status."""
+    return execution_summary_out(services.graphs.rename_execution.execute(execution_id, body.name))
 
 
 @router.get(

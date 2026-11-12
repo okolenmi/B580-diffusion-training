@@ -65,6 +65,7 @@ from .use_cases.reconcile_graph_executions import ReconcileGraphExecutions
 from .use_cases.subscribe_monitor import SubscribeMonitor
 from .use_cases.save_graph import SaveGraph
 from .use_cases.start_graph_execution import StartGraphExecution
+from .use_cases.rename_graph_execution import RenameGraphExecution
 from .use_cases.stop_graph_execution import StopGraphExecution
 from .use_cases.update_config import UpdateConfig
 from .use_cases.update_settings import UpdateSettings
@@ -172,6 +173,7 @@ class GraphServices:
     #: What a run (live or finished) reported to its monitors: the curves of a past run.
     execution_metrics: GetExecutionMetrics
     stop_execution: StopGraphExecution
+    rename_execution: RenameGraphExecution
     delete_executions: DeleteGraphExecutions
     reconcile_executions: ReconcileGraphExecutions
     save_graph: SaveGraph

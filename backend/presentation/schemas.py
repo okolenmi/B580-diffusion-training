@@ -547,6 +547,8 @@ class GraphRunIn(BaseModel):
     #: What a start does when the card has no room: ``parallel`` refuses, ``auto`` plans the run, ``queue`` plans it
     #: whenever anything else lives or waits (``/validate`` ignores it).
     mode: Literal["auto", "parallel", "queue"] = "auto"
+    #: What the run is called in the list (blank: none).
+    name: str | None = Field(default=None, max_length=200)
 
     @model_validator(mode="after")
     def _graph_reads_and_override_stays_in_range(self) -> GraphRunIn:
@@ -639,6 +641,7 @@ class ExecutionSummaryOut(BaseModel):
     execution_id: int
     status: GraphStatus
     error: str | None = None
+    name: str | None = None
     created_at: datetime
     updated_at: datetime
     started_at: datetime | None = None
@@ -648,6 +651,10 @@ class ExecutionSummaryOut(BaseModel):
 class ExecutionOut(ExecutionSummaryOut):
     results: list[NodeResultOut]
     graph: dict[str, Any]
+
+
+class ExecutionRenameIn(BaseModel):
+    name: str | None = Field(default=None, max_length=200)
 
 
 class ExecutionListOut(BaseModel):
@@ -731,6 +738,7 @@ def execution_summary_out(dto: GraphExecutionSummaryDTO) -> ExecutionSummaryOut:
         execution_id=dto.execution_id,
         status=dto.status,
         error=dto.error,
+        name=dto.name,
         created_at=dto.created_at,
         updated_at=dto.updated_at,
         started_at=dto.started_at,

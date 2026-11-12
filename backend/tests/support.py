@@ -106,6 +106,7 @@ from backend.application.use_cases import (
     ReconcileGraphExecutions,
     SaveGraph,
     StartGraphExecution,
+    RenameGraphExecution,
     StopGraphExecution,
     SubscribeMonitor,
     SweepExecutionScratch,
@@ -843,6 +844,7 @@ def build_services(
             list_executions=ListGraphExecutions(executions=graph_executions),
             get_execution=GetGraphExecution(executions=graph_executions),
             execution_metrics=GetExecutionMetrics(executions=graph_executions, metrics=execution_metrics),
+            rename_execution=RenameGraphExecution(executions=graph_executions),
             stop_execution=StopGraphExecution(
                 executions=graph_executions,
                 writer=execution_writer,

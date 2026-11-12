@@ -73,9 +73,9 @@ export class Runs {
   }
 
   /** `mode`: what to do when the card has no room -- "auto" plans the run, "parallel" refuses, "queue" waits its turn. */
-  async run(graph, mode = "auto") {
+  async run(graph, mode = "auto", name = null) {
     try {
-      const exec = await api("/graphs/run", { method: "POST", body: { graph, mode } });
+      const exec = await api("/graphs/run", { method: "POST", body: { graph, mode, name } });
       this.canvas.clearStatuses();
       await this.refresh();
       this.select(exec.execution_id);
@@ -93,6 +93,18 @@ export class Runs {
         this.onNote(errText(err), "error");
       }
       return null;
+    }
+  }
+
+  /** Ask for a new name for a run (empty clears it). */
+  async rename(item) {
+    const answer = window.prompt(`Name for run #${item.execution_id} (empty clears it)`, item.name || "");
+    if (answer === null) return;
+    try {
+      await api(`/graphs/executions/${item.execution_id}`, { method: "PATCH", body: { name: answer } });
+      await this.refresh();
+    } catch (err) {
+      this.onNote(errText(err), "error");
     }
   }
 
@@ -158,7 +170,8 @@ export class Runs {
     for (const e of this.items) {
       const row = document.createElement("div");
       row.className = `exec-row${this.selected === e.execution_id ? " selected" : ""}`;
-      const id = Object.assign(document.createElement("span"), { textContent: `#${e.execution_id}` });
+      const id = Object.assign(document.createElement("span"), { className: "exec-id", textContent: `#${e.execution_id}${e.name ? " " + e.name : ""}`, title: "Double-click to rename" });
+      id.addEventListener("dblclick", (ev) => { ev.stopPropagation(); this.rename(e); });
       const status = Object.assign(document.createElement("span"), { className: `exec-status st-${e.status}`, textContent: e.status + (e.error ? ` -- ${e.error}` : "") });
       const meta = Object.assign(document.createElement("span"), { className: "exec-meta", textContent: ago(e.created_at) });
       row.append(id, status, meta);

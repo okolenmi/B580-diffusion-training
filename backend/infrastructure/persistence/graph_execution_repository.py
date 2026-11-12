@@ -24,7 +24,7 @@ from .sqlite import SqliteDatabase, fits_in_sqlite_int
 
 _COLUMNS = (
     "id, status, graph, results, error, memory_json, reserved_mb, "
-    "created_at, updated_at, started_at, finished_at"
+    "created_at, updated_at, started_at, finished_at, name"
 )
 
 # id is generated; graph is immutable (the submission snapshot).
@@ -69,6 +69,7 @@ def _row_to_execution(row) -> GraphExecution:
         reserved_mb=(
             float(row["reserved_mb"]) if row["reserved_mb"] is not None else None
         ),
+        name=row["name"],
         created_at=_parse_dt(row["created_at"]),  # NOT NULL in schema
         updated_at=_parse_dt(row["updated_at"]),  # NOT NULL in schema
         started_at=_parse_dt(row["started_at"]),
@@ -87,8 +88,8 @@ class SqliteGraphExecutionRepository(GraphExecutionRepository):
             cursor = conn.execute(
                 "INSERT INTO graph_executions "
                 "(status, graph, results, error, memory_json, reserved_mb, "
-                " created_at, updated_at, started_at, finished_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " created_at, updated_at, started_at, finished_at, name) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 self._insert_values(execution),
             )
             execution.assign_id(ExecutionId(cursor.lastrowid))
@@ -112,6 +113,7 @@ class SqliteGraphExecutionRepository(GraphExecutionRepository):
             execution.updated_at.isoformat(),
             execution.started_at.isoformat() if execution.started_at else None,
             execution.finished_at.isoformat() if execution.finished_at else None,
+            execution.name,
         )
 
     @staticmethod
@@ -208,6 +210,11 @@ class SqliteGraphExecutionRepository(GraphExecutionRepository):
                 (GraphStatus.QUEUED.value, GraphStatus.RUNNING.value),
             ).fetchone()
         return _row_to_execution(row) if row else None
+
+    def rename(self, execution_id: int, name: str | None) -> bool:
+        with self._db.connection() as conn:
+            cursor = conn.execute("UPDATE graph_executions SET name = ? WHERE id = ?", (name, execution_id))
+            return cursor.rowcount > 0
 
     def list_planned(self) -> list[GraphExecution]:
         with self._db.connection() as conn:

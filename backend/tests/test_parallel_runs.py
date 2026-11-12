@@ -63,6 +63,20 @@ try:
 except GraphInvalidError:
     check(len(repo.list_planned()) == 3, "an invalid graph is refused before anything is planned")
 
+print("-- names --")
+named = [e for e in repo.list_planned() if e.id == c.execution_id][0]
+check(named.name is None, "a run without a name has none")
+renamed = services.graphs.rename_execution.execute(c.execution_id, "  lr 1e-4 test  ")
+check(renamed.name == "lr 1e-4 test" and repo.get(c.execution_id).name == "lr 1e-4 test", "a name is trimmed and kept")
+check(repo.get(c.execution_id).status is GraphStatus.PLANNED, "renaming does not touch the lifecycle")
+check(services.graphs.rename_execution.execute(c.execution_id, "   ").name is None, "a blank name clears it")
+try:
+    services.graphs.rename_execution.execute(99999, "x")
+    check(False, "renaming an unknown run is refused")
+except Exception as exc:
+    check(type(exc).__name__ == "GraphExecutionNotFoundError", "renaming an unknown run is refused")
+check(start.execute(slow(0.2), memory_overrides=BUDGET, mode="auto", name="from start").name == "from start", "a run can be named when it starts")
+
 print("-- cancel a planned run --")
 cancelled = stop.execute(d.execution_id)
 check(cancelled.status is GraphStatus.STOPPED and not [e for e in repo.list_planned() if e.id == d.execution_id],

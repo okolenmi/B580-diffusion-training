@@ -232,8 +232,14 @@ export class Canvas {
     return toCanvas(box.left + box.width / 2, box.top + box.height / 2, box, this.pan, this.zoom);
   }
 
-  /** Fits the whole graph in the view (the origin when empty). */
+  /** Fits the whole graph in the view (the origin when empty), and once more after the next frame, when cards just
+   * created have their real size. */
   fit() {
+    this._fit();
+    requestAnimationFrame(() => this._fit());
+  }
+
+  _fit() {
     const nodes = [...this.doc.nodes.values()];
     if (!nodes.length) { this.pan = { x: 40, y: 40 }; this.zoom = 1; this._apply(); return; }
     const xs = nodes.map((n) => n.layout.x), ys = nodes.map((n) => n.layout.y);

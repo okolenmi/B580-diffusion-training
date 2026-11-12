@@ -116,11 +116,9 @@ export class Runs {
     this.onSelect(null, false);
   }
 
-  /** Stop (or cancel, when it is still planned) one run: the given one, else the one looked at, else the newest active. */
+  /** Stop (or cancel, when it is still planned) one run: the given one, else what `stopTarget` picks. */
   async stop(id = null) {
-    const active = (n) => ACTIVE.has((this.items.find((e) => e.execution_id === n) || {}).status);
-    let target = id ?? (this.selected !== null && active(this.selected) ? this.selected : null);
-    target ??= this.items.find((e) => ACTIVE.has(e.status))?.execution_id ?? null;
+    const target = id ?? stopTarget(this.items, this.selected);
     if (target === null) return this.onNote("No active run to stop.", "warn");
     try {
       const exec = await api(`/graphs/executions/${target}/stop`, { method: "POST" });
@@ -185,6 +183,20 @@ export class Runs {
       this.root.append(row);
     }
   }
+}
+
+/**
+ * The run the Stop button acts on: the one looked at when it is running, else a running one (the newest), else the one
+ * looked at when it is only planned, else the newest planned. A planned row is usually the one just started and looked
+ * at, so "the selected one" alone would cancel it while the run that holds the card goes on.
+ */
+export function stopTarget(items, selected) {
+  const status = (n) => (items.find((e) => e.execution_id === n) || {}).status;
+  if (selected !== null && status(selected) === "running") return selected;
+  const running = items.find((e) => e.status === "running");
+  if (running) return running.execution_id;
+  if (selected !== null && ACTIVE.has(status(selected))) return selected;
+  return items.find((e) => ACTIVE.has(e.status))?.execution_id ?? null;
 }
 
 export function ago(iso, now = Date.now()) {

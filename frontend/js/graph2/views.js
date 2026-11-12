@@ -253,7 +253,9 @@ export class Views {
       .map((g) => ({ ...g, items: needle ? g.items.filter((i) => `${i.label} ${g.title} ${i.sub}`.toLowerCase().includes(needle)) : g.items }))
       .filter((g) => g.items.length);
     const open = new Map([...this.trayList.querySelectorAll("details")].map((d) => [d.dataset.key, d.open]));
-    this.trayList.replaceChildren(...(groups.length ? groups.map((g) => this.trayGroup(g, open, groups.length, !!needle)) : [h("div", { class: "tpl-tray-empty", text: needle ? "Nothing matches." : "Nothing more to add." })]));
+    const note = h("button", { class: "tpl-tray-item", type: "button", title: "Free text on the page, for whoever uses it", onclick: () => this.board.addNote() },
+      h("span", { text: "Note" }), h("span", { class: "tpl-tray-tag", text: "+" }));
+    this.trayList.replaceChildren(note, ...(groups.length ? groups.map((g) => this.trayGroup(g, open, groups.length, !!needle)) : [h("div", { class: "tpl-tray-empty", text: needle ? "Nothing matches." : "Nothing more to add." })]));
   }
 
   trayGroup(g, open, count, searching) {

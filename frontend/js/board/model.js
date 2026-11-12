@@ -27,12 +27,14 @@ export const GRAPH_STREAM = "graph:run";
 
 /** A stable string for a block's target: used as the "is it placed" key. */
 export function refKey(ref) {
+  if (ref.scope === "note") return `note/${ref.name}`;
   return ref.scope === "graph"
     ? `graph/${ref.kind}/${ref.name}`
     : `node/${ref.node}/${ref.kind}/${ref.name}`;
 }
 
 export const nodeRef = (node, kind, name) => ({ scope: "node", node, kind, name });
+export const noteRef = (name) => ({ scope: "note", kind: "note", name });
 export const graphRef = (kind, name) => ({ scope: "graph", kind, name });
 
 /** A block id not used in `blocks` (ids are [A-Za-z0-9_-]{1,40}). */
@@ -56,6 +58,7 @@ export function emptyDoc(kind, graph = null, columns = 12) {
 /** `{node, descriptor}` for a ref against the modules answer. `descriptor`
     is null when the target is gone; `node` is null for graph scope. */
 export function findTarget(ref, modules) {
+  if (ref.scope === "note") return { node: null, descriptor: { name: ref.name, kind: "note" } };
   if (!modules) return { node: null, descriptor: null };
   if (ref.scope === "graph") {
     const list = ref.kind === "field" ? modules.graph_fields : modules.graph_displays;
@@ -69,6 +72,7 @@ export function findTarget(ref, modules) {
 
 /** Heading and sub-heading of a block. A saved custom title wins. */
 export function titleFor(block, modules) {
+  if (block.ref.scope === "note") return { title: block.title || "Note", subtitle: "Note", defaultTitle: "Note" };
   const { node, descriptor } = findTarget(block.ref, modules);
   const base = descriptor
     ? descriptor.label || descriptor.title || descriptor.name
@@ -165,6 +169,17 @@ export function addBlock(doc, ref, modules) {
   const block = {
     id: newBlockId(doc.blocks), ref, x: 0, y: 0, w, h,
     collapsed: false, title: null, options: {},
+  };
+  return { ...doc, blocks: addAt(doc.blocks, block, doc.columns) };
+}
+
+/** A new empty note: free text on the board (instructions, a reminder), not tied to the graph. */
+export function addNoteBlock(doc) {
+  let n = 1;
+  while (doc.blocks.some((b) => b.ref.scope === "note" && b.ref.name === `note${n}`)) n++;
+  const block = {
+    id: newBlockId(doc.blocks), ref: noteRef(`note${n}`), x: 0, y: 0, w: Math.min(6, doc.columns), h: 2,
+    collapsed: false, title: null, options: { text: "" },
   };
   return { ...doc, blocks: addAt(doc.blocks, block, doc.columns) };
 }

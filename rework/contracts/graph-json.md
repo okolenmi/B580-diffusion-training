@@ -68,7 +68,8 @@ Rules:
 `views` is a list of boards that live in the graph document: `{id, title, mode: "page" | "monitor", columns, blocks}`. A block is
 `{id, ref, x, y, w, h, collapsed, title, options}` (the board's block, `frontend/js/board/model.js`); `ref` is
 `{scope: "node", node: <uid>, kind: "field" | "display", name}` or `{scope: "graph", kind, name}` (a graph setting such as
-`memory.vram_max_mb`, or the run status). A monitor view holds displays only; a page view also holds fields.
+`memory.vram_max_mb`, or the run status), or `{scope: "note", kind: "note", name}` (free text kept in `options.text`, at most 2000 characters;
+no target, so it cannot be orphaned; allowed in both kinds of view). A monitor view holds displays only; a page view also holds fields.
 
 * One truth: a field block edits the node parameter (or setting) of the open graph itself, so the canvas and the page show the
   same value; Run on a page is the editor's Run. No snapshot of the graph is stored in a view.

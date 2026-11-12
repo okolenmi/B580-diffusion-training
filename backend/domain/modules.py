@@ -36,8 +36,8 @@ GRAPH_STREAM = "graph:run"
 
 #: ``ref.scope`` values and ``ref.kind`` values -- the whole addressing
 #: scheme of a block's target.
-SCOPES: tuple[str, ...] = ("node", "graph")
-KINDS: tuple[str, ...] = ("field", "display")
+SCOPES: tuple[str, ...] = ("node", "graph", "note")
+KINDS: tuple[str, ...] = ("field", "display", "note")
 
 
 def run_stream_id(execution_id: int, stream: str) -> str:

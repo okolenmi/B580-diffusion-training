@@ -165,6 +165,10 @@ def _validate_block_ref(block: dict, where: str, problems: list[str]) -> None:
             problems.append(f"{where}.ref.node: a node block needs a node id")
     elif scope == "graph" and node is not None:
         problems.append(f"{where}.ref.node: a graph block has no node")
+    elif scope == "note" and node is not None:
+        problems.append(f"{where}.ref.node: a note has no node")
+    if (scope == "note") != (ref.get("kind") == "note"):
+        problems.append(f"{where}.ref: scope and kind are both \"note\" for a note, and only then")
 
 
 def _validate_block_geometry(

@@ -104,6 +104,14 @@ check(any("graph" in p for p in validate_template_doc({"kind": "template", "bloc
       "a template without a graph snapshot is refused")
 check(validate_template_doc("x") == ["template: must be an object"], "a non-object is refused")
 
+note = {"id": "n1", "ref": {"scope": "note", "kind": "note", "name": "note1"}, "x": 0, "y": 0, "w": 6, "h": 2,
+        "collapsed": False, "title": None, "options": {"text": "Set the learning rate first."}}
+check(validate_template_doc(doc(blocks=[note])) == [], "a note block is a well-formed block")
+check(validate_template_doc(doc(blocks=[{**note, "ref": {**note["ref"], "node": "n1"}}])) != [], "a note has no node")
+check(validate_template_doc(doc(blocks=[{**note, "ref": {**note["ref"], "kind": "display"}}])) != [], "a note's scope and kind go together")
+check(validate_template_doc(doc(blocks=[{**note, "ref": {"scope": "node", "kind": "note", "name": "x", "node": "n1"}}])) != [],
+      "the note kind belongs to the note scope only")
+
 bad = validate_template_doc(doc(blocks=[
     block("a", x=10, w=6),                                   # runs past the grid
     block("a"),                                              # duplicate id

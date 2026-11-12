@@ -31,7 +31,7 @@ import { buildFieldControl } from "./fields.js";
 import {
   cellDelta, columnWidth, effH, flowOrder, keyNudge, moveTo, resizeTo, resolve, setCollapsed,
 } from "./layout.js";
-import { addBlock, findTarget, patchBlock, removeBlock, titleFor } from "./model.js";
+import { addBlock, addNoteBlock, findTarget, patchBlock, removeBlock, titleFor } from "./model.js";
 
 export const ROW_PX = 48;
 export const GAP_PX = 10;
@@ -126,6 +126,7 @@ export class Board {
   setMode(mode) {
     this.mode = mode;
     this.root.classList.toggle("bd-edit", mode === "edit");
+    if (this.doc) this.sync(); // a note is drawn differently in each mode
     this.applyLayout();
     this._updateEmpty();
   }
@@ -147,6 +148,17 @@ export class Board {
     const next = addBlock(this.doc, ref, this.modules);
     if (next === this.doc) return null;
     this.doc.blocks = next.blocks;
+    this.sync();
+    this.onChange("blocks");
+    const added = this.doc.blocks.find((b) => !before.has(b.id)) || null;
+    const entry = added && this.entries.get(added.id);
+    if (entry) entry.el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    return added;
+  }
+
+  addNote() {
+    const before = new Set(this.doc.blocks.map((b) => b.id));
+    this.doc.blocks = addNoteBlock(this.doc).blocks;
     this.sync();
     this.onChange("blocks");
     const added = this.doc.blocks.find((b) => !before.has(b.id)) || null;
@@ -188,6 +200,7 @@ export class Board {
   }
 
   _contentKey(block) {
+    if (block.ref.scope === "note") return `note|${this.mode}`;
     const st = this.statuses[block.id];
     const { node, descriptor } = findTarget(block.ref, this.modules);
     // value/has_value change with every keystroke; they must not rebuild a
@@ -266,6 +279,7 @@ export class Board {
     this._disposeContent(entry);
     entry.contentKey = key;
     const { block } = entry;
+    if (block.ref.scope === "note") { this._buildNote(entry); return; }
     const st = this.statuses[block.id];
     const status = st ? st.status : "ok";
 
@@ -314,6 +328,27 @@ export class Board {
     entry.tick = descriptor.kind === "status";
     entry.body.append(entry.display.el);
     entry.display.update();
+  }
+
+  /** A note is text the person wrote: a textarea while editing the page, plain text (line breaks kept) in use. */
+  _buildNote(entry) {
+    const { block } = entry;
+    const text = (block.options && block.options.text) || "";
+    if (this.mode !== "edit") {
+      entry.body.append(h("div", "bd-note-text", text || " "));
+      return;
+    }
+    const area = h("textarea", "cfg-input bd-note-edit");
+    area.value = text;
+    area.placeholder = "Write a note for whoever uses this page";
+    area.maxLength = 2000;
+    area.addEventListener("input", () => {
+      const current = entry.block;
+      this.doc.blocks = patchBlock(this.doc, current.id, { options: { ...(current.options || {}), text: area.value } }).blocks;
+      entry.block = this.doc.blocks.find((b) => b.id === current.id) || current;
+      this.onChange("blocks");
+    });
+    entry.body.append(area);
   }
 
   /* ---- throttled redraw ------------------------------------------------ */

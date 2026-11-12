@@ -164,3 +164,7 @@
 .tpl-tray-foot { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-dim); }
 .tpl-tray-foot { --ctl-pad: 0.3rem 0.5rem; --ctl-font: 12.5px; }
 .tpl-tray-foot input { width: 70px; }
+
+/* ---- note block ---- */
+.bd-note-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.85rem; line-height: 1.45; padding: 0.25rem 0.1rem; }
+.bd-note-edit { width: 100%; height: 100%; min-height: 3.5rem; resize: none; box-sizing: border-box; }

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  addBlock, autoFill, buildAvailable, defaultSize, docKey, emptyDoc, findTarget,
+  addBlock, addNoteBlock, autoFill, buildAvailable, defaultSize, docKey, emptyDoc, findTarget,
   getFieldValue, graphRef, layoutKey, newBlockId, nodeRef, refKey, removeBlock,
   setFieldValue, statusByBlock, titleFor, toSaveDoc, valuesPayload,
 } from "../js/board/model.js";
@@ -223,4 +223,17 @@ test("toSaveDoc stamps format and normalises optional block fields; statusByBloc
   assert.deepEqual([doc.blocks[0].collapsed, doc.blocks[0].title, doc.blocks[0].options], [false, null, {}]);
   assert.deepEqual(statusByBlock({ blocks: [{ id: "b1", status: "wired" }] }), { b1: "wired" });
   assert.deepEqual(statusByBlock(null), {});
+});
+
+test("a note is a block of its own: no target to lose, a free name each time, text kept in options", () => {
+  let doc = emptyDoc("monitor");
+  doc = addNoteBlock(doc);
+  doc = addNoteBlock(doc);
+  assert.deepEqual(doc.blocks.map((b) => b.ref.name), ["note1", "note2"]);
+  assert.equal(doc.blocks[0].options.text, "");
+  assert.notEqual(refKey(doc.blocks[0].ref), refKey(doc.blocks[1].ref));
+  assert.notEqual(findTarget(doc.blocks[0].ref, null).descriptor, null);
+  assert.equal(titleFor(doc.blocks[0], null).title, "Note");
+  doc = removeBlock(doc, doc.blocks[0].id);
+  assert.equal(addNoteBlock(doc).blocks.filter((b) => b.ref.name === "note1").length, 1);  // the freed name comes back
 });

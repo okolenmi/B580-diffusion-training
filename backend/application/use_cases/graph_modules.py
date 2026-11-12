@@ -170,6 +170,8 @@ class ResolveTemplate:
         ref = block["ref"]
         out = {"id": block["id"], "status": STATUS_OK, "detail": ""}
         kind, name = ref["kind"], ref["name"]
+        if ref["scope"] == "note":
+            return out  # text of its own: nothing it could lose
         if ref["scope"] == "graph":
             known = GRAPH_FIELD_BY_NAME if kind == "field" else GRAPH_DISPLAY_BY_NAME
             if name not in known:

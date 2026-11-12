@@ -32,8 +32,8 @@ export class DraftSaver {
 
   /** While held nothing is kept: the canvas shows something that is not the user's own work (a frozen run). */
   hold(on) {
+    if (on && this._timer) this.flush(); // an edit still waiting for its save must not be lost
     this._held = on;
-    if (on && this._timer) { this.timers.clear(this._timer); this._timer = null; }
   }
 
   notify() {

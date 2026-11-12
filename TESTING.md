@@ -1,6 +1,6 @@
 # To test on the B580
 
-Things written in the sandbox (no XPU) that need hardware. Delete an entry once it passed; if one fails, keep it
+Things written in the sandbox (no XPU) that need hardware. An AI on the PC can run most of them: `rework/tester-brief.md` is its brief. Delete an entry once it passed; if one fails, keep it
 and paste the console lines. Feature background: `next/MANUAL.md`.
 
 ## Everything that can run unattended: one command

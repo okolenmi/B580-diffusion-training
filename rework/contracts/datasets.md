@@ -8,7 +8,7 @@ All routes are under `/api/v1/datasets`; errors use the one envelope.
 
 | Route | Purpose |
 |---|---|
-| `GET /` | `{datasets: [{name, images, bytes, sets: {name: count}, captioned: {channel: count}, orientation: {portrait, square, landscape}, covers: [image id x4], caches: [{vae, files, bytes}]}]}` |
+| `GET /` | `{datasets: [{name, images, bytes, sets: {name: count}, captioned: {channel: count}, orientation: {portrait, square, landscape}, covers: [image id x4], caches: [{vae, label, files, bytes}]}]}` |
 | `POST /` `{name}` | create an empty dataset (201; 409 exists; 422 unusable name) |
 | `DELETE /{name}` | remove the library and its caches, never the image files |
 | `GET /{name}/images?set=&q=&missing=&offset=&limit=` | `{total, items: [{id, path, width, height, bytes, captions: {text, tags, desc}, sets: [names besides all]}]}`, newest first; `q` matches captions and paths; `missing=<channel>` keeps only images without a caption there (422 for an unknown channel) |

@@ -15,7 +15,10 @@ from pathlib import Path
 
 import torch
 
+from ..families.anima.conditioning import AnimaConditioning, AnimaConditioningKit, AnimaTextEncoder, TextEncoding
 from ..families.anima.dit import AnimaDiT, DiTConfig, RotaryEmbedding3D, rotate_split_half
+from ..families.anima.text import QwenConfig, QwenEncoder
+from ..families.anima.tokens import AnimaTokenizer, QWEN_PAD, vocabulary_dir
 from .support import check, run
 
 FIXTURE = Path(__file__).parent / "fixtures" / "anima_headers.json.gz"
@@ -79,5 +82,76 @@ def checkpointing_flags():
     check(len(net.checkpoint_blocks()) == 4, "every block can be chosen one by one")
 
 
+def qwen_matches_file():
+    """Our Qwen3-0.6B has the file's tensors: same names, same shapes, nothing else."""
+    theirs = {k: v[1] for k, v in headers()["qwen_3_06b_base"].items()}
+    with torch.device("meta"):
+        net = QwenEncoder()
+    ours = {k: list(v.shape) for k, v in net.state_dict().items()}
+    check(ours == theirs, f"{len(theirs)} tensors, same names and shapes "
+                          f"(missing {sorted(set(theirs) - set(ours))[:2]}, extra {sorted(set(ours) - set(theirs))[:2]})")
+
+
+class _Words:
+    """A stand-in tokenizer: one Qwen id per character, T5 ids are the character codes mod 100 plus ``</s>``."""
+
+    def tokenize(self, text):
+        return [10 + ord(c) % 50 for c in text] or [0], [2 + ord(c) % 90 for c in text] + [1]
+
+
+def _encoder(batch_size=16):
+    torch.manual_seed(0)
+    cfg = QwenConfig(vocab=100, width=1024, layers=1, heads=2, kv_heads=1, head_dim=64, mlp_width=64)
+    return AnimaTextEncoder(QwenEncoder(cfg), _Words(), out_dtype=torch.float32, tokens=32, batch_size=batch_size)
+
+
+def conditioning_batches():
+    """Prompts of different lengths share a batch of fixed width; blending ends are the pure sides; the adapter output of a
+    padded prompt equals its output when run alone."""
+    enc = _encoder()
+    kit = AnimaConditioningKit(enc)
+    a, b = kit.encode(["a cat", "a very long prompt about a cat"])
+    batch = kit.stack([a, b])
+    check(batch.hidden.shape == (2, 32, 1024) and batch.ids.shape == (2, 32), "every batch has the same width")
+    check(batch.hidden_mask.sum(1).tolist() == [5, 30] and batch.ids_mask.sum(1).tolist() == [6, 31], "masks count the real tokens")
+    check(not batch.hidden[0, 5:].any(), "positions past the prompt are zero")
+    cut = enc.encode_text(["x" * 100])[0]
+    check(cut.hidden.shape[1] == 32 and cut.ids.shape[1] == 32 and cut.ids[0, -1].item() == 1, "a long prompt is cut and still ends in </s>")
+    check(kit.blank().hidden_mask.sum().item() == 1, "the empty prompt is one pad token")
+    # blending
+    mid = a.blend(b, torch.tensor([0.0]))
+    check(torch.equal(mid.hidden, a.hidden) and torch.equal(mid.hidden_mask, a.hidden_mask) and torch.equal(mid.ids, a.ids), "p=0 is the caption")
+    end = a.blend(b, 1.0)
+    check(torch.equal(end.hidden, b.hidden) and torch.equal(end.hidden_mask, b.hidden_mask) and torch.equal(end.ids, b.ids), "p=1 is the partner")
+    half = a.blend(b, 0.4, ["qwen"])
+    check(torch.allclose(half.hidden, 0.6 * a.hidden + 0.4 * b.hidden, atol=1e-6) and torch.equal(half.ids, a.ids), "segments limit the blend")
+    check(a.index(0).hidden.shape == a.hidden.shape and batch.index(1).ids.equal(b.ids), "index picks samples")
+    # batching changes nothing in float32
+    one = [enc.encode_text([p])[0] for p in ("a cat", "a very long prompt about a cat")]
+    many = enc.encode_text(["a cat", "a very long prompt about a cat"])
+    check(all(torch.allclose(x.hidden, y.hidden, atol=1e-5) and torch.equal(x.ids, y.ids) for x, y in zip(one, many)),
+          "batched encoding agrees with one at a time")
+    # the adapter ignores padding
+    torch.manual_seed(1)
+    net = AnimaDiT(DiTConfig(model_channels=96, num_blocks=1, num_heads=2, adapter_blocks=2)).eval()
+    with torch.no_grad():
+        alone = net.encode_text(a.hidden[:, :5], a.ids[:, :6])
+        padded = net.encode_text(batch.hidden, batch.ids, batch.hidden_mask, batch.ids_mask)[:1]
+    check(alone.shape == padded.shape == (1, 512, 1024) and torch.allclose(alone, padded, atol=1e-5), "padding does not change the context")
+
+
+def tokenizer_files():
+    """The real tokenizers, when their vocabulary is at hand (``reference/equivalence_tokens.py`` compares them to Hugging Face)."""
+    try:
+        vocabulary_dir("qwen"), vocabulary_dir("t5")
+    except FileNotFoundError:
+        print("  skipped: no tokenizer vocabulary (set QWEN_TOKENIZER_DIR and T5_TOKENIZER_DIR)")
+        return
+    tok = AnimaTokenizer()
+    qwen, t5 = tok.tokenize("1girl, miku (vocaloid)")
+    check(t5[-1] == 1 and len(qwen) > 5, "booru tags tokenize as plain text")
+    check(tok.tokenize("")[0] == [QWEN_PAD] and tok.tokenize("")[1] == [1], "the empty prompt: one pad token, and </s>")
+
+
 if __name__ == "__main__":
-    run(dit_matches_files, small_forward, rotation, checkpointing_flags)
+    run(dit_matches_files, small_forward, rotation, checkpointing_flags, qwen_matches_file, conditioning_batches, tokenizer_files)

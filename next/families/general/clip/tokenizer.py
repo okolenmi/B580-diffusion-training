@@ -128,13 +128,14 @@ def load_vocabulary(directory: str | os.PathLike) -> tuple[dict[str, int], list[
 
 def default_vocabulary_dir(extra: tuple[str | os.PathLike, ...] = ()) -> Path:
     """First folder holding the vocabulary: ``$CLIP_TOKENIZER_DIR``, then ``extra``, then
-    ``<repo>/assets/clip_tokenizer``, then ``$COMFY_DIR/sd1_tokenizer``."""
+    ``<repo>/assets/clip_tokenizer``, then ``$COMFY_DIR/comfy/sd1_tokenizer`` (a ComfyUI checkout) or ``$COMFY_DIR/sd1_tokenizer``."""
     candidates: list[Path] = []
     if os.environ.get("CLIP_TOKENIZER_DIR"):
         candidates.append(Path(os.environ["CLIP_TOKENIZER_DIR"]))
     candidates.extend(Path(p) for p in extra)
     candidates.append(Path(__file__).resolve().parents[4] / "assets" / "clip_tokenizer")
     if os.environ.get("COMFY_DIR"):
+        candidates.append(Path(os.environ["COMFY_DIR"]) / "comfy" / "sd1_tokenizer")
         candidates.append(Path(os.environ["COMFY_DIR"]) / "sd1_tokenizer")
     for candidate in candidates:
         if (candidate / VOCAB_FILE).is_file():

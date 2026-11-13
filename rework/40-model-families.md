@@ -259,6 +259,21 @@ Test: "does its code mention a family?" If it does, it belongs in the family.
   cannot be finished without reading the open-source reference implementations
   or running on hardware.**
 
+### 7.1 Built so far (phase 8)
+
+Checked key-for-key against the owner's headers (`next/tests/fixtures/anima_headers.json.gz`) and number-for-number against
+ComfyUI's and Hugging Face's code on shared random weights (`next/tests/reference/`):
+
+* `families/anima/dit.py`, `adapter.py`: the transformer (3-D rotary, AdaLN-LoRA, per-block checkpointing) and the text adapter.
+* `text.py`: Qwen3-0.6B (last layer after its final norm; the file's keys under `model.`).
+* `tokens.py`: Qwen byte-level BPE and T5 Unigram through the `tokenizers` package; vocabularies are found through
+  `QWEN_TOKENIZER_DIR` / `T5_TOKENIZER_DIR`, `assets/{qwen,t5}_tokenizer` or a ComfyUI checkout (`$COMFY_DIR/comfy/text_encoders`).
+  Captions are literal text: no emphasis syntax (booru tags carry parentheses), no padding.
+* `conditioning.py`: what is cached per prompt is the adapter's *input* (Qwen hidden states and T5 ids), so the cache does not
+  depend on the DiT file and the adapter, which lives in that file, runs inside each step. A batch is always 512 positions wide
+  with masks (constant shapes for captured step graphs; prompts beyond 512 tokens are cut). Answer to open question 2: the blend
+  acts before the adapter, on Qwen's states; T5 ids cannot be mixed and switch to the partner's at p >= 0.5.
+
 ## 8. Risks
 
 * The old `nodes/model/` stays until the swap, so nothing that imports it breaks
@@ -275,7 +290,7 @@ Test: "does its code mention a family?" If it does, it belongs in the family.
 1. Is `families/` as a top-level package acceptable (it moves a lot of
    `nodes/model/`)?
 2. For Anima, should a blend act on the final adapter output, or on the Qwen
-   hidden states before the adapter? (Needs an experiment; start with final.)
+   hidden states before the adapter? Decided: before (7.1); an experiment can still compare.
 3. Do you want SD 1.5 or Flux stubs created now to test the interface, or only
    SDXL and Anima? Recommendation: only the two, but write the interface tests
    against a fake third family.

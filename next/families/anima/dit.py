@@ -236,9 +236,16 @@ class AnimaDiT(nn.Module):
         out = out.view(b, h // p, w // p, p, p, cfg.out_channels).permute(0, 5, 1, 3, 2, 4)
         return out.reshape(b, cfg.out_channels, h, w)
 
-    def encode_text(self, hidden: Tensor, t5_ids: Tensor) -> Tensor:
-        """The adapter's output for Qwen3 hidden states and T5 token ids, padded to the 512 positions the DiT trains on."""
-        out = self.llm_adapter(hidden, t5_ids)
+    def encode_text(self, hidden: Tensor, t5_ids: Tensor, hidden_mask: Tensor | None = None,
+                    ids_mask: Tensor | None = None) -> Tensor:
+        """The adapter's output for Qwen3 hidden states and T5 token ids, padded to the 512 positions the DiT trains on.
+
+        Masks (1 where a token is real) let prompts of different lengths share a batch; positions past a prompt's own T5
+        tokens come out zero, as when each prompt runs alone and is padded afterwards.
+        """
+        out = self.llm_adapter(hidden, t5_ids, ids_mask, hidden_mask)
+        if ids_mask is not None:
+            out = out * ids_mask.to(out.dtype)[..., None]
         if out.shape[1] < 512:
             out = F.pad(out, (0, 0, 0, 512 - out.shape[1]))
         return out

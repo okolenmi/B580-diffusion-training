@@ -21,7 +21,7 @@ Facts that the old comments recorded and the new code must keep honouring. Measu
 * The input scaling is `x / sqrt(sigma^2 + 1)`.
 
 ## Tokenizer
-* The BPE data (`vocab.json`, `merges.txt`) is not in the repository; it is found through `CLIP_TOKENIZER_DIR`, `assets/clip_tokenizer`, or `$COMFY_DIR/sd1_tokenizer`.
+* The BPE data (`vocab.json`, `merges.txt`) is not in the repository; it is found through `CLIP_TOKENIZER_DIR`, `assets/clip_tokenizer`, or `$COMFY_DIR/comfy/sd1_tokenizer`.
 * The old tokenizer and the new one agree token for token on a synthetic vocabulary here; the real vocabulary comparison is run on the owner's machine (`scripts/compare_tokenizers.py`).
 
 ## Adapters

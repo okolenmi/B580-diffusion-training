@@ -61,7 +61,7 @@ class Trace:
         return sum(1 for _, f in self.frames if f.get("name") == "step_finished")
 
 
-def execute(store: DatasetStore, doc: GraphDoc, stop_after: int | None = None):
+def execute(store: DatasetStore, doc: GraphDoc, stop_after: int | None = None, family=TinyFamily):
     cancel = threading.Event()
     trace = Trace(stop_after, cancel)
     node_trace = NodeTrace(doc, Accelerator("cpu"), None)
@@ -69,7 +69,7 @@ def execute(store: DatasetStore, doc: GraphDoc, stop_after: int | None = None):
                          observer=node_trace)
     with ExitStack() as stack:
         for module in (conditioner, inject_adapter, latents, batching):
-            stack.enter_context(mock.patch.object(module, "get_family", lambda _id: TinyFamily()))
+            stack.enter_context(mock.patch.object(module, "get_family", lambda _id: family()))
         validation = runner.validate(doc)
         outcome = runner.run(doc, cancel)
     return validation, outcome, trace

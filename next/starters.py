@@ -128,9 +128,24 @@ def parse_stages(specs: tuple[str, ...] | list[str]) -> tuple[Stage, ...]:
 
 
 class _SdxlLora:
-    """Builds the SDXL LoRA graph in groups: data, model and optimizer, trainer and saver, then the optional extras."""
+    """Builds the SDXL LoRA graph in groups: data, model and optimizer, trainer and saver, then the optional extras.
+
+    A family with other model files, encoders or objective subclasses it and overrides the hooks below."""
 
     SCHEDULES = {"constant": "ConstantLRNode", "cosine": "CosineLRNode"}
+    LATENT_STEP: dict = {}
+    WEIGHTING = "min_snr"
+    vae_node = "model"
+
+    def _load_models(self) -> None:
+        src_class, src_params = self.source or ("LoadModelNode", {"file": self.model})
+        self.b.add("model", src_class, **src_params)
+
+    def _encoder_wires(self) -> list[tuple[str, str, str, str]]:
+        return [("model", "clip_l", "conditioner", "encoders"), ("model", "clip_g", "conditioner", "encoders")]
+
+    def _noiser_params(self) -> dict:
+        return {}
 
     def __init__(self, model: str, dataset: str, output: str, options: SdxlLoraOptions, source: tuple[str, dict] | None):
         self.o, self.dataset, self.output, self.source, self.model = options, dataset, output, source, model
@@ -151,17 +166,16 @@ class _SdxlLora:
 
     def _data(self) -> None:
         o, b, dataset = self.o, self.b, self.dataset
-        src_class, src_params = self.source or ("LoadModelNode", {"file": self.model})
-        b.add("model", src_class, **src_params)
+        self._load_models()
         b.add("images", "DatasetLibraryNode", dataset=dataset)
-        b.add("latents", "LatentCacheNode", dataset=dataset, base=o.resolution, mode="fit")
+        b.add("latents", "LatentCacheNode", dataset=dataset, base=o.resolution, mode="fit", **self.LATENT_STEP)
         b.add("captions", "CaptionsNode")
         if o.auto_caption:  # fills empty captions in the library first, then the prompts read them
             b.add("autocaption", "AutoCaptionNode", dataset=dataset)
         if o.tag_swap:  # reduces every caption to one random tag per epoch: an experiment, not a default
             b.add("tag_swap", "TagSwapNode")
         b.add("buckets", "BucketerNode", multiple=4, max_shapes=o.max_shapes, batch_area=o.batch_area, pack=o.pack, fill=o.fill, keep_incomplete=True)  # 32 px steps, padded and masked
-        b.add("noiser", "NoiserNode")
+        b.add("noiser", "NoiserNode", **self._noiser_params())
         b.add("batcher", "BatcherNode", batch_size=o.batch_size)
         b.add("blend", "BlendConditioningNode")  # identity until its strength is raised
         b.add("conditioner", "ConditionerNode", persist=o.persist_conditioning, **({"dataset": dataset} if o.persist_conditioning else {}))
@@ -169,12 +183,11 @@ class _SdxlLora:
             else [("images", "images", "captions", "images")]
         if o.tag_swap:
             b.wires.append(("captions", "prompts", "tag_swap", "prompts"))
-        b.wires += [*captioned, ("model", "vae", "latents", "vae"), ("images", "images", "latents", "images"),
+        b.wires += [*captioned, (self.vae_node, "vae", "latents", "vae"), ("images", "images", "latents", "images"),
                     ("latents", "latents", "buckets", "latents"),
                     ("model", "denoiser", "noiser", "denoiser"), ("latents", "latents", "batcher", "latents"),
                     (self.prompts, "prompts", "batcher", "prompts"), ("noiser", "noiser", "batcher", "noiser"),
-                    ("buckets", "buckets", "batcher", "buckets"), ("model", "clip_l", "conditioner", "encoders"),
-                    ("model", "clip_g", "conditioner", "encoders"), (self.prompts, "prompts", "conditioner", "prompts")]
+                    ("buckets", "buckets", "batcher", "buckets"), *self._encoder_wires(), (self.prompts, "prompts", "conditioner", "prompts")]
         b.events.append(("batcher", "prompts_changed", "conditioner", "prompts_changed"))
 
     def _model_and_optimizer(self) -> None:
@@ -189,7 +202,7 @@ class _SdxlLora:
             ends = [sum(stage.steps for stage in self.stages[:i + 1]) for i in range(len(self.stages))]
             b.addon("schedule", "stages", "StagedRateAddon", boundaries=",".join(map(str, ends[:-1])), warmup=o.stage_warmup,
                     ratios=",".join(f"{(stage.lr or o.lr) / o.lr:g}" for stage in self.stages))
-        b.add("weighting", "LossWeightingNode", kind="min_snr")
+        b.add("weighting", "LossWeightingNode", kind=self.WEIGHTING)
         b.wires += [("model", "denoiser", "adapter", "denoiser"), ("adapter", "model", "optimizer", "model")]
 
     def _training_and_saving(self) -> None:
@@ -268,6 +281,44 @@ class _SdxlLora:
                                  f"settings such as memory.vram_max_mb are not node parameters")
 
 
+@dataclass(frozen=True)
+class AnimaLoraOptions(SdxlLoraOptions):
+    """The Anima LoRA starter: SDXL's choices plus the two files Anima keeps apart from the DiT, and the flow objective's."""
+
+    text_encoder: str = ""
+    vae: str = ""
+    sampler: str = "sigmoid"
+    shift: float | None = None
+    max_shapes: int = 16
+
+
+class _AnimaLora(_SdxlLora):
+    """Anima: three files (DiT with its text adapter, Qwen3, VAE), flow matching, latents on a 16 px grid."""
+
+    LATENT_STEP = {"step": 16}
+    WEIGHTING = "uniform"
+    vae_node = "vae"
+
+    def _load_models(self) -> None:
+        b, o = self.b, self.o
+        if self.source:
+            b.add("model", self.source[0], **self.source[1])
+            self.vae_node, self.text_node = "model", "model"
+            return
+        if not (o.text_encoder and o.vae):
+            raise ValueError("the Anima starter needs the text encoder (Qwen3) and VAE files beside the DiT")
+        b.add("model", "LoadModelNode", scope="diffusion_models", file=self.model)
+        b.add("text", "LoadModelNode", scope="text_encoders", file=o.text_encoder)
+        b.add("vae", "LoadModelNode", scope="vae", file=o.vae)
+        self.text_node = "text"
+
+    def _encoder_wires(self) -> list[tuple[str, str, str, str]]:
+        return [(self.text_node, "qwen3", "conditioner", "encoders")]
+
+    def _noiser_params(self) -> dict:
+        return {"mode": self.o.sampler, **({"shift": self.o.shift} if self.o.shift else {})}
+
+
 def sdxl_lora(*, model: str, dataset: str, output: str, settings: dict | None = None, source: tuple[str, dict] | None = None,
               overrides: dict[str, dict] | None = None, **options) -> GraphDoc:
     """SDXL LoRA training: dataset, latent cache, prompts, buckets, conditioner, adapter, optimizer, trainer, saver.
@@ -275,3 +326,11 @@ def sdxl_lora(*, model: str, dataset: str, output: str, settings: dict | None = 
     ``options`` are the fields of ``SdxlLoraOptions``. ``source`` replaces Load Model (tests hand in a stand-in); ``overrides`` sets
     extra parameters by node name."""
     return _SdxlLora(model, dataset, output, SdxlLoraOptions(**options), source).build(settings, overrides)
+
+
+def anima_lora(*, model: str, dataset: str, output: str, settings: dict | None = None, source: tuple[str, dict] | None = None,
+               overrides: dict[str, dict] | None = None, **options) -> GraphDoc:
+    """Anima LoRA training: the SDXL starter's graph with Anima's three model files and its flow-matching noiser.
+
+    ``model`` is the DiT file; ``options`` (``text_encoder``, ``vae`` and the rest of ``AnimaLoraOptions``) as for ``sdxl_lora``."""
+    return _AnimaLora(model, dataset, output, AnimaLoraOptions(**options), source).build(settings, overrides)

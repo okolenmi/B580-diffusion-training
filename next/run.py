@@ -21,7 +21,7 @@ from dataclasses import fields, replace
 from pathlib import Path
 
 from . import starters
-from .starters import SdxlLoraOptions
+from .starters import AnimaLoraOptions, SdxlLoraOptions
 from .console import Console, NodeTrace
 from .data.store import DatasetStore
 from .engine.devices import Accelerator, resolve_device
@@ -109,13 +109,15 @@ DEFAULTS = SdxlLoraOptions()
 
 def _starter(args, settings: list[str], params: list[str]):
     """The starter graph from the command line: every argument whose destination is a field of ``SdxlLoraOptions`` is passed on."""
-    options = {k: v for k, v in vars(args).items() if k in {f.name for f in fields(SdxlLoraOptions)}}
+    anima = args.command == "anima-lora"
+    options = {k: v for k, v in vars(args).items() if k in {f.name for f in fields(AnimaLoraOptions if anima else SdxlLoraOptions)}}
     if options.get("gradient_policy") is None:
         options["gradient_policy"] = "equal" if args.regions > 1 else "mean"
     options["stages"] = tuple(args.stages or ())
     options["lr_regions"] = ",".join(args.lr_regions or ())
     options["steps"] = args.steps if args.steps is not None else (0 if args.epochs else DEFAULTS.steps)
-    return starters.sdxl_lora(model=args.file, dataset=args.dataset, output=args.output, **options,
+    build = starters.anima_lora if anima else starters.sdxl_lora
+    return build(model=args.file, dataset=args.dataset, output=args.output, **options,
                               settings=_settings(settings), overrides=_overrides([*_regions_preset(args.regions), *params, *(args.param or [])]))
 
 
@@ -131,7 +133,7 @@ def _parser() -> argparse.ArgumentParser:
     ingest.add_argument("--datasets", required=True)
     ingest.add_argument("name")
     ingest.add_argument("folder")
-    for name in ("sdxl-lora", "graph"):
+    for name in ("sdxl-lora", "anima-lora", "graph"):
         p = sub.add_parser(name)
         p.add_argument("--models", required=True)
         p.add_argument("--datasets", required=True)
@@ -147,7 +149,13 @@ def _parser() -> argparse.ArgumentParser:
         if name == "graph":
             p.add_argument("graph")
         else:
-            p.add_argument("--file", required=True, help="checkpoint file, relative to the checkpoints folder (or to --models when it has no checkpoints subfolder)")
+            p.add_argument("--file", required=True, help="checkpoint file, relative to the checkpoints folder (or to --models when it has no checkpoints subfolder); "
+                           "for anima-lora the DiT file, relative to the diffusion_models folder")
+            if name == "anima-lora":
+                p.add_argument("--text-encoder", required=True, help="the Qwen3 file, relative to the text_encoders folder")
+                p.add_argument("--vae", required=True, help="the Wan 2.1 / Qwen-Image VAE file, relative to the vae folder")
+                p.add_argument("--sampler", default=AnimaLoraOptions.sampler, choices=("uniform", "sigmoid", "logit_normal", "cosmap"), help="how timesteps are drawn")
+                p.add_argument("--shift", type=float, default=None, help="pushes the drawn timesteps toward noise (default 3.0, the value ComfyUI samples with)")
             p.add_argument("--dataset", required=True)
             p.add_argument("--output", required=True)
             p.add_argument("--name", default=DEFAULTS.name)

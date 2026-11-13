@@ -2,7 +2,7 @@
 
 Status file for the nodes/graph/UI rework. Plans live in this folder, one file per
 domain. **Implemented in `next/`: phases 0 to 5 (graph, families, data, engine, training
-nodes) plus the follow-up ports.** Phase 6 (server and editor) is started: the owner gave the go-ahead 2026-11-07 and slice 1 is built (see the step table). Not started: 7 (views and starters), 8 (Anima), 9 (acceptance and swap). A fresh
+nodes) plus the follow-up ports.** Phase 6 (server and editor) is started: the owner gave the go-ahead 2026-11-07 and slice 1 is built (see the step table). Phase 8 (Anima family) is built and checked on CPU (see `40-model-families.md` 7.1); the owner's hardware checks are TESTING 88-91. Not started: 9 (acceptance and swap). A fresh
 agent (or a session after compaction) starts by reading this file, then
 `90-build-plan.md`, then `TESTING.md` (what is verified on hardware) and the plan it
 is assigned.

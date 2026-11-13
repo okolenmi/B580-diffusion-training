@@ -196,5 +196,17 @@ Run the native graph through the backend with `vram_max_mb` 6302 and then 5900 (
 ## 87. Observed demand and explicit budgets
 After one finished run, start the same graph with no override: it must not die in preparation any more (its budget is the observed allocator peak plus 150 MB). Then with an override below the observed peak: the run is admitted at that number (`GET /api/v1/graphs/executions/{id}` now has a `memory` block with `demand_source` `stated`) instead of being raised to the observed one. With NF4 started and training steadily, a second run asking its training-phase budget should be admitted when it really fits; report what the ledger says.
 
+## 88. Anima: the three files load and the vocabularies are found
+In the editor add three *Load Model* nodes: the Anima DiT (scope diffusion_models), the Qwen3-0.6B file (text_encoders) and the VAE (vae). Expected: the DiT node offers *DiT* and *LLM adapter*, the Qwen3 node *Qwen3*, the VAE node *VAE*. Then run `COMFY_DIR=<your ComfyUI> python -m next.tests.check_anima` (the last check needs the tokenizer folders; without ComfyUI set `QWEN_TOKENIZER_DIR` and `T5_TOKENIZER_DIR`) and, in the ComfyUI venv, `python -m next.tests.reference.equivalence_tokens` (needs `transformers`): it must print `0 differ`. Report anything the detector says about a file (a warning about the 0.7 score is expected for a file without the DiT).
+
+## 89. Anima: one real image through the VAE
+With the real VAE file: encode one picture and decode it back, then look at the result and compare with the same picture through ComfyUI's VAE Encode/Decode (same file). Use `from next.families.registry import get_family`, `codec = get_family("anima").load_vae(part, device="xpu")` (a part from `next.families.api.parts.make_part`) and `codec.save_images(codec.encode(images), "out")`. Expected: a faithful picture, same as ComfyUI's to the eye; report time and peak memory for 1024 px. If the colours or contrast are off, the per-channel latent statistics are the first suspect.
+
+## 90. Anima: the first LoRA run
+`python -m next.run anima-lora --models <folder> --datasets <folder> --file <dit> --text-encoder <qwen3> --vae <vae> --dataset <name> --output <out> --resolution 512 --steps 50 --graph` (and once without `--graph`). Report: the first losses (flow-matching loss of a fresh LoRA starts around 1 to 2 and falls slowly), time per step, peak memory per node line, whether the cache builds (latents at 16 px steps) and whether the saved LoRA loads in ComfyUI on the same Anima model (the key names are `lora_unet_blocks_N_...`; if ComfyUI says keys are not loaded, send the first keys of both). Then 1024 px, batch 1, to see where memory stands.
+
+## 91. Anima: does the trained LoRA do something
+After a few hundred steps on a small dataset, generate with ComfyUI with and without the LoRA on the same seeds and a prompt from the dataset. Report whether the LoRA changes the picture towards the data, and whether the changes look like noise (wrong timestep convention or shift) rather than style. The shift (default 3.0) and the sampler are Noiser parameters if they need changing.
+
 ## Reading a bundle automatically
 `python -m next.accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m next.perf hwcheck` without running anything.

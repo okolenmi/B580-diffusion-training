@@ -273,6 +273,19 @@ ComfyUI's and Hugging Face's code on shared random weights (`next/tests/referenc
   depend on the DiT file and the adapter, which lives in that file, runs inside each step. A batch is always 512 positions wide
   with masks (constant shapes for captured step graphs; prompts beyond 512 tokens are cut). Answer to open question 2: the blend
   acts before the adapter, on Qwen's states; T5 ids cannot be mixed and switch to the partner's at p >= 0.5.
+* `general/vae/wan.py`: the Wan 2.x / Qwen-Image autoencoder for single images. One frame meets only the last temporal slice of
+  every 3-D kernel and the temporal resampling does nothing for a first frame, so it runs as 2-D layers; `to_image_state` converts
+  the file's tensors (the real 3-D network gives the same numbers, `equivalence_wan_vae.py`). Latents are `(z - mean) / std` per
+  channel (`LatentSpec.mean/std`, part of the latent cache identity), images are cut to multiples of 16 px (`LatentSpec.grid`).
+* `objective.py`: rectified flow, velocity target; `shift` (default 3.0, ComfyUI's value) and the sampler (`sigmoid`, `logit_normal`,
+  `uniform`, `cosmap`) are Noiser options, and a timestep range cuts the sampler's distribution on its cumulative probability.
+  `sigma` is the noise-to-signal ratio `s / (1 - s)`, so loss weightings written for it keep their meaning (uniform is the default).
+* `adapters.py`: groups attention (self, cross), feed-forward on by default (280 modules for the base DiT); timestep modulation,
+  embeddings and the text adapter off. Saved as kohya `lora_unet_<path>` keys, which ComfyUI maps onto `diffusion_model.<path>`.
+* `denoiser.py`, `family.py`; the `anima-lora` starter (CLI `python -m next.run anima-lora`, backend starter list) wires three Load
+  Model nodes (DiT, Qwen3, VAE).
+* Not built: block swap (the base DiT is about 4 GB in bf16, so the first runs do not need it; the 40-block file will), the
+  self-perceptual loss tap, previews while training (decode works through the codec).
 
 ## 8. Risks
 

@@ -157,7 +157,7 @@ function mountConsole() {
   const fab = document.getElementById("fconsole-fab");
 
   const state = Object.assign(
-    { w: 440, h: 250, x: null, y: null, min: false },
+    { w: 440, h: 250, x: null, y: null, min: true },
     loadGeometry() || {},
   );
 
@@ -189,7 +189,7 @@ function mountConsole() {
 
   const persist = () => saveGeometry(state);
 
-  /* minimize <-> FAB: the console never disappears, it docks */
+  /* minimize <-> FAB: the console never disappears, it docks. Docked on a first visit so it does not cover the inspector. */
   minBtn.addEventListener("click", () => {
     state.min = true;
     apply();

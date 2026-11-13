@@ -17,7 +17,7 @@ from PIL import Image
 from ..data.batcher import Batcher
 from ..data.ids import vae_identity
 from ..data.images import SizePolicy
-from ..data.latent_cache import CacheMismatch, LatentCache
+from ..data.latent_cache import INDEX, CacheMismatch, LatentCache
 from ..data.library import ImageLibrary, report
 from ..data.noise import Noiser
 from ..data.prompts import CaptionDropout, PromptTable, TagShuffle, TagSwap
@@ -475,6 +475,9 @@ def library_browsing() -> None:
     check(store.cache_report("mine") == [{"vae": "vae1", "label": "", "files": 1, "bytes": 10}], "a cache is listed with its size")
     LatentCache(store.caches("mine"), "vae2", LATENTS, label="SDXL VAE x.safetensors").close()
     check({r["vae"]: r["label"] for r in store.cache_report("mine")} == {"vae1": "", "vae2": "SDXL VAE x.safetensors"}, "a cache is listed by the label of its VAE")
+    (store.caches("mine") / "vae3").mkdir()
+    (store.caches("mine") / "vae3" / INDEX).write_bytes(b"not a database")
+    check({r["vae"]: r["label"] for r in store.cache_report("mine")}["vae3"] == "", "a damaged cache is still listed, so it can be deleted")
     raises(LookupError, lambda: store.delete_cache("mine", "../x"), "a cache name that escapes the folder")
     store.delete_cache("mine", "vae1")
     store.delete("mine")

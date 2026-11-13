@@ -26,6 +26,7 @@ export class LibraryState extends EventTarget {
     this.summary = null;
     this.loading = false;
     this.token = 0;
+    this.stalled = false;
   }
 
   emit(type, detail) { this.dispatchEvent(new CustomEvent(type, { detail })); }
@@ -52,6 +53,7 @@ export class LibraryState extends EventTarget {
   /** First page of the current view; a newer call makes an older one that is still in flight irrelevant. */
   async load() {
     const token = ++this.token;
+    this.stalled = false;
     this.loading = true;
     try {
       const page = await datasets.images(this.name, this.view, { limit: PAGE });
@@ -66,8 +68,11 @@ export class LibraryState extends EventTarget {
     this.emit("items");
   }
 
-  async loadMore() {
-    if (this.loading || this.items.length >= this.total) return;
+  /** The next page. ``retry`` is for a person's own movement (scrolling, arrow keys): after a failed or empty page the layout's
+   *  own top-up must not ask again and again, but moving on is allowed to try once more. */
+  async loadMore(retry = false) {
+    if (retry) this.stalled = false;
+    if (this.loading || this.stalled || this.items.length >= this.total) return;
     const token = this.token;
     this.loading = true;
     try {
@@ -75,10 +80,12 @@ export class LibraryState extends EventTarget {
       if (token !== this.token) return;
       this.items.push(...page.items);
       this.total = page.total;
+      this.stalled = page.items.length === 0;
     } catch (err) {
+      this.stalled = true;
       this.note(errText(err), "error");
     } finally {
-      this.loading = false;
+      if (token === this.token) this.loading = false;
     }
     this.emit("items");
   }
@@ -87,6 +94,7 @@ export class LibraryState extends EventTarget {
   async refresh() {
     await this.refreshSummary();
     const token = ++this.token;
+    this.stalled = false;
     const want = Math.max(this.items.length, PAGE);
     const items = [];
     let total = 0;

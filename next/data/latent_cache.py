@@ -181,6 +181,22 @@ class LatentSet:
         return self.cache.read(self.shards[sample], sample)
 
 
+def cache_label(folder: str | Path) -> str:
+    """The readable name stored with one cache, or "" when it has none or its index cannot be read (a damaged cache must
+    stay listable so it can be deleted)."""
+    index = Path(folder) / INDEX
+    if not index.is_file():
+        return ""
+    try:
+        db = sqlite3.connect(index)
+        try:
+            return dict(db.execute("select key, value from meta")).get("label", "")
+        finally:
+            db.close()
+    except sqlite3.Error:
+        return ""
+
+
 def list_caches(root: str | Path) -> list[CacheInfo]:
     """What a cache folder holds, for the Datasets page: which VAEs have latents, and how big they are."""
     found = []

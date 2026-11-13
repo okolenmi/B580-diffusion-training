@@ -37,7 +37,7 @@ export class Mosaic {
     this.grid.addEventListener("dblclick", (e) => { const id = this.idAt(e); if (id) this.openViewer(id); });
     this.grid.addEventListener("dragstart", (e) => this.dragStart(e));
     this.scroller.addEventListener("keydown", (e) => this.key(e));
-    new IntersectionObserver((entries) => { if (entries.some((x) => x.isIntersecting)) state.loadMore(); }, { root: this.scroller, rootMargin: `${AHEAD}px` }).observe(this.sentinel);
+    new IntersectionObserver((entries) => { if (entries.some((x) => x.isIntersecting)) state.loadMore(true); }, { root: this.scroller, rootMargin: `${AHEAD}px` }).observe(this.sentinel);
 
     let settle = null;
     new ResizeObserver(() => { clearTimeout(settle); settle = setTimeout(() => this.layout(), 120); }).observe(this.grid);
@@ -210,7 +210,7 @@ export class Mosaic {
     if (target === null) return;
     state.select(target, e.shiftKey ? "range" : "only");
     this.tiles.get(target)?.scrollIntoView({ block: "nearest" });
-    if (order.length - order.indexOf(target) < 12) state.loadMore();
+    if (order.length - order.indexOf(target) < 12) state.loadMore(true);
   }
 
   /** The image an arrow key moves to: undefined = not a movement key, null = nowhere to go. Rows are uneven and the

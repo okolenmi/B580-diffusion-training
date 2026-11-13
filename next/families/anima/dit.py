@@ -53,15 +53,16 @@ class RotaryEmbedding3D(nn.Module):
         dim_t = head_dim - 2 * dim_h
         self.dim_h, self.dim_t = dim_h, dim_t
         self.theta = tuple(10000.0 * r ** (d / (d - 2)) for r, d in zip(extrapolation, (dim_h, dim_h, dim_t)))
-        self.register_buffer("range_hw", torch.arange(0, dim_h, 2).float()[: dim_h // 2] / dim_h, persistent=False)
-        self.register_buffer("range_t", torch.arange(0, dim_t, 2).float()[: dim_t // 2] / dim_t, persistent=False)
 
     def angles(self, t: int, h: int, w: int, device) -> Tensor:
         """(t*h*w, head_dim/2) angles, ordered time, height, width along the last dimension."""
         h_theta, w_theta, t_theta = self.theta
-        f_h = 1.0 / (h_theta ** self.range_hw.to(device))
-        f_w = 1.0 / (w_theta ** self.range_hw.to(device))
-        f_t = 1.0 / (t_theta ** self.range_t.to(device))
+        # computed here, not kept as buffers: a network built on the meta device has no way to fill them in
+        range_hw = torch.arange(0, self.dim_h, 2, device=device).float()[: self.dim_h // 2] / self.dim_h
+        range_t = torch.arange(0, self.dim_t, 2, device=device).float()[: self.dim_t // 2] / self.dim_t
+        f_h = 1.0 / (h_theta ** range_hw)
+        f_w = 1.0 / (w_theta ** range_hw)
+        f_t = 1.0 / (t_theta ** range_t)
         pos = lambda n: torch.arange(n, dtype=torch.float32, device=device)  # noqa: E731
         a_t = torch.outer(pos(t), f_t)[:, None, None, :].expand(t, h, w, -1)
         a_h = torch.outer(pos(h), f_h)[None, :, None, :].expand(t, h, w, -1)

@@ -69,11 +69,17 @@ class NoiserNode(Node):
     GROUPS = (Group("objective", "Objective", collapsed=True), Group("timesteps", "Timesteps"),)
     INPUTS = {
         "denoiser": Port("denoiser", DenoiserPart, doc="Tells which family's objective to use."),
-        "parameterization": Port("parameterization", str, required=False, default="eps", choices=("eps", "v"), group="objective"),
+        "parameterization": Port("parameterization", str, required=False, default="eps", choices=("eps", "v"), group="objective",
+                                 doc="SDXL only; flow families (Anima) always predict the velocity."),
         "zero_terminal_snr": Port("zero_terminal_snr", bool, required=False, default=False, group="objective",
                                   doc="Rescale the schedule so the last step is pure noise (v-prediction)."),
+        "shift": Port("shift", float, required=False, default=None, minimum=0.1, group="objective",
+                      doc="Flow families (Anima): pushes the drawn timesteps toward noise; empty = the family's (3.0)."),
+        "scale": Port("scale", float, required=False, default=None, minimum=0.1, group="objective",
+                      doc="Flow families (Anima): spread of the sigmoid / logit_normal sampler; empty = 1."),
         "mode": Port("mode", str, required=False, default="uniform", group="timesteps",
-                     choices=("uniform", "low", "mid", "high", "logit")),
+                     choices=("uniform", "low", "mid", "high", "logit", "sigmoid", "logit_normal", "cosmap"),
+                     doc="SDXL: uniform, low, mid, high, logit. Flow families (Anima): uniform, sigmoid, logit_normal, cosmap."),
         "low": Port("low", float, required=False, default=None, group="timesteps", doc="Smallest timestep; empty = objective's."),
         "high": Port("high", float, required=False, default=None, group="timesteps", doc="Largest timestep; empty = objective's."),
         "balance": Port("balance", TimeBalance, required=False, doc="Steers the draw towards the thirds of the range that are behind."),
@@ -96,7 +102,9 @@ class NoiserNode(Node):
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
         family = get_family(inputs["denoiser"].family_id)
-        objective = family.objective(inputs.get("parameterization") or "eps", bool(inputs.get("zero_terminal_snr")))
+        given = {"parameterization": inputs.get("parameterization") or "eps", "zero_terminal_snr": bool(inputs.get("zero_terminal_snr")),
+                 "shift": inputs.get("shift"), "scale": inputs.get("scale")}
+        objective = family.objective(**{name: given[name] for name in family.objective.OPTIONS})
         values = tuple(float(v) for v in (inputs.get("values") or "").split(",") if v.strip())
         policy = TimestepPolicy(inputs.get("mode") or "uniform", inputs.get("low"), inputs.get("high"), values,
                                 regions=inputs.get("regions") or 1, layout=inputs.get("layout") or "even",

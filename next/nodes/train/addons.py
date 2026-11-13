@@ -123,7 +123,8 @@ class _Perceptual(ModelBound):
 
     def attach(self, model: TrainableDenoiser, batches: Any) -> SelfPerceptualLoss:
         objective = batches.noiser.objective
-        if objective.process.parameterization.name != "eps":
+        process = getattr(objective, "process", None)
+        if process is None or process.parameterization.name != "eps":
             raise ValueError("the self-perceptual loss is defined for eps prediction")
         return SelfPerceptualLoss(SelfPerceptual(model.denoiser, objective, model.gate), self.weight)
 

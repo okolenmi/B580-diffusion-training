@@ -13,6 +13,7 @@ from ..general.schedules.timesteps import MODES as TIMESTEP_MODES, sample_timest
 class SDXLObjective:
     """Scaled-linear schedule with eps or v prediction; ``zero_terminal_snr`` rescales the schedule (v only)."""
 
+    OPTIONS = ("parameterization", "zero_terminal_snr")
     parameterizations = tuple(PARAMETERIZATIONS)
     timestep_modes = TIMESTEP_MODES
     steps = 1000

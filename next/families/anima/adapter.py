@@ -21,11 +21,11 @@ def _rotate_half(x: Tensor) -> Tensor:
 class _Rotary(nn.Module):
     def __init__(self, head_dim: int):
         super().__init__()
-        inv = 1.0 / (10000 ** (torch.arange(0, head_dim, 2, dtype=torch.int64).float() / head_dim))
-        self.register_buffer("inv_freq", inv, persistent=False)
+        self.head_dim = head_dim
 
     def forward(self, length: int, device, dtype) -> tuple[Tensor, Tensor]:
-        freqs = torch.outer(torch.arange(length, device=device, dtype=torch.float32), self.inv_freq.to(device))
+        inv = 1.0 / (10000 ** (torch.arange(0, self.head_dim, 2, device=device).float() / self.head_dim))
+        freqs = torch.outer(torch.arange(length, device=device, dtype=torch.float32), inv)
         emb = torch.cat([freqs, freqs], dim=-1)
         return emb.cos().to(dtype)[None], emb.sin().to(dtype)[None]
 

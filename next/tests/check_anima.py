@@ -15,11 +15,27 @@ from pathlib import Path
 
 import torch
 
+import tempfile
+
+from safetensors.torch import save_file
+
+from ..families.anima import adapters as anima_adapters
 from ..families.anima.conditioning import AnimaConditioning, AnimaConditioningKit, AnimaTextEncoder, TextEncoding
 from ..families.anima.dit import AnimaDiT, DiTConfig, RotaryEmbedding3D, rotate_split_half
+from ..families.anima.denoiser import load_denoiser
+from ..families.anima.latents import LATENTS
+from ..families.anima.objective import AnimaObjective
 from ..families.anima.text import QwenConfig, QwenEncoder
 from ..families.anima.tokens import AnimaTokenizer, QWEN_PAD, vocabulary_dir
-from .support import check, run
+from ..data.ids import spec_fields
+from ..families.api.adapters import TrainableSelection, descriptors_from_shapes, plan_adapter
+
+from ..families.api.parts import ModelPart, PartInfo, PartKind, PartSource
+from ..families.general.adapters.inject import descriptors_from_model, inject
+from ..families.general.vae.codec import LatentSpec, VAECodec
+from ..families.general.vae.wan import WanImageVAE, to_image_state
+from ..families.sdxl.latents import LATENTS as SDXL_LATENTS
+from .support import check, raises, run
 
 FIXTURE = Path(__file__).parent / "fixtures" / "anima_headers.json.gz"
 FILE_ONLY = ("net.pos_embedder.",)  # buffers some files carry; ours are computed
@@ -153,5 +169,86 @@ def tokenizer_files():
     check(tok.tokenize("")[0] == [QWEN_PAD] and tok.tokenize("")[1] == [1], "the empty prompt: one pad token, and </s>")
 
 
+def vae_matches_file():
+    """The file's video tensors become exactly the single-image network's tensors (time convolutions dropped)."""
+    theirs = {k: tuple(v[1]) for k, v in headers()["qwen_image_vae"].items()}
+    folded = to_image_state({k: torch.empty(shape, device="meta") for k, shape in theirs.items()})
+    with torch.device("meta"):
+        net = WanImageVAE(dim=96)
+    ours = {k: tuple(v.shape) for k, v in net.state_dict().items()}
+    check({k: tuple(v.shape) for k, v in folded.items()} == ours, f"{len(ours)} tensors of {len(theirs)} in the file (the rest are time convolutions)")
+
+
+def latent_codec():
+    """Latents are normalised per channel and come back; the cache identity sees the statistics and SDXL's stays as it was."""
+    torch.manual_seed(0)
+    net = WanImageVAE(dim=8, mult=(1, 2, 2, 2), blocks=1)
+    codec = VAECodec(net, LATENTS, "cpu", torch.float32)
+    image = torch.rand(1, 3, 32, 32)
+    z = codec.encode(image)
+    raw = net.encode(image * 2 - 1)
+    mean, std = torch.tensor(LATENTS.mean).view(1, -1, 1, 1), torch.tensor(LATENTS.std).view(1, -1, 1, 1)
+    check(z.shape == (1, 16, 4, 4) and torch.allclose(z, (raw - mean) / std, atol=1e-6), "encode subtracts the mean and divides by the spread")
+    check(torch.allclose(codec.model.decode(z * std + mean), codec.model.decode(raw), atol=1e-5) and codec.decode(z).shape == (1, 3, 32, 32),
+          "decode undoes it")
+    check(set(spec_fields(LATENTS)) >= {"mean", "std"} and set(spec_fields(SDXL_LATENTS)) == {"channels", "spatial_factor", "scale", "shift"},
+          "the cache identity holds the statistics; SDXL's did not change")
+    check(LATENTS.pixel_multiple == 16 and SDXL_LATENTS.pixel_multiple == 8, "Anima images are cut to multiples of 16 px")
+
+
+def flow_objective():
+    """Samples lie in the asked range, the velocity target inverts to the clean latent, sigma is noise over signal."""
+    objective = AnimaObjective()
+    g = torch.Generator().manual_seed(0)
+    for mode in objective.timestep_modes:
+        t = objective.sample_t(500, mode, 0.2, 0.6, g)
+        check(0.2 <= t.min() and t.max() <= 0.6, f"{mode}: draws stay inside [0.2, 0.6]")
+    x0, noise, t = torch.randn(3, 16, 4, 4), torch.randn(3, 16, 4, 4), torch.tensor([0.1, 0.5, 0.9])
+    x_t, target, sigma = objective.noisy(x0, noise, t)
+    check(torch.equal(target, noise - x0) and torch.allclose(sigma, t / (1 - t)), "target is noise - x0; sigma is s / (1 - s)")
+    check(torch.allclose(objective.to_x0(target, x_t, sigma), x0, atol=1e-5), "the true velocity gives back x0")
+    check(AnimaObjective().sample_t(2000, "sigmoid", 0.0, 1.0, g).mean() > AnimaObjective(shift=1.0).sample_t(2000, "sigmoid", 0.0, 1.0, g).mean(),
+          "a larger shift moves the draws toward noise")
+    raises(ValueError, lambda: AnimaObjective(shift=0), "a zero shift is refused")
+
+
+def adapter_plan_and_loading():
+    """The plan from the real file's key names equals the plan from the model; LoRA keys are the kohya ones ComfyUI reads; a file
+    written from a small network loads back strictly and predicts the same."""
+    theirs = {k: tuple(v[1]) for k, v in headers()["anima_baseV10"].items()}
+    with torch.device("meta"):
+        full = AnimaDiT(DiTConfig())
+    layout = anima_adapters.LAYOUT
+    from_file = plan_adapter(layout, descriptors_from_shapes(theirs, "net."), TrainableSelection(), 16, 16)
+    from_model = plan_adapter(layout, descriptors_from_model(full), TrainableSelection(), 16, 16)
+    by_path = lambda plan: sorted(plan.modules, key=lambda m: m.path)  # noqa: E731  (a file lists its keys alphabetically)
+    check(by_path(from_file) == by_path(from_model) and len(from_model.modules) == 280, f"default plan: 280 modules in 28 blocks ({len(from_model.modules)})")
+    check(not any(m.path.startswith("llm_adapter") for m in from_model.modules), "the text adapter stays untrained by default")
+    everything = plan_adapter(layout, descriptors_from_model(full), TrainableSelection(groups=tuple(g.name for g in layout.groups())), 16, 16)
+    check(len(everything.modules) > len(from_model.modules) + 6 * 10, "every group can be chosen")
+
+    torch.manual_seed(0)
+    cfg = DiTConfig(model_channels=96, num_blocks=2, num_heads=2, adapter_blocks=2)
+    source = AnimaDiT(cfg).eval()
+    with tempfile.TemporaryDirectory() as tmp:
+        path = f"{tmp}/dit.safetensors"
+        save_file({f"net.{k}": v.contiguous() for k, v in source.state_dict().items()} | {"net.pos_embedder.seq": torch.arange(4.0)}, path)
+        info = PartInfo(PartKind.DENOISER, "denoiser", "net.", 1, "F32", 0, {"blocks": 2, "width": 96, "adapter_blocks": 2})
+        part = ModelPart("anima", "denoiser", PartSource(path, "net."), info, "auto")
+        denoiser = load_denoiser(part, dtype=torch.float32, config=cfg)
+    kit = AnimaConditioningKit(_encoder())
+    cond = kit.stack(kit.encode(["a cat", "a dog on a long road"]))
+    x, t = torch.randn(2, 16, 8, 8), torch.tensor([0.3, 0.7])
+    with torch.no_grad():
+        check(torch.allclose(denoiser.predict(x, t, cond), source(x, t, source.encode_text(cond.hidden, cond.ids, cond.hidden_mask, cond.ids_mask)), atol=1e-6),
+              "a loaded DiT predicts like the one it was saved from")
+    part_ = anima_adapters.inject_denoiser(denoiser, TrainableSelection(), rank=4, alpha=4)
+    keys = set(anima_adapters.SCHEMES["kohya"].export(part_))
+    check("lora_unet_blocks_0_self_attn_q_proj.lora_down.weight" in keys and "lora_unet_blocks_1_mlp_layer2.alpha" in keys,
+          "LoRA keys are lora_unet_<path with underscores>")
+    check(not any("llm_adapter" in k for k in keys), "nothing of the text adapter is written")
+
+
 if __name__ == "__main__":
-    run(dit_matches_files, small_forward, rotation, checkpointing_flags, qwen_matches_file, conditioning_batches, tokenizer_files)
+    run(dit_matches_files, small_forward, rotation, checkpointing_flags, qwen_matches_file, conditioning_batches, tokenizer_files,
+        vae_matches_file, latent_codec, flow_objective, adapter_plan_and_loading)

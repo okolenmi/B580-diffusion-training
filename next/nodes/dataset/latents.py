@@ -53,8 +53,10 @@ class LatentCacheNode(Node):
         spec = family.latent_spec
         policy = SizePolicy(base=inputs.get("base") or 1024, mode=inputs.get("mode") or "fit",
                             multiple=int(inputs.get("step") or 8), max_aspect=inputs.get("max_aspect") or 2.0)
-        if policy.multiple % int(spec.spatial_factor):
-            raise ValueError(f"Latent Cache: step {policy.multiple} must be a multiple of the VAE's factor {spec.spatial_factor}")
+        required = int(getattr(spec, "pixel_multiple", spec.spatial_factor))
+        if policy.multiple % required:
+            raise ValueError(f"Latent Cache: step {policy.multiple} must be a multiple of {required} for {part.family_id} "
+                             f"(the VAE's factor {spec.spatial_factor} times the network's patch grid); set step to {required}")
         images: ImageSet = inputs["images"]
         header = read_header(part.source.path)
         identity = vae_identity(header, part.source.prefix, spec)

@@ -22,6 +22,14 @@ class LatentSpec:
     spatial_factor: int
     scale: float
     shift: float = 0.0
+    mean: tuple[float, ...] = ()   # per-channel offset and spread, applied after shift and scale when given
+    std: tuple[float, ...] = ()
+    grid: int = 1                  # the network needs latent sides divisible by this (a transformer's patch size)
+
+    @property
+    def pixel_multiple(self) -> int:
+        """Images must be cut to a multiple of this many pixels."""
+        return self.spatial_factor * self.grid
 
     def noise_shape(self, height: int, width: int, batch: int = 1) -> tuple[int, ...]:
         return (batch, self.channels, height // self.spatial_factor, width // self.spatial_factor)
@@ -47,18 +55,28 @@ class VAECodec:
                              f"(e.g. {result.unexpected_keys[:2]})")
         return cls(model, spec, device, dtype)
 
+    @staticmethod
+    def _channels(values: tuple[float, ...], like: Tensor) -> Tensor:
+        return torch.tensor(values, device=like.device, dtype=like.dtype).view(1, -1, 1, 1)
+
     @torch.no_grad()
     def encode(self, images: Tensor) -> Tensor:
         """Images (B,3,H,W) as float in [0,1] or uint8 -> scaled latents on the codec's device."""
         if images.dtype == torch.uint8:
             images = images.float() / 255.0
         raw = self.model.encode(images.to(self.device, self.dtype) * 2.0 - 1.0)
-        return (raw - self.spec.shift) * self.spec.scale
+        latents = (raw - self.spec.shift) * self.spec.scale
+        if self.spec.mean:
+            latents = (latents - self._channels(self.spec.mean, latents)) / self._channels(self.spec.std, latents)
+        return latents
 
     @torch.no_grad()
     def decode(self, latents: Tensor) -> Tensor:
         """Scaled latents -> uint8 images (B,3,H,W) on the CPU."""
-        raw = latents.to(self.device, self.dtype) / self.spec.scale + self.spec.shift
+        latents = latents.to(self.device, self.dtype)
+        if self.spec.mean:
+            latents = latents * self._channels(self.spec.std, latents) + self._channels(self.spec.mean, latents)
+        raw = latents / self.spec.scale + self.spec.shift
         pixels = self.model.decode(raw).float().clamp(-1, 1)
         return ((pixels + 1.0) / 2.0 * 255.0).round().to(torch.uint8).cpu()
 

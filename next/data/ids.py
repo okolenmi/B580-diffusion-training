@@ -33,8 +33,11 @@ def image_of(sample: str) -> str:
 
 def spec_fields(spec: Any) -> dict:
     """The part of a latent spec that decides whether two caches are interchangeable."""
-    return {"channels": int(spec.channels), "spatial_factor": int(spec.spatial_factor),
-            "scale": float(spec.scale), "shift": float(getattr(spec, "shift", 0.0))}
+    fields = {"channels": int(spec.channels), "spatial_factor": int(spec.spatial_factor),
+              "scale": float(spec.scale), "shift": float(getattr(spec, "shift", 0.0))}
+    if getattr(spec, "mean", ()):
+        fields["mean"], fields["std"] = [float(v) for v in spec.mean], [float(v) for v in spec.std]
+    return fields
 
 
 def vae_identity(header: HeaderIndex, prefix: str, spec: Any, probes: int = 3) -> str:

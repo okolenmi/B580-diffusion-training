@@ -23,19 +23,43 @@ def shift_sigma(s: Tensor, shift: float) -> Tensor:
     return shift * s / (1.0 + (shift - 1.0) * s)
 
 
+def unshift_sigma(s: Tensor, shift: float) -> Tensor:
+    """Inverse of ``shift_sigma``."""
+    if shift == 1.0:
+        return s
+    return s / (shift - (shift - 1.0) * s)
+
+
+def _cdf(mode: str, p: Tensor, scale: float) -> Tensor:
+    """Probability that the sampler's draw (before the shift) is at most ``p``."""
+    if mode == "uniform":
+        return p
+    if mode in ("sigmoid", "logit_normal"):
+        return torch.special.ndtr(torch.logit(p.clamp(0.0, 1.0), eps=None) / scale)
+    return (2.0 / math.pi) * torch.atan(1.0 / (1.0 - p) - 1.0)
+
+
+def _quantile(mode: str, u: Tensor, scale: float) -> Tensor:
+    if mode == "uniform":
+        return u
+    if mode in ("sigmoid", "logit_normal"):
+        return torch.sigmoid(torch.special.ndtri(u) * scale)
+    return 1.0 - 1.0 / (torch.tan(math.pi * u / 2.0) + 1.0)
+
+
 def sample_sigma(n: int, mode: str = "sigmoid", *, shift: float = 1.0, scale: float = 1.0,
-                 generator: torch.Generator | None = None, device="cpu") -> Tensor:
-    """Draw ``n`` flow positions in (0, 1)."""
+                 generator: torch.Generator | None = None, device="cpu", low: float = 0.0, high: float = 1.0) -> Tensor:
+    """Draw ``n`` flow positions in (0, 1), from the sampler's distribution cut to ``[low, high]`` (after the shift).
+
+    The cut is made on the cumulative probability, so the shape of the distribution inside the range is kept."""
     if mode not in SAMPLERS:
         raise ValueError(f"unknown flow sampler {mode!r}; choose from {SAMPLERS}")
-    if mode == "uniform":
-        s = torch.rand(n, generator=generator, device=device)
-    elif mode in ("sigmoid", "logit_normal"):
-        s = torch.sigmoid(torch.randn(n, generator=generator, device=device) * scale)
-    else:
-        u = torch.rand(n, generator=generator, device=device)
-        s = 1.0 - 1.0 / (torch.tan(math.pi * u / 2.0) + 1.0)
-    return shift_sigma(s, shift).clamp(1e-5, 1.0 - 1e-5)
+    edges = unshift_sigma(torch.tensor([low, high], dtype=torch.float64).clamp(0.0, 1.0), shift)
+    u_low, u_high = (_cdf(mode, p, scale).item() for p in edges)
+    tiny = 1e-7
+    u = u_low + torch.rand(n, generator=generator, device=device) * (u_high - u_low)
+    s = shift_sigma(_quantile(mode, u.clamp(tiny, 1.0 - tiny), scale), shift)
+    return s.clamp(max(low, 1e-5), min(high, 1.0 - 1e-5))
 
 
 def noisy(x0: Tensor, noise: Tensor, s: Tensor) -> tuple[Tensor, Tensor]:

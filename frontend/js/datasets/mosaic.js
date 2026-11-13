@@ -10,6 +10,7 @@ import { ColumnPacker, inset, readingOrder } from "./packing.js";
 
 const THUMB = 384;
 const GAP = 6;
+const AHEAD = 800; // how far below the visible part pictures are already loaded
 export const DRAG_TYPE = "application/x-dataset-images";
 
 export class Mosaic {
@@ -36,7 +37,7 @@ export class Mosaic {
     this.grid.addEventListener("dblclick", (e) => { const id = this.idAt(e); if (id) this.openViewer(id); });
     this.grid.addEventListener("dragstart", (e) => this.dragStart(e));
     this.scroller.addEventListener("keydown", (e) => this.key(e));
-    new IntersectionObserver((entries) => { if (entries.some((x) => x.isIntersecting)) state.loadMore(); }, { root: this.scroller, rootMargin: "800px" }).observe(this.sentinel);
+    new IntersectionObserver((entries) => { if (entries.some((x) => x.isIntersecting)) state.loadMore(); }, { root: this.scroller, rootMargin: `${AHEAD}px` }).observe(this.sentinel);
 
     let settle = null;
     new ResizeObserver(() => { clearTimeout(settle); settle = setTimeout(() => this.layout(), 120); }).observe(this.grid);
@@ -75,6 +76,14 @@ export class Mosaic {
     });
     this.grid.style.height = `${Math.ceil(result.height)}px`;
     this.state.display = result.order.map((n) => items[n].id);
+    this.topUp();
+  }
+
+  /** The observer on the sentinel only speaks when it *enters* the loading zone, so a page that does not fill a tall window
+   *  (or a layout that got shorter) would stop loading; every layout checks the zone itself. */
+  topUp() {
+    const s = this.scroller;
+    if (s.scrollHeight - s.scrollTop - s.clientHeight < AHEAD) this.state.loadMore();
   }
 
   items() { return this.state.items; }

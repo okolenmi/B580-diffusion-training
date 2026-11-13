@@ -6,6 +6,7 @@ import re
 import shutil
 from pathlib import Path
 
+from .latent_cache import list_caches
 from .library import ImageLibrary
 
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$")
@@ -46,14 +47,16 @@ class DatasetStore:
         shutil.rmtree(folder)
 
     def cache_report(self, name: str) -> list[dict]:
-        """One entry per VAE with a latent cache: its id, files and bytes."""
+        """One entry per VAE with a latent cache: its id, a readable ``label`` (empty for a cache that has no index yet),
+        files and bytes."""
         root = self.caches(name)
         if not root.is_dir():
             return []
+        labels = {info.vae_id: info.label for info in list_caches(root)}
         out = []
         for vae in sorted(p for p in root.iterdir() if p.is_dir()):
             files = [f for f in vae.rglob("*") if f.is_file()]
-            out.append({"vae": vae.name, "files": len(files), "bytes": sum(f.stat().st_size for f in files)})
+            out.append({"vae": vae.name, "label": labels.get(vae.name, ""), "files": len(files), "bytes": sum(f.stat().st_size for f in files)})
         return out
 
     def delete_cache(self, name: str, vae: str) -> None:

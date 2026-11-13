@@ -128,13 +128,13 @@ export class OverviewPanel {
 
   cacheList(me) {
     const rows = me.caches.map((c) => h("div", { class: "ov-row" },
-      h("span", { class: "ov-name", text: c.vae, title: c.vae }), h("span", { class: "ov-val ov-grow ov-right", text: `${plural(c.files, "file")} · ${fmtBytes(c.bytes)}` }),
-      h("button", { class: "icon-btn", title: "Delete this cache", "aria-label": `Delete cache ${c.vae}`, onclick: () => this.removeCache(c.vae) }, icon("trash", 14))));
+      h("span", { class: "ov-name", text: c.label || c.vae, title: c.label ? `${c.label} (${c.vae})` : c.vae }), h("span", { class: "ov-val ov-grow ov-right", text: `${plural(c.files, "file")} · ${fmtBytes(c.bytes)}` }),
+      h("button", { class: "icon-btn", title: "Delete this cache", "aria-label": `Delete cache ${c.label || c.vae}`, onclick: () => this.removeCache(c.vae, c.label || c.vae) }, icon("trash", 14))));
     return this.section("Latent caches", ...(rows.length ? rows : [h("p", { class: "text-dim", text: "None yet. A run that trains on this dataset builds one per VAE." })]),
       rows.length ? h("p", { class: "text-dim ov-hint", text: "Rebuilt by the next run; delete one after changing the images or the bucket settings." }) : "");
   }
 
-  async removeCache(vae) {
-    if (await confirmDialog({ title: `Delete the cache for ${vae}?`, text: "The next run that trains on this dataset builds it again." })) this.state.deleteCache(vae);
+  async removeCache(vae, label) {
+    if (await confirmDialog({ title: `Delete the cache for ${label}?`, text: "The next run that trains on this dataset builds it again." })) this.state.deleteCache(vae);
   }
 }

@@ -3,7 +3,7 @@
 
 import { h } from "../lib/dom.js";
 import { applyEdit, EDITS } from "./caption_edit.js";
-import { datasets } from "./client.js";
+import { CHANNELS, datasets } from "./client.js";
 import { icon } from "./icons.js";
 
 const STACK = 5;
@@ -21,7 +21,8 @@ export class BatchPanel {
       input.addEventListener("input", () => this.preview());
       input.addEventListener("keydown", (e) => { if (e.key === "Enter") this.apply(); });
     }
-    this.channelLabel = h("div", { class: "ip-label" });
+    this.tabs = h("div", { class: "seg seg-fill", role: "tablist", "aria-label": "Caption to edit" },
+      ...CHANNELS.map((c) => h("button", { class: "seg-btn", role: "tab", "data-channel": c, text: c, onclick: () => state.setChannel(c) })));
     this.before = h("div", { class: "bp-diff dim" });
     this.after = h("div", { class: "bp-diff" });
     this.diff = h("div", { class: "bp-preview" }, this.before, this.after);
@@ -32,7 +33,7 @@ export class BatchPanel {
     this.leaveBtn = h("button", { class: "btn btn-secondary btn-small bp-wide", onclick: () => state.removeFromSet(state.selection.list(), state.view.set) });
     root.append(
       h("div", { class: "bp-head" }, this.stack, this.title),
-      h("div", { class: "ip-block" }, this.channelLabel, this.mode, h("div", { class: "bp-pair" }, this.find, this.text), this.diff, this.applyBtn),
+      h("div", { class: "ip-block" }, this.tabs, this.mode, h("div", { class: "bp-pair" }, this.find, this.text), this.diff, this.applyBtn),
       h("div", { class: "ip-block" }, h("div", { class: "ip-label", text: "Set" }), h("div", { class: "bp-pair bp-set" }, this.setInput, this.addBtn), this.leaveBtn),
       h("button", { class: "btn btn-kill btn-small ip-remove", onclick: () => hooks.onRemove() }, icon("trash", 14), "Remove from dataset"));
     state.addEventListener("channel", () => this.sync());
@@ -56,7 +57,10 @@ export class BatchPanel {
     const mode = this.mode.value;
     this.find.hidden = mode !== "replace";
     this.text.hidden = mode === "clear";
-    this.channelLabel.textContent = `${this.state.channel} caption`;
+    for (const b of this.tabs.children) {
+      b.classList.toggle("active", b.dataset.channel === this.state.channel);
+      b.setAttribute("aria-selected", String(b.dataset.channel === this.state.channel));
+    }
     this.preview();
   }
 

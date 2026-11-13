@@ -1,6 +1,6 @@
 /* datasets/import_dialog.js -- read a folder of pictures (and their caption files) into the open dataset. The server
    does it in the background; this follows the job, and a small pill in the page header keeps showing its progress
-   after the dialog is closed. */
+   after the dialog is closed, then says how it ended until it is clicked or a while has passed. */
 
 import { h } from "../lib/dom.js";
 import { errText } from "../lib/errors.js";
@@ -8,6 +8,7 @@ import { datasets, plural } from "./client.js";
 import { icon } from "./icons.js";
 
 const POLL_MS = 900;
+const RESULT_MS = 20000;
 
 export class ImportDialog {
   /** @param {import("./library_state.js").LibraryState} state */
@@ -34,7 +35,8 @@ export class ImportDialog {
           h("label", { class: "field imp-into" }, h("span", { text: "Also add to set" }), this.into)),
         this.meter, this.status, this.skipped),
       h("div", { class: "dlg-foot" }, h("span", { class: "dlg-gap" }), h("button", { class: "btn btn-secondary", text: "Close", onclick: () => this.dialog.close() }), this.start));
-    this.pill = h("button", { class: "imp-pill", hidden: true, title: "Show the import", onclick: () => this.open() });
+    this.pill = h("button", { class: "imp-pill", hidden: true, title: "Show the import", onclick: () => { this.pill.hidden = true; this.open(); } });
+    this.fading = null;
     document.body.append(this.dialog);
     this.follow();
   }
@@ -67,7 +69,7 @@ export class ImportDialog {
     const running = job.state === "running";
     this.start.disabled = running;
     this.meter.hidden = !running;
-    this.pill.hidden = !running;
+    if (running) { clearTimeout(this.fading); this.pill.className = "imp-pill"; this.pill.hidden = false; } else if (this.watching !== job.id) this.pill.hidden = true;
     const percent = job.total ? Math.round((100 * job.done) / job.total) : 0;
     this.fill.style.width = `${percent}%`;
     if (running) {
@@ -82,6 +84,10 @@ export class ImportDialog {
     this.drawResult(job);
     if (this.watching === job.id) {
       this.watching = null;
+      this.pill.className = `imp-pill ${job.state === "done" ? "ok" : "bad"}`;
+      this.pill.replaceChildren(icon(job.state === "done" ? "check" : "x", 13), job.state === "done" ? `${job.added} added` : "Import failed");
+      this.pill.hidden = false;
+      this.fading = setTimeout(() => { this.pill.hidden = true; }, RESULT_MS);
       this.state.note(job.state === "done" ? `Import finished: ${job.added} added, ${job.known} already known.` : `Import failed: ${job.error}`, job.state === "done" ? "success" : "error");
       this.state.refresh();
     }

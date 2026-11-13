@@ -30,6 +30,8 @@ predicts out-of-memory; the allocator's own peak understates it.
 | `memory.allocator_mb`: a cap on the allocator itself. The server passes a run's admitted demand (allocator MB: observed peak + pillow, or the stated budget) here; `memory.vram_max_mb` remains the card-wide limit that counts the memory outside the allocator and other programs. Before this the demand was passed as the card limit and the cap came out 1.1 GB lower than what the run had been measured to need | none | `AllocatorCap._set`, `graph_task_worker.build_runtime` |
 | Pressure levers between steps: cache every step, then park residents (offload after the step, reload before the next) | one transfer per parked resident per step | `ResidencyManager` |
 
+An encoder visit is sized as the encoders' weights plus 512 MB of working room (loading stages tensors and the first forward allocates activations), and `make_room` first gives the allocator's free cached blocks back, so a visit is judged on what is really held. A refused or failed load or encode leaves a `failed` memory event with the allocator's numbers and the ledger (`ResidencyManager.note_failure`), and each visit's cache release a `cache_returned` event; a run that still fails at a refresh shows from these what held the memory. Whether the allowance is enough on the B580 is for the owner's re-run of the native prompt refresh (TESTING, Mission 7 repeat).
+
 ## Why the SDXL text encoders weigh 1.5 GB
 Two encoders: CLIP-L (about 0.25 GB) and OpenCLIP-bigG (about 1.3 GB). They could be loaded one at a time when the budget is small, but the larger one alone is most of the load, so that saves only about 0.17 GB and costs a second round trip; the model parking above is the lever that actually frees room.
 

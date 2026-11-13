@@ -29,7 +29,7 @@ from .engine.xpu_env import set_perf_env
 from .graph.settings import SettingsRegistry
 from .engine.runtime.factory import make_runtime
 from .engine.runtime.sampler import MemorySampler
-from .families.api.library import ModelLibrary
+from .families.api.library import ModelLibrary, comfy_folders
 from .graph import AddonError, GraphRunner, NodeRegistry, load_set, parse
 from .graph.node import Environment
 
@@ -40,7 +40,8 @@ def _environment(args) -> Environment:
         services["datasets"] = DatasetStore(args.datasets)
     if getattr(args, "models", None):
         root = Path(args.models)
-        folders = {scope: [root / scope] for scope in ("vae", "loras", "text_encoders") if (root / scope).is_dir()}
+        folders = {"loras": [root / "loras"]} if (root / "loras").is_dir() else {}
+        folders.update(comfy_folders(root))
         folders["checkpoints"] = [root / "checkpoints" if (root / "checkpoints").is_dir() else root]
         services["models"] = ModelLibrary(folders)
     return Environment(services=services)

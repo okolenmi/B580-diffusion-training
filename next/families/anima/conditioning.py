@@ -211,4 +211,4 @@ def load_text_encoder(parts: Mapping[str, ModelPart], tokenizer: AnimaTokenizer 
     with torch.device("meta"):
         qwen = QwenEncoder()
     qwen.model.load_state_dict(state, strict=True, assign=True)
-    return AnimaTextEncoder(qwen, tokenizer or AnimaTokenizer(), device, out_dtype)
+    return AnimaTextEncoder(qwen, tokenizer or AnimaTokenizer(near=part.source.path), device, out_dtype)

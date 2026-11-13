@@ -16,16 +16,11 @@ from ...application.errors import NodeClassNotFoundError
 from ...application.ports.node_catalog import NodeCatalog
 from . import tree
 
-MODEL_SCOPES = ("diffusion_models", "text_encoders", "vae")
 
 
 def model_folders(checkpoints: Path, loras: Path) -> dict[str, list[Path]]:
     """ComfyUI's layout: the other model folders sit beside ``checkpoints``."""
-    folders = {"checkpoints": [checkpoints], "loras": [loras]}
-    for scope in MODEL_SCOPES:
-        if (checkpoints.parent / scope).is_dir():
-            folders[scope] = [checkpoints.parent / scope]
-    return folders
+    return {"checkpoints": [checkpoints], "loras": [loras], **tree.comfy_folders(checkpoints.parent)}
 
 
 def model_environment(checkpoints: Path, loras: Path, datasets: Path | None = None) -> tree.Environment:

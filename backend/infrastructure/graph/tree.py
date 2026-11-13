@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from next.data.library import report as library_report
 from next.data.store import DatasetStore
-from next.families.api.library import ModelLibrary
+from next.families.api.library import ModelLibrary, comfy_folders
 from next.families.registry import list_families
 from next.graph.catalog import build_catalog
 from next.graph.node import Environment
@@ -18,7 +18,7 @@ from next.graph.runtime import GraphRunner
 from next.starters import AnimaLoraOptions, SdxlLoraOptions, anima_lora, sdxl_lora
 
 __all__ = ["AnimaLoraOptions", "DatasetStore", "Environment", "GraphRunner", "ModelLibrary", "NodeRegistry", "SdxlLoraOptions", "anima_lora",
-           "build_catalog", "diagnose_node", "library_report", "list_families", "make_runtime", "resolve_node", "sdxl_lora"]
+           "build_catalog", "comfy_folders", "diagnose_node", "library_report", "list_families", "make_runtime", "resolve_node", "sdxl_lora"]
 
 
 def make_runtime(context):

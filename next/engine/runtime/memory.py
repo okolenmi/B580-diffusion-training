@@ -210,6 +210,7 @@ class ResidencyManager:
         """Offload unpinned residents, lowest rank first, until ``mb`` more fits under the ceiling and the allocator's
         cap. With ``borrow`` (work between steps only: the caller restores them after) lendable pinned residents go too,
         when that is the only way; refuse (naming where the memory is) when it does not fit even then."""
+        self.give_back(why)  # blocks the allocator keeps from the last step count against its cap, not against the ledger
         moved: list[str] = []
         order = sorted(self._claims.items(), key=lambda kv: kv[1].rank)
         for name, claim in order:
@@ -234,6 +235,12 @@ class ResidencyManager:
                 f"allocator cap {self.cap.cap_mb or 0:.0f} MB; {self.breakdown()}). Raise memory.vram_max_mb, lower memory.margin_mb, "
                 "or train a smaller model state (rank, batch size, int8 base weights).")
         return moved
+
+    def note_failure(self, why: str, err: BaseException) -> None:
+        """Record where the memory was when something that passed the ledger still ran out in the allocator."""
+        stats = self.accelerator.memory()
+        self._note("failed", why=why, error=str(err)[:300], used_mb=stats.get("device_used"), allocated_mb=stats.get("allocated"),
+                   reserved_mb=stats.get("reserved"), cap_mb=self.cap.cap_mb, parts=self.breakdown(stats))
 
     def _evict(self, name: str, claim: Claim) -> bool:
         if claim.away or claim.resident.footprint_bytes() == 0:

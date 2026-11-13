@@ -22,18 +22,20 @@ _KINDS = {"qwen": ("QWEN_TOKENIZER_DIR", "qwen_tokenizer", "qwen25_tokenizer", "
           "t5": ("T5_TOKENIZER_DIR", "t5_tokenizer", "t5_tokenizer", "tokenizer.json")}
 
 
-def vocabulary_dir(kind: str, extra: tuple[str | os.PathLike, ...] = ()) -> Path:
+def vocabulary_dir(kind: str, extra: tuple[str | os.PathLike, ...] = (), near: str | os.PathLike | None = None) -> Path:
     """First folder holding the files of ``kind`` ("qwen": ``vocab.json``, ``merges.txt``, ``tokenizer_config.json``; "t5":
     ``tokenizer.json``): the ``*_TOKENIZER_DIR`` variable, then ``extra``, then ``<repo>/assets/<kind>_tokenizer``, then the
-    folders of a ComfyUI checkout (``$COMFY_DIR/comfy/text_encoders``)."""
+    folders of a ComfyUI checkout: ``$COMFY_DIR``, or the checkout a model file at ``near`` sits in (``<checkout>/models/clip/x.safetensors``)."""
     variable, asset, comfy, marker = _KINDS[kind]
     candidates: list[Path] = []
     if os.environ.get(variable):
         candidates.append(Path(os.environ[variable]))
     candidates.extend(Path(p) for p in extra)
     candidates.append(Path(__file__).resolve().parents[3] / "assets" / asset)
-    if os.environ.get("COMFY_DIR"):
-        candidates.append(Path(os.environ["COMFY_DIR"]) / "comfy" / "text_encoders" / comfy)
+    roots = [Path(os.environ["COMFY_DIR"])] if os.environ.get("COMFY_DIR") else []
+    if near is not None:
+        roots += list(Path(near).resolve().parents)[:5]
+    candidates.extend(root / "comfy" / "text_encoders" / comfy for root in roots)
     for candidate in candidates:
         if (candidate / marker).is_file():
             return candidate
@@ -87,8 +89,10 @@ class T5Tokenizer:
 
 
 class AnimaTokenizer:
-    def __init__(self, qwen_dir=None, t5_dir=None):
-        self.qwen, self.t5 = QwenTokenizer(qwen_dir), T5Tokenizer(t5_dir)
+    def __init__(self, qwen_dir=None, t5_dir=None, near=None):
+        """``near``: a model file; vocabularies are also looked for in the ComfyUI checkout it sits in."""
+        self.qwen = QwenTokenizer(qwen_dir or vocabulary_dir("qwen", near=near))
+        self.t5 = T5Tokenizer(t5_dir or vocabulary_dir("t5", near=near))
 
     def tokenize(self, text: str) -> tuple[list[int], list[int]]:
         return self.qwen.encode(text), self.t5.encode(text)

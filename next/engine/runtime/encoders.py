@@ -19,6 +19,8 @@ class OnDemandKit:
     the cache and would otherwise move them every step.
     """
 
+    WORK_MB = 512  # what encoding itself needs beside the weights: activations and the allocator's rounding
+
     def __init__(self, kit: Any, resident: ModulesResident, accelerator: Accelerator, residency: ResidencyManager | None = None):
         self._kit, self._resident, self._accelerator, self._residency = kit, resident, accelerator, residency
         self.hold = False
@@ -48,8 +50,13 @@ class OnDemandKit:
     def _ensure_on_device(self) -> None:
         if not self._on_device:
             if self._residency is not None:
-                self._moved = self._residency.make_room(self._resident.size_bytes() / 2**20, "load the text encoders", borrow=self._borrow)
-            self._resident.reload()
+                self._moved = self._residency.make_room(self._resident.size_bytes() / 2**20 + self.WORK_MB, "load the text encoders", borrow=self._borrow)
+            try:
+                self._resident.reload()
+            except Exception as err:
+                if self._residency is not None:
+                    self._residency.note_failure("load the text encoders", err)
+                raise
             self._on_device = True
 
     def release(self) -> None:
@@ -64,4 +71,9 @@ class OnDemandKit:
     def encode_text(self, prompts):
         with self.session():
             self._ensure_on_device()
-            return self._kit.encode_text(prompts)
+            try:
+                return self._kit.encode_text(prompts)
+            except Exception as err:
+                if self._residency is not None and "out of memory" in str(err).lower():
+                    self._residency.note_failure("encode prompts", err)
+                raise

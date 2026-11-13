@@ -14,6 +14,18 @@ from .header import HeaderCache, HeaderIndex, ModelFileError
 
 SCOPES = ("checkpoints", "diffusion_models", "text_encoders", "vae", "loras")
 SUPPORTED_SUFFIX = ".safetensors"
+# ComfyUI's folder names for each scope, newest first; a checkout may have either or both.
+COMFY_FOLDERS = {"diffusion_models": ("diffusion_models", "unet"), "text_encoders": ("text_encoders", "clip"), "vae": ("vae",)}
+
+
+def comfy_folders(models: Path) -> dict[str, list[Path]]:
+    """The scopes that sit beside ``checkpoints`` in a ComfyUI ``models`` folder, under whichever names exist there."""
+    found: dict[str, list[Path]] = {}
+    for scope, names in COMFY_FOLDERS.items():
+        folders = [models / name for name in names if (models / name).is_dir()]
+        if folders:
+            found[scope] = folders
+    return found
 
 
 class ModelLibrary:

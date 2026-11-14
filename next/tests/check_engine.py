@@ -383,6 +383,15 @@ def main() -> None:
         p.grad = torch.randn_like(p)
     opt.step()
     check(opt.footprint_bytes() == held, "reloaded state steps again with the same footprint")
+    targets = []
+    real_to = opt.store.to
+    opt.store.to = lambda state, device: (targets.append(device), state if device == "xpu:0" else real_to(state, device))[1]
+    opt.offload()
+    check(opt._home == "cpu", "an offload notes where the state was")
+    opt._home = "xpu:0"  # as if the weights had been on the card while the state left
+    opt.reload()
+    check(targets[-1] == "xpu:0", "state returns to where it left from, not to where the weights are at that moment")
+    opt.store.to = real_to
 
 
 def time_balance():

@@ -168,6 +168,19 @@ def borrowing_the_model():
     check(moved == ["model"] and not model.on_device and grads.on_device, f"borrowing sends the lendable model away and nothing else ({moved})")
     m.restore(moved)
     check(model.on_device, "the model comes back when the encoders leave")
+    class Follower(Blob):  # state that returns to wherever its weights are at the moment it is reloaded
+        def reload(self, device=None):
+            if not model.on_device:
+                raise AssertionError("state reloaded while the weights it follows are still away")
+            super().reload(device)
+
+    device, m, model, grads, enc = setup()
+    state = Follower(device, 500)
+    m.claim("optimizer", state, rank=1, purpose="test")
+    moved = m.make_room(2500, "load the text encoders", borrow=True)
+    check(moved == ["optimizer", "model"], f"the optimizer leaves first and the lent model after it ({moved})")
+    m.restore(moved)
+    check(model.on_device and state.on_device, "the weights return before the state that follows them")
     device, m, model, grads, enc = setup(lendable=False)
     raises(MemoryBudgetExceeded, lambda: m.make_room(1500, "x", borrow=True), "a pinned resident that is not lendable never moves", "do not fit")
     device, m, model, grads, enc = setup()

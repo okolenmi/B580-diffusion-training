@@ -254,7 +254,9 @@ class ResidencyManager:
         return True
 
     def restore(self, names: list[str]) -> None:
-        for name in names:
+        """Bring back what ``make_room`` moved, last moved first: what left first (state that follows the weights) must
+        return after the weights it follows."""
+        for name in reversed(names):
             claim = self._claims[name]
             claim.resident.reload()
             claim.away = False

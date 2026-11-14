@@ -63,6 +63,7 @@ class Optimizer(DeviceResident):
         self.stacks: list[_Stack] = []
         self._lr = lr
         self._offloaded = False
+        self._home = "cpu"
         self._holds_grads = False
         self._touched: set[int] = set()
         self._grad_hooks: list = []
@@ -218,13 +219,15 @@ class Optimizer(DeviceResident):
         return 0 if self._offloaded else sum(self.store.footprint_bytes(s.state) for s in self.stacks)
 
     def offload(self) -> None:
+        if not self._offloaded:  # the parameters may be away themselves by the time the state returns
+            self._home = str(self.stacks[0].params[0].device) if self.stacks else "cpu"
         for stack in self.stacks:
             stack.state = self.store.to(stack.state, "cpu")
         self._offloaded = True
 
     def reload(self, device: str | None = None) -> None:
         for stack in self.stacks:
-            stack.state = self.store.to(stack.state, device or str(stack.params[0].device))
+            stack.state = self.store.to(stack.state, device or (self._home if self._offloaded else str(stack.params[0].device)))
         self._offloaded = False
 
     def release(self) -> None:

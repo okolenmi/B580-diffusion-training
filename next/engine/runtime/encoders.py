@@ -64,9 +64,13 @@ class OnDemandKit:
             self._resident.offload()
             self._on_device = False
             self._accelerator.empty_cache()
-            if self._moved and self._residency is not None:
-                self._residency.restore(self._moved)  # what left to make room comes back when the room is free again
-            self._moved = []
+            moved, self._moved = self._moved, []
+            if moved and self._residency is not None:
+                try:
+                    self._residency.restore(moved)  # what left to make room comes back when the room is free again
+                except Exception as err:
+                    self._residency.note_failure("return what left for the text encoders", err)
+                    raise
 
     def encode_text(self, prompts):
         with self.session():

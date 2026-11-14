@@ -23,9 +23,9 @@ consumer names, never a zero to guess with (a zero claim would read as
 rule 2).
 
 The number checks mirror ``backend/domain/memory_settings.py``'s
-``_budget`` on purpose: nodes/ never imports backend/ (task rule 9), so
-the domain's validation is reimplemented at this layer instead of
-shared. It matters here more than at the edge: a NaN grant would make
+``_budget`` on purpose: the child imports this module before anything
+else, so it must not depend on the domain layer. It matters here more
+than at the edge: a NaN grant would make
 every ``free < grant`` comparison False, so the physical check would
 pass on garbage -- the check itself is only as honest as this
 constructor.

@@ -42,6 +42,8 @@ from types import TracebackType
 from typing import Literal
 
 from ..python_floor import require_python
+from .admission.graph_memory import CHECK_UNKNOWN
+from .device_probe import DeviceProbe
 
 logger = logging.getLogger(__name__)
 
@@ -197,12 +199,7 @@ def physical_check_or_refuse(
     refuse on a zero or pretend it passed.
     """
     if device_ctx is None:
-        # Deferred: device.py imports torch, and this module's env vars
-        # (the Intel GPU shader caches) must be set before torch loads.
-        from nodes.components.device import DeviceContext
-
-        device_ctx = DeviceContext.for_device(device)
-    from nodes.memory.graph_memory import CHECK_UNKNOWN
+        device_ctx = DeviceProbe.for_device(device)
 
     check = memory.physical_check(device_ctx)
     if check.refused and adaptive:
@@ -479,13 +476,12 @@ def main(argv: list[str] | None = None) -> int:
 
     # Before anything imports torch: SYCL reads these at its own runtime
     # init, so setting them even slightly late is too late.
-    from nodes.xpu_env import set_xpu_perf_env_vars
+    from next.engine.xpu_env import set_perf_env
 
-    set_xpu_perf_env_vars()
+    set_perf_env()
 
     from backend.domain.graph import GraphDefinition
-    from nodes.memory.graph_memory import GraphMemory
-
+    from .admission.graph_memory import GraphMemory
     from .graph_event_stream import ExecutionEventWriter
 
     writer = ExecutionEventWriter(Path(args.events))
@@ -514,9 +510,7 @@ def main(argv: list[str] | None = None) -> int:
         # the check asks it what is free, the backstop asks it what
         # exists in total, and a backend that cannot answer at all is
         # one unknown rather than two.
-        from nodes.components.device import DeviceContext
-
-        device_ctx = DeviceContext.for_device(graph.memory.device)
+        device_ctx = DeviceProbe.for_device(graph.memory.device)
         if not physical_check_or_refuse(
             memory, writer, device=graph.memory.device, device_ctx=device_ctx,
             adaptive=args.memory_adaptive, vram_min_mb=args.vram_min_mb,

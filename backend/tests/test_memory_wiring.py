@@ -1376,7 +1376,7 @@ def test_physical_check_refuses_shortfall_and_continues_on_unknown() -> None:
     from backend.infrastructure.graph_task_worker import (
         physical_check_or_refuse,
     )
-    from nodes.memory.graph_memory import GraphMemory
+    from backend.infrastructure.admission.graph_memory import GraphMemory
 
     class _Writer:
         """The helper's whole surface: outcome records."""
@@ -1489,7 +1489,7 @@ def test_allocator_backstop_cases_and_their_warnings() -> None:
         BACKSTOP_UNAVAILABLE,
         apply_allocator_backstop,
     )
-    from nodes.memory.graph_memory import GraphMemory
+    from backend.infrastructure.admission.graph_memory import GraphMemory
 
     class _Card:
         """A device double: a total, and a cap that can answer False --
@@ -1616,7 +1616,7 @@ def test_memory_telemetry_writes_frames_on_a_schedule() -> None:
     import time
 
     from backend.infrastructure.graph_task_worker import MemoryTelemetry
-    from nodes.memory.graph_memory import GraphMemory
+    from backend.infrastructure.admission.graph_memory import GraphMemory
 
     class _Device:
         def __init__(self) -> None:
@@ -1694,7 +1694,7 @@ def test_memory_telemetry_writes_frames_on_a_schedule() -> None:
 def test_memory_events_cross_into_the_event_file() -> None:
     print("-- memory events: a decision becomes a frame with MB and cost --")
     from backend.infrastructure.graph_task_worker import wire_memory_events
-    from nodes.memory.graph_memory import GraphMemory
+    from backend.infrastructure.admission.graph_memory import GraphMemory
 
     class _Device:
         def memory_stats(self):
@@ -1817,7 +1817,7 @@ def test_auto_budget_adapts_to_the_free_memory_instead_of_refusing() -> None:
         ADAPTIVE_MARGIN_MB,
         physical_check_or_refuse,
     )
-    from nodes.memory.graph_memory import GraphMemory
+    from backend.infrastructure.admission.graph_memory import GraphMemory
 
     class _Writer:
         def __init__(self) -> None:

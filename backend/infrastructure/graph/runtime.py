@@ -35,9 +35,9 @@ def default_memory_releaser() -> None:
     run, never at startup."""
     gc.collect()
     try:
-        from nodes.components.device import DeviceContext  # noqa: PLC0415
+        from ..device_probe import DeviceProbe  # noqa: PLC0415
 
-        DeviceContext.for_device("xpu").empty_cache()
+        DeviceProbe.for_device("xpu").empty_cache()
     except Exception as exc:  # noqa: BLE001 -- best-effort, never masks a result
         logger.info("xpu cache release unavailable (non-fatal): %s", exc)
 

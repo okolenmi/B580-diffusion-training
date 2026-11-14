@@ -47,7 +47,6 @@ from ..application.ports.asset_store import (
     AssetStore,
     AssetUploadWriter,
 )
-from . import path_tiers
 from .workspace import WorkspaceLayout
 
 KINDS = ("checkpoint", "lora")
@@ -150,9 +149,8 @@ class FileSystemAssetStore(AssetStore):
         if not resolved.is_file():
             raise InvalidQueryError(f"not a file: {relative_path!r}")
 
-        path_tiers.import_paths(self._layout.project_root)
         try:
-            from nodes.model.resource_inspection import (  # repo bridge
+            from .resource_inspection import (  # imports torch, so only when asked
                 dtype_to_str,
                 inspect_checkpoint_dtypes,
                 inspect_lora,

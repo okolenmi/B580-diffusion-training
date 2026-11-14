@@ -138,6 +138,7 @@ VERSIONS = {
     # backend/tests/test_declared_dependencies.py, which is what found them.
     "tqdm": "4.70.1",
     "regex": "2026.9.29",
+    "tokenizers": "0.23.0",
 }
 
 REQUIRED_NAMES = sorted(r.distribution for r in REQUIREMENTS

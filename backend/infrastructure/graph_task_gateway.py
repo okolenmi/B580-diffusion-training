@@ -235,7 +235,7 @@ class InProcessGraphTaskGateway(GraphTaskGateway):
 
     def spawn(self, launch: GraphTaskLaunch) -> int:
         from backend.domain.graph import GraphDefinition
-        from nodes.memory.graph_memory import GraphMemory
+        from .admission.graph_memory import GraphMemory
 
         from .graph_event_stream import ExecutionEventWriter
         from .graph_task_worker import build_runtime, run_execution

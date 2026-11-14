@@ -307,9 +307,9 @@ def test_replay_skips_node_results_but_keeps_monitor_history() -> None:
     check(supervisor.adopt(ExecutionId(1)) == 4242,
           "the run is adopted by the pid the gateway found")
 
-    check(_wait_for(lambda: len(bus.reports) == 2),
-          f"both missed reports are republished (got {bus.reports})")
-    check(bus.ids() == ["m1", "m1"], "under the monitor id the child used")
+    check(_wait_for(lambda: len(bus.reports) == 4),
+          f"both missed reports are republished, each on the shared and the run's own stream (got {bus.reports})")
+    check(bus.ids() == ["m1", "run:1:m1", "m1", "run:1:m1"], "under the monitor id the child used, and its per-run form")
 
     # The replay is over once the *watcher's own* tail has consumed
     # everything. Watching a second tail for it would be a different
@@ -336,7 +336,7 @@ def test_replay_skips_node_results_but_keeps_monitor_history() -> None:
         f"again, which would leave the row with three results for a graph "
         f"the domain says has two (got {writer.committed})",
     )
-    check(len(bus.reports) == 2,
+    check(len(bus.reports) == 4,
           f"while the monitor history the run missed is still there "
           f"(got {bus.reports})")
     check(gateway.killed == [],

@@ -238,9 +238,12 @@ class ResidencyManager:
 
     def note_failure(self, why: str, err: BaseException) -> None:
         """Record where the memory was when something that passed the ledger still ran out in the allocator."""
-        stats = self.accelerator.memory()
-        self._note("failed", why=why, error=str(err)[:300], used_mb=stats.get("device_used"), allocated_mb=stats.get("allocated"),
-                   reserved_mb=stats.get("reserved"), cap_mb=self.cap.cap_mb, parts=self.breakdown(stats))
+        try:  # a diagnostic must never replace the error it describes
+            stats = self.accelerator.memory()
+            self._note("failed", why=why, error=str(err)[:300], used_mb=stats.get("device_used"), allocated_mb=stats.get("allocated"),
+                       reserved_mb=stats.get("reserved"), cap_mb=self.cap.cap_mb, parts=self.breakdown(stats))
+        except Exception:
+            pass
 
     def _evict(self, name: str, claim: Claim) -> bool:
         if claim.away or claim.resident.footprint_bytes() == 0:

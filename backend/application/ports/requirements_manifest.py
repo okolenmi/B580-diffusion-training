@@ -13,7 +13,7 @@ Measured on this machine, by reading the source rather than by guessing
 
     server   fastapi, uvicorn, python-multipart, tomli_w, packaging
              (requirements.txt, exactly -- five lines)
-    training torch, numpy, pillow, safetensors, tqdm, regex
+    training torch, numpy, pillow, safetensors, tqdm, regex, tokenizers
              (imported by nodes/ and manager/; in NO requirements file,
              because they are expected to come from ComfyUI's venv)
 
@@ -162,6 +162,9 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement("regex", TRAINING,
                 "CLIP's tokenizer word splitter -- \\p{L} and \\p{N}, which "
                 "the standard library's re does not have", never_install=True),
+    Requirement("tokenizers", TRAINING,
+                "Anima's Qwen and T5 tokenizers (the vocabularies come from ComfyUI's checkout or assets/); imported when Anima "
+                "text is encoded, so without it only Anima is unavailable", never_install=True),
     # Optional: only the auto-caption node's local "transformers" backend
     # imports it, lazily, when that backend is built -- so absence costs that
     # one feature and a clear error naming `pip install transformers`, not an

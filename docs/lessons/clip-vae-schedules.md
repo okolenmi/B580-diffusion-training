@@ -22,7 +22,7 @@ Facts that the old comments recorded and the new code must keep honouring. Measu
 
 ## Tokenizer
 * The BPE data (`vocab.json`, `merges.txt`) is not in the repository; it is found through `CLIP_TOKENIZER_DIR`, `assets/clip_tokenizer`, or `$COMFY_DIR/comfy/sd1_tokenizer`.
-* The old tokenizer and the new one agree token for token on a synthetic vocabulary here; the real vocabulary comparison is run on the owner's machine (`scripts/compare_tokenizers.py`).
+* The old tokenizer and the new one agree token for token on a synthetic vocabulary here; the real vocabulary comparison is run on the owner's machine (`archive/old-scripts/compare_tokenizers.py`).
 
 ## Adapters
 * The old `LoRAConv2d` ignored the timestep gate while `LoRALinear` and the DoRA layers applied it. The new layers apply the gate to every adapter kind; this is a deliberate change, not a port.

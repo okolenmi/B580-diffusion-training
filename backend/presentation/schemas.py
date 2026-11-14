@@ -412,7 +412,7 @@ class AssetPathOut(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Graph domain (M4) -- docs/design/backend/05-graph-runtime.md section 6
+# Graph domain (M4) -- archive/old-documentation/design/backend/05-graph-runtime.md section 6
 # ---------------------------------------------------------------------------
 
 
@@ -501,7 +501,7 @@ class MemoryOverridesIn(BaseModel):
 
 
 class GraphRunIn(BaseModel):
-    """Submission body for ``/validate`` and ``/run``: the graph document (rework/contracts/graph-json.md), whose
+    """Submission body for ``/validate`` and ``/run``: the graph document (docs/contracts/graph-json.md), whose
     ``settings`` carry the memory budget, and this run's own overrides of it."""
 
     graph: dict[str, Any]

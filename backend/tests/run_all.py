@@ -190,7 +190,7 @@ def log_dir() -> Path:
 
     Overwritten per file on each run, so the directory holds one run's
     worth and cannot grow: the scratch-directory leak fixed in
-    docs/known-issues/resolved.md (4,834 directories, 2.1 GB of /tmp
+    archive/old-documentation/known-issues/resolved.md (4,834 directories, 2.1 GB of /tmp
     tmpfs) is the same failure mode in miniature, and this must not
     reintroduce it.
     """

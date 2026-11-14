@@ -13,7 +13,7 @@ There is no ``runs`` group. Training is started from the graph route
 (``graphs``), which runs the ``nodes/`` pipeline in-process; the separate
 supervised-subprocess route -- which spawned ``python -m core.cli`` and
 owned the whole run/supervision/reconcile stack around it -- was removed
-with ``core/`` (``docs/design/11-core-removal.md``).
+with ``core/`` (``archive/old-documentation/design/11-core-removal.md``).
 """
 
 from __future__ import annotations

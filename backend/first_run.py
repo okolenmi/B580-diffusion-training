@@ -1,6 +1,6 @@
 """Bootstrap -- make the server's own dependencies installable, then hand off.
 
-The first-run installer work, ``docs/design/12-installer-and-comfy-decoupling.md``
+The first-run installer work, ``archive/old-documentation/design/12-installer-and-comfy-decoupling.md``
 §2.
 
 **This module is stdlib-only, and that is the whole design constraint.**

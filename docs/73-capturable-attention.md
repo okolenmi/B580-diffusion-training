@@ -48,5 +48,5 @@ atomics). Both round the scores to bf16, so quality needs the loss comparison in
 in registers and still launches far fewer kernels. The `bench` attention rows rank every backend and mode at the SDXL shapes, with a capture attempt each.
 
 ## What would change in the trainer when it exists
-`nodes/train/trainer.py` builds the capture's `attentions` list (today only the math backend); a capturable kernel goes first, and the existing per-shape timing
+`next/nodes/train/trainer.py` builds the capture's `attentions` list (today only the math backend); a capturable kernel goes first, and the existing per-shape timing
 (`GraphedCompute._judge`) keeps a graph only when it beats the eager step, so a slower kernel cannot make the run worse.

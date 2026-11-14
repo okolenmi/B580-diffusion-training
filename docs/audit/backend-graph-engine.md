@@ -1,8 +1,8 @@
 # Audit: backend graph engine (read from code and design docs, origin/main a7cc71e)
 
-Sources: `docs/design/backend/05-graph-runtime.md`, `09-event-contract.md`,
-`docs/design/13-process-isolation.md` (headings), `15`, `16`,
-`docs/decisions/0005-memory-admission.md`, `docs/design/graph-rework-inputs.md`,
+Sources: `archive/old-documentation/design/backend/05-graph-runtime.md`, `09-event-contract.md`,
+`archive/old-documentation/design/13-process-isolation.md` (headings), `15`, `16`,
+`docs/decisions/0005-memory-admission.md`, `archive/old-documentation/design/graph-rework-inputs.md`,
 `nodes/core.py`, `backend/infrastructure/graph/{catalog,runtime,discovery}.py`,
 `backend/domain/modules.py`, `nodes/ui.py`.
 

@@ -93,7 +93,7 @@ class AttentionAsMath(Rule):
         share = _share(report, "attention")
         return [Finding("Attention runs as math (matmul, softmax, matmul)", softmax,
                         f"softmax kernels are present and no flash kernel is; attention is {share:.0%} of device time",
-                        "a fused attention kernel that can be captured (rework/73), or run eagerly with the default (flash) kernel")]
+                        "a fused attention kernel that can be captured (docs/73), or run eagerly with the default (flash) kernel")]
 
 
 class CastCopyShare(Rule):

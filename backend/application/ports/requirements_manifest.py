@@ -1,11 +1,11 @@
 """What this project needs, as data rather than prose.
 
-`docs/design/11-first-run-and-installer.md` §1 asks for a
+`archive/old-documentation/design/11-first-run-and-installer.md` §1 asks for a
 machine-readable list, and the reason it matters is that the answer
 currently lives in three places that cannot see each other:
 `requirements.txt` (five lines, the server's own imports), the source
 (what the trainer imports, which is six *more* packages that appear in no
-requirements file at all), and `docs/setup.md` (which names neither set).
+requirements file at all), and `archive/old-documentation/setup.md` (which names neither set).
 
 Measured on this machine, by reading the source rather than by guessing
 (an AST pass over the live tree, not a grep -- a grep finds the words
@@ -14,7 +14,7 @@ Measured on this machine, by reading the source rather than by guessing
     server   fastapi, uvicorn, python-multipart, tomli_w, packaging
              (requirements.txt, exactly -- five lines)
     training torch, numpy, pillow, safetensors, tqdm, regex, tokenizers
-             (imported by nodes/ and manager/; in NO requirements file,
+             (imported by next/; in NO requirements file,
              because they are expected to come from ComfyUI's venv)
 
 Two rows here were missing and are now present, which is the whole

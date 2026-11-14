@@ -4,7 +4,7 @@ Status: **proposal.** The owner: monitor is not something to attach to the graph
 nodes own their UI parts; presets can be **subscribers of graph events** that
 update widgets; the "graph -> templates" design "is still not good enough, think
 more". Needs 10 (events), 20 (settings), 30 (node displays). Inputs:
-`docs/design/14-node-attached-monitor-widgets.md`, `15-graph-modules-and-templates.md`,
+`archive/old-documentation/design/14-node-attached-monitor-widgets.md`, `15-graph-modules-and-templates.md`,
 `audit/frontend-graph-ui.md` section 5.
 
 > **Superseded in part (2026-10-13 18:21):** the owner dropped all compatibility and migration work. Read `90-build-plan.md`: no shims, aliases, deprecation windows, old-port support or old-versus-new parity gates; the new tree is built clean beside `nodes/`.

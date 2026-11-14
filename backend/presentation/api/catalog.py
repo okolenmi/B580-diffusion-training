@@ -1,4 +1,4 @@
-"""Node catalog endpoints -- what the editor learns about node classes (rework/contracts/catalog.md, resolve.md).
+"""Node catalog endpoints -- what the editor learns about node classes (docs/contracts/catalog.md, resolve.md).
 
 * ``GET /api/v1/catalog`` -- nodes, settings, handle types, families, load errors; ``refresh=true`` scans the node packages again;
 * ``GET /api/v1/starters`` and ``POST /api/v1/starters/{name}`` -- ready-made graph documents (``starters.md``);

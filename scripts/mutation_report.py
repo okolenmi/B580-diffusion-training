@@ -482,7 +482,7 @@ def main() -> int:
           + (f" ({overall_killed / max(1, overall_killed + overall_survived) * 100:.0f}% killed)"
              if overall_killed + overall_survived else ""))
     print("\nSurvivors are not automatically bugs. Classify each one in "
-          "docs/status/mutation-notes.md:\n"
+          "archive/old-documentation/status/mutation-notes.md:\n"
           "  - add a test that kills it, or\n"
           "  - say why the mutant is equivalent (the code says the same "
           "thing twice, the value is unused, ...).")

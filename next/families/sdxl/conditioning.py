@@ -126,7 +126,7 @@ class SDXLTextEncoder:
         return self.clip_g.text_model.final_layer_norm.weight.dtype
 
     def batching_available(self) -> bool:
-        """Batched towers agree with one-at-a-time encoding only in float32 (see rework/lessons)."""
+        """Batched towers agree with one-at-a-time encoding only in float32 (see docs/lessons)."""
         return self.tower_dtype == torch.float32
 
     def encode_text(self, prompts: Sequence[str]) -> list[TextEncoding]:

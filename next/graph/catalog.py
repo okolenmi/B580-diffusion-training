@@ -1,4 +1,4 @@
-"""Serialising node classes for the editor (rework/contracts/catalog.md). Never instantiates a node."""
+"""Serialising node classes for the editor (docs/contracts/catalog.md). Never instantiates a node."""
 
 from __future__ import annotations
 

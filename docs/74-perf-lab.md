@@ -1,6 +1,6 @@
 # 74. Performance lab: measuring where a step's time goes, and what is recoverable
 
-Status: **P1 to P4 built (CPU-tested, not yet run on the card).** Manual page: `next/manual/performance.md`. A sub-project inside `next/perf/`, beside the trainer, that turns one run (or a matrix of runs) into a report that names the
+Status: **P1 to P4 built (CPU-tested, not yet run on the card).** Manual page: `docs/manual/performance.md`. A sub-project inside `next/perf/`, beside the trainer, that turns one run (or a matrix of runs) into a report that names the
 slowest pieces, says how far each is from what this card can do, and says which known cause it looks like. It exists because the sandbox has no XPU:
 every run on the owner's card must return everything needed to understand it, in one file.
 
@@ -33,7 +33,7 @@ every run on the owner's card must return everything needed to understand it, in
 
 ## Findings rules (each a small class with `check(report)`)
 - Device utilisation below 60% of the step: launch bound; names the lever (graph replay) and whether replay was tried and dropped, and why.
-- Attention kernels in a replayed step are the math ones while the eager step ran flash: the capture limitation (rework/73).
+- Attention kernels in a replayed step are the math ones while the eager step ran flash: the capture limitation (docs/73).
 - Cast and copy kernels above a share: dtype round trips (autocast, `.to` chains), listing the modules that issue them.
 - Int8 path: rotate+quantize+dequantize share against the int matmul share; dequantize per backward against the layer's GEMM.
 - Elementwise and norm tail: many small kernels with low achieved bandwidth: fusion candidates, grouped by module.
@@ -70,7 +70,7 @@ Layering: `perf` may import `engine`, `data`, `graph`, `families.api`, `families
 | P1 | `Ceilings`, `DeviceClock`, `Categorizer`, `KernelTrace`, `CostModel`, `ModuleTimer`, `StepBudget`, `Rating`, first rules, report writer, `PerfSession`, trainer hook, settings `perf.dir` `perf.warmup_steps` `perf.steps` `perf.modules` `perf.trace`, `--perf` flag | CPU run of a tiny model produces `report.md` and `report.json`; categoriser, rating and rules unit tests |
 | P2 | `Scenario` and `Matrix` runner (`python -m next.perf matrix FILE`), `Comparison`, a scenario file for the open questions (native/int8 x graph x checkpointing x attention x batch) | comparison of two synthetic reports; matrix with a fake runner |
 | P3 | Micro-benchmark suite: layer shapes (native/int8, both gradient paths), attention backends (what captures, per-backend device time), GEMM/conv/norm efficiency vs ceilings, launch-cost probe; results feed `Ceilings` and the rating | scripts run on CPU at small size |
-| P4 | `python -m next.perf hwcheck`: the pending `TESTING.md` runs in one go, one process each, one bundle (`HardwareReport` + reports + matrix); `next/manual/performance.md` | the runner against a fake command |
+| P4 | `python -m next.perf hwcheck`: the pending `TESTING.md` runs in one go, one process each, one bundle (`HardwareReport` + reports + matrix); `docs/manual/performance.md` | the runner against a fake command |
 
 ## As built
 P2: `Scenario`, `MatrixSpec` (TOML: `[base] command`, `[axes.NAME]` cross product, `[[scenario]]`), `SubprocessRunner`, `Matrix` (resume, failures recorded, every scenario compared with the first), `Comparison`. P3: `bench.py` with suites gemm, conv, norm, elementwise, attention (per backend, with a capture attempt and replay time), layers (native against int8, both gradient paths, dequantize), launch (eager against graph per kernel); results are rows rated against the ceilings, written as `bench.md` and `bench.json`; they do not feed back into `Ceilings` (a rating must not move with what it rates). P4: `hardware.py` (`HardwareReport`, `AllocatorProbe`), `hwcheck.py` (`HwCheck`: hardware, allocator A/B, bench, matrix of ten default scenarios, one `bundle.zip`).

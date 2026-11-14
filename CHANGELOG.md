@@ -28,7 +28,7 @@ so mixed-caption batches (dropout, pool) were all cache misses that re-loaded
 CLIP.
 
 Not shown: that any of this fixes the CLIP_L-only break. It is the
-mechanism, built so the experiment can be run (see `docs/maintainer-queue.md`).
+mechanism, built so the experiment can be run (see `archive/old-documentation/maintainer-queue.md`).
 
 ## 2026-10-11 — C3: new-run defaults are constant LR + kohya_label targets (724), cond path off
 

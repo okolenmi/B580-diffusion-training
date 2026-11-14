@@ -9,7 +9,7 @@ or abort the use case that published.
 Since 2026-10-02 this also assigns each event a **sequence number** and
 keeps a bounded ring of recent lifecycle events, so a client that
 reconnects can ask for what it missed
-(`docs/design/backend/09-event-contract.md`). Two consequences worth
+(`archive/old-documentation/design/backend/09-event-contract.md`). Two consequences worth
 stating:
 
 * the ring holds **lifecycle** events only. Deltas are coalesced per

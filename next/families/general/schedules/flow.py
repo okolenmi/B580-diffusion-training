@@ -2,7 +2,7 @@
 
 ``x_s = (1 - s) * x0 + s * noise`` for ``s`` in [0, 1]; the network predicts the velocity
 ``noise - x0``. Defaults for shift and sampling are the commonly published ones and are
-unverified for Anima until measured (rework/audit/anima-model-facts.md).
+unverified for Anima until measured (docs/audit/anima-model-facts.md).
 """
 
 from __future__ import annotations

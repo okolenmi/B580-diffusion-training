@@ -12,7 +12,7 @@ Three separate things, because they fail differently:
    verified rather than assumed. Skipped with a notice otherwise.
 
 3. **The frontend only reads fields that exist.** The guard this whole
-   exercise exists for (`docs/design/backend/09-event-contract.md`):
+   exercise exists for (`archive/old-documentation/design/backend/09-event-contract.md`):
    a backend rename stops every frame carrying the field, the frontend
    reads `undefined`, and the page renders an em dash with no error on
    either side and coverage green on both.

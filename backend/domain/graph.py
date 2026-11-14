@@ -1,4 +1,4 @@
-"""GraphDefinition -- the submitted node graph, as data: the graph document of rework/contracts/graph-json.md.
+"""GraphDefinition -- the submitted node graph, as data: the graph document of docs/contracts/graph-json.md.
 
 The document itself (nodes with a ``uid``, data and event edges, settings, views, addons) is defined and parsed
 by ``next/graph/document.py``; this module wraps it with what the server needs: the memory settings read from the

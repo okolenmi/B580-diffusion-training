@@ -30,4 +30,4 @@ start, about 1.5 GB after the first forward/backward, creeping by ~4 MB per new 
 | Accumulation instead of batch | `--accumulation N` | Same effective batch with the memory of one micro-batch. | More forward/backward passes; no larger batches' kernel efficiency. | verified |
 | Allocator mode | env `PYTORCH_ALLOC_CONF=expandable_segments:True` | Could reduce stuck fragmentation. | Not known to work on XPU. | verified: peak 8.3 -> 7.1 GB, no speed penalty; now on by default (export `PYTORCH_ALLOC_CONF` to change) |
 
-Not built (old tree had them, see `rework/71-memory.md`): block swap to host, activation offload.
+Not built (old tree had them, see `docs/71-memory.md`): block swap to host, activation offload.

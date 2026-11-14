@@ -19,7 +19,7 @@ to reach.
 
 A 5xx here is a contract failure rather than a robustness nicety: every
 error this API can return is in the table in
-`docs/design/backend/02-api-reference.md`, and `internal_error` is the
+`archive/old-documentation/design/backend/02-api-reference.md`, and `internal_error` is the
 handler's answer to an exception nobody planned for. The interesting
 question is not "does it 500" but "which exception reached the handler",
 which the server log names.

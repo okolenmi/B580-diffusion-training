@@ -58,7 +58,7 @@ footprint, state (`loading`, `resident`, `parked` (in pinned host memory), `evic
 | G5 | Cost of park and reload of 1 GB, pinned and pageable | sets the wait a lessee must expect and the timeout |
 If G1 fails and no other route works, parallel runs fall back to `PrivateWeights` for every set: the scheduler, instances and admission stay as built, and a
 second run is admitted only when its whole footprint fits beside the first. One process running several runs as threads is not offered: the step is launch
-bound (rework/74), so threads under one interpreter lock would slow every run.
+bound (docs/74), so threads under one interpreter lock would slow every run.
 
 ## Gate results (B580, torch 2.12.1+xpu, 2026-11-12)
 | Gate | Result | Meaning |

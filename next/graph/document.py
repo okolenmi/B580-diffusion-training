@@ -1,4 +1,4 @@
-"""The saved graph document (rework/contracts/graph-json.md)."""
+"""The saved graph document (docs/contracts/graph-json.md)."""
 
 from __future__ import annotations
 

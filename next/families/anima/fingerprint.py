@@ -1,6 +1,6 @@
 """How to recognise Anima files from a header.
 
-Decisive keys come from ComfyUI's model detection as read in rework/audit/anima-model-facts.md:
+Decisive keys come from ComfyUI's model detection as read in docs/audit/anima-model-facts.md:
 a Cosmos transformer has ``blocks.0.mlp.layer1.weight``; Anima adds
 ``llm_adapter.blocks.0.cross_attn.q_proj.weight``. Qwen3 and Wan-style VAE layouts are
 recollection and must be confirmed against real files before anything relies on them.

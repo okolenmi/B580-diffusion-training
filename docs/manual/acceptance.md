@@ -1,6 +1,6 @@
 # Acceptance lab
 
-Part of the trainer manual (`../MANUAL.md` has the short version). Status: `untested` = unit-tested on a CPU in the sandbox only. Design: `../../rework/75-acceptance-lab.md`.
+Part of the trainer manual (`../MANUAL.md` has the short version). Status: `untested` = unit-tested on a CPU in the sandbox only. Design: `../../docs/75-acceptance-lab.md`.
 
 The hardware runs listed in `TESTING.md` are mostly numeric judgements (a step time within a margin of another, a peak under a limit, a loss curve inside a band). The lab restates them as suites of scenarios plus checks, runs or reads the runs, and writes one `verdict.md`. What only eyes can decide stays on your list, with the file to open.
 

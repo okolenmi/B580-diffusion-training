@@ -2,7 +2,7 @@
 
 ## Context
 
-`docs/design/11-first-run-and-installer.md` was written before this
+`archive/old-documentation/design/11-first-run-and-installer.md` was written before this
 project had a settings page, and it proposed starting with a shell gate:
 `run_server.sh` checks dependencies before launching the server and
 explains what is missing instead of surfacing a `ModuleNotFoundError`.
@@ -81,7 +81,7 @@ model files are read from**, on a request any browser page could make. So:
 
 **The install-order argument is wrong and this record is superseded on that
 point** by
-[`12-installer-and-comfy-decoupling.md`](../design/12-installer-and-comfy-decoupling.md).
+[`12-installer-and-comfy-decoupling.md`](../../archive/old-documentation/design/12-installer-and-comfy-decoupling.md).
 
 The principle survives: the installer is a web surface, not a shell prompt,
 and it is behind the same Host/Origin guard as everything else. The

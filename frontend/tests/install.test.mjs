@@ -14,7 +14,7 @@
    So the tests below cover the shapes the renderer branches on, using the
    exact payloads the server sends -- including the three real outcomes of
    the ComfyUI conflict check, which are documented in
-   docs/design/12-installer-and-comfy-decoupling.md section 3. */
+   archive/old-docs/design/12-installer-and-comfy-decoupling.md section 3. */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

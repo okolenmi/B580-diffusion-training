@@ -1,4 +1,4 @@
-"""Running a validated graph (rework/contracts/runs.md)."""
+"""Running a validated graph (docs/contracts/runs.md)."""
 
 from __future__ import annotations
 

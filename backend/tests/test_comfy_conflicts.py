@@ -1,6 +1,6 @@
 """The ComfyUI conflict check: three outcomes, and refusing what it cannot read.
 
-`docs/design/12-installer-and-comfy-decoupling.md` §3. The check decides
+`archive/old-documentation/design/12-installer-and-comfy-decoupling.md` §3. The check decides
 whether four packages may be installed into a virtualenv this project does
 not own, and it runs before anything is written -- which means the answer is
 allowed to be "no", and the interesting cases are the refusals.

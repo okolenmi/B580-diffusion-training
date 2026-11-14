@@ -55,7 +55,7 @@ Exists:
   sequenced (`_diagSeq`) so a late answer cannot overwrite a newer one. This is
   the closest existing thing to "node shows server result", and it is the
   pattern the Load Model node should extend.
-* **SSE with replay** (`lib/events.js`, design `docs/design/backend/09-event-contract.md`):
+* **SSE with replay** (`lib/events.js`, design `archive/old-documentation/design/backend/09-event-contract.md`):
   lifecycle events are numbered and ring-buffered; reconnect replays or says
   `resync_required`.
 * **Per-node execution badges**: `graph_execution_progressed` paints `ok`/`err`
@@ -86,7 +86,7 @@ Missing:
 
 ## 5. Templates and monitors vs the graph
 
-(`docs/design/15-graph-modules-and-templates.md`, verified against `templates.js`)
+(`archive/old-documentation/design/15-graph-modules-and-templates.md`, verified against `templates.js`)
 
 * A template page is a board of blocks. A block's target is
   `{scope: node|graph, node, kind: field|display, name}`. Fields are the same

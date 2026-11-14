@@ -1,6 +1,6 @@
 """MonitorBus port -- live monitor-node telemetry, one stream per id.
 
-The contract is pinned by ``docs/design/backend/03-migration-strategy.md``
+The contract is pinned by ``archive/old-documentation/design/backend/03-migration-strategy.md``
 section 4 and mirrors the repo-root ``monitor_bus.MonitorBus`` the
 legacy server and ``nodes/`` already use, so payloads and replay
 semantics stay byte-identical across the migration:

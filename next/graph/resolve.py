@@ -1,4 +1,4 @@
-"""Editing-time shape resolution (rework/contracts/resolve.md)."""
+"""Editing-time shape resolution (docs/contracts/resolve.md)."""
 
 from __future__ import annotations
 

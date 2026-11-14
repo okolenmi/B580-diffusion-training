@@ -1,7 +1,7 @@
 """Environment port -- what this machine can actually do.
 
 Round-3 follow-on to the first-run installer work
-(`docs/design/11-first-run-and-installer.md`). The installer's whole value
+(`archive/old-documentation/design/11-first-run-and-installer.md`). The installer's whole value
 is turning "the server started, so something must be fine" into an
 answerable question, and that needs three facts the server does not
 otherwise have:

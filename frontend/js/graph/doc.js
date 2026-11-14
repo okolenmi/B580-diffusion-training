@@ -1,6 +1,6 @@
 /* ---------------------------------------------------------------------------
    graph/doc.js -- GraphDoc: the editable graph document, format 3
-   (rework/contracts/graph-json.md).
+   (docs/contracts/graph-json.md).
 
    One source of truth. Every mutation goes through a method, changes the
    data, and emits a fine-grained event so views patch only what changed:

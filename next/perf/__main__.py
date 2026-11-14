@@ -40,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     allocator = sub.add_parser("allocator", help="print what the allocator reserves in a fragmenting pattern (run under different PYTORCH_ALLOC_CONF)")
     allocator.add_argument("--device", default="xpu")
     allocator.add_argument("--quick", action="store_true")
-    ipc = sub.add_parser("ipc", help="can two processes share weights that sit once on the card? (gates of rework/76)")
+    ipc = sub.add_parser("ipc", help="can two processes share weights that sit once on the card? (gates of docs/76)")
     ipc.add_argument("--device", default="xpu")
     ipc.add_argument("--quick", action="store_true")
     ipc.add_argument("--out", default="perf-ipc")

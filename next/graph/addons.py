@@ -1,4 +1,4 @@
-"""Addons: small classes that plug into a host (a node, or the graph) through a slot (rework/31-node-addons.md).
+"""Addons: small classes that plug into a host (a node, or the graph) through a slot (docs/31-node-addons.md).
 
 An addon is defined by the interface of the slot it fills, so any host class that declares that slot offers it. The host
 never imports an addon: it asks ``self.addons`` and gets objects that satisfy the slot's interface.

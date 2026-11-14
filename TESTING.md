@@ -1,7 +1,7 @@
 # To test on the B580
 
-Things written in the sandbox (no XPU) that need hardware. An AI on the PC can run most of them: `rework/tester-brief.md` is its brief. Delete an entry once it passed; if one fails, keep it
-and paste the console lines. Feature background: `next/MANUAL.md`.
+Things written in the sandbox (no XPU) that need hardware. An AI on the PC can run most of them: `docs/tester-brief.md` is its brief. Delete an entry once it passed; if one fails, keep it
+and paste the console lines. Feature background: `docs/MANUAL.md`.
 
 ## Everything that can run unattended: one command
 
@@ -23,7 +23,7 @@ anything marked FAIL). `--suites features` (or `speed`, `memory`, `nf4`, `determ
 | allocator | expandable segments on and off | the peaks side by side |
 | features | probe and gradient alignment, blend, a 9216 cap without prewarm, three `--set`s at once, a typo in `--set`, mirror against zero padding, int8 with the torch backend, int8 with DoRA | each runs and prints what its item expects |
 
-For speed numbers with power and a kernel profile (not pass/fail): `python -m next.perf hwcheck --out perf-bundle ...` as in `next/manual/performance.md`.
+For speed numbers with power and a kernel profile (not pass/fail): `python -m next.perf hwcheck --out perf-bundle ...` as in `docs/manual/performance.md`.
 
 ## Still manual
 
@@ -157,7 +157,7 @@ Send the zip. How to read it: the report's table of adapters against the first a
 `--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 
 ## 81. Can two processes share weights on the card? (`python -m next.perf ipc`)
-Run `python -m next.perf ipc --out perf-ipc` on the B580 with nothing else using the card (a few minutes) and send `perf-ipc/ipc.md`. It answers the gates of `rework/76-parallel-runs.md`: what this torch and driver offer for sharing, whether a device tensor can be handed to another process (G1), used there (G2), and what the borrower sees when the owner frees it (G3); what two processes on one card cost each other (G4, needs no sharing); how long park and reload of 1 GB takes (G5). A failure is an answer, not a bug: it decides whether the shared-weights route is built or parallel runs stay on separate copies. If a gate hangs the card or the driver, say which one.
+Run `python -m next.perf ipc --out perf-ipc` on the B580 with nothing else using the card (a few minutes) and send `perf-ipc/ipc.md`. It answers the gates of `docs/76-parallel-runs.md`: what this torch and driver offer for sharing, whether a device tensor can be handed to another process (G1), used there (G2), and what the borrower sees when the owner frees it (G3); what two processes on one card cost each other (G4, needs no sharing); how long park and reload of 1 GB takes (G5). A failure is an answer, not a bug: it decides whether the shared-weights route is built or parallel runs stay on separate copies. If a gate hangs the card or the driver, say which one.
 
 ## 76. Editor: a graph written by a console run
 Write a graph with `python -m next.run sdxl-lora ... --dump graph.json`, press *Import file* in `/graph` and pick it: the nodes must arrive in columns left to right with no overlap (*Arrange* redoes it once the cards have their real size). Then *Export* and import the exported file again.

@@ -19,7 +19,7 @@ class Sequenced:
     concern in the layer that must not know about transports.
 
     **Process-local, and it resets when the process restarts.** That is
-    stated in `docs/design/backend/09-event-contract.md`. What a client
+    stated in `archive/old-documentation/design/backend/09-event-contract.md`. What a client
     sends back is therefore not a bare `seq` but an `EventCursor`, which
     pairs the number with the epoch of the process that issued it -- so
     "id 40" from a previous process is recognised as such instead of
@@ -123,7 +123,7 @@ class EventBus(ABC):
     no history on the *subscriber* side. The bus itself keeps a bounded
     ring of recent **lifecycle** events so a client that reconnects can
     ask for what it missed -- see `replay_since` and
-    `docs/design/backend/09-event-contract.md`. Implementations must be
+    `archive/old-documentation/design/backend/09-event-contract.md`. Implementations must be
     safe to call from any thread.
     """
 

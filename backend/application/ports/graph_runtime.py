@@ -1,6 +1,6 @@
 """GraphRuntime port -- authoritative validation + execution of graphs.
 
-The executor contract behind M4 (``docs/design/backend/05-graph-runtime.md``):
+The executor contract behind M4 (``archive/old-documentation/design/backend/05-graph-runtime.md``):
 
 * ``validate`` returns a *complete* structured issue list (never raises,
   never stops at the first problem) -- the same checks ``execute``

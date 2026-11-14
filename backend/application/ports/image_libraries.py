@@ -1,7 +1,7 @@
 """ImageLibraries port -- the image libraries (images + captions + sets) that training nodes open.
 
 One library per dataset name. Images stay where they are on disk; a library keeps their identity (content hash),
-size and captions. Answers are plain documents shaped for the Datasets page (rework/contracts/datasets.md).
+size and captions. Answers are plain documents shaped for the Datasets page (docs/contracts/datasets.md).
 """
 
 from __future__ import annotations

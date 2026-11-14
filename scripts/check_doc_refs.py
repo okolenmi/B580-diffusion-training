@@ -31,8 +31,16 @@ _SKIP = re.compile(
 )
 
 
+#: Where code that left the live tree went. A document about the old code may keep citing its old path: that is a
+#: reference to something that exists (in the archive), not a dead one.
+_ARCHIVED_UNDER = ("archive/old-trees", "archive/config-path", "archive/old-editor", "archive/old-scripts",
+                   "archive/old-documentation")
+
+
 def _resolve(root: Path, base: str) -> bool:
     if (root / base).exists():
+        return True
+    if any((root / where / base).exists() for where in _ARCHIVED_UNDER):
         return True
     # Extensionless module refs (`backend/__init__`): try +".py".
     if "." not in base.rsplit("/", 1)[-1]:

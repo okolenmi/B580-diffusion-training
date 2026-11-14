@@ -1,6 +1,6 @@
 # 75. Acceptance lab: tests the owner does not have to read, and instruments that make the next test cheaper
 
-Status: **T1 to T3 built (CPU-tested, not run on the card).** Manual: `next/manual/acceptance.md`. `next/accept/`, beside `next/perf/`. NF4 frozen weights (rework/72) are built with it as the first user: whether a quantized network is
+Status: **T1 to T3 built (CPU-tested, not run on the card).** Manual: `docs/manual/acceptance.md`. `next/accept/`, beside `next/perf/`. NF4 frozen weights (docs/72) are built with it as the first user: whether a quantized network is
 good enough is a question about *regions* of the network, and nothing answered it per region.
 
 ## Why

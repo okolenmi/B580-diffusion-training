@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   graph/node_tabs.js -- what a node's tabs hold (rework/31-node-addons.md,
+   graph/node_tabs.js -- what a node's tabs hold (docs/31-node-addons.md,
    section 7). Pure functions over catalog data and the document's node; no DOM.
 
      Main      the node's own ports and fields

@@ -30,7 +30,7 @@ def is_field(port: Port) -> bool:
 
 @dataclass(frozen=True)
 class Completion:
-    """How finished a node's outputs are (rework/contracts/runs.md)."""
+    """How finished a node's outputs are (docs/contracts/runs.md)."""
 
     state: str = "complete"
     step: int | None = None
@@ -171,7 +171,7 @@ class ExecutionContext:
 @dataclass(frozen=True)
 class Resolution:
     """The answer to 'given these params, what does this node look like?'
-    (rework/contracts/resolve.md)."""
+    (docs/contracts/resolve.md)."""
 
     state: str
     inputs: dict[str, Port]

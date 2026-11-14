@@ -110,7 +110,7 @@ team; for this job the efficient moves are different.
    them. Before rewriting an area, write `lessons/<area>.md`: each fact with its
    source file, what it implies for the new design, and whether a test or a setting
    must carry it. These do not go into code comments (plan 80, section 12); the
-   new code cites `docs/known-issues` or `lessons/` entries.
+   new code cites `docs/experiment-results.md` or `lessons/` entries.
 4. **Contracts before bodies.** `graph/` types and the catalog contract
    (`contracts/*.md`) are written and frozen before families, data and engine code,
    so every later file has something to be consistent with. A contract change goes
@@ -202,14 +202,12 @@ Gate: the big test green (`python -m next.tests.run_all`), and the owner has run
 
 Stages, each ending with every check green and a commit (the tree stays runnable throughout):
 
-1. **Survivors.** The backend still imports eight old modules (`nodes/memory/{graph_memory,coordinator,handle}`,
-   `nodes/components/device`, `nodes/xpu_env`, `nodes/model/resource_inspection`, `nodes/config_{model,io}`). The first six are
-   live (the admission ledger, the device probe, the environment variables set before torch loads, model-file inspection):
-   they move into the new tree (`backend/infrastructure/` for the ledger, `engine/` for the device and environment parts,
-   `families/` for inspection) with their tests. The config pair goes with the config path (stage 2).
-2. **Config path.** Backend config routes and schema modules, `frontend/config.html` and `js/views/config.js`, their tests
+1. **Survivors (done).** The backend's live old modules moved into `backend/infrastructure/`: the admission ledger
+   (`admission/`), the device probe over the engine's `Accelerator` (`device_probe.py`) and model-file inspection
+   (`resource_inspection.py`); the environment variables set before torch loads come from `engine/xpu_env.py`.
+2. **Config path (done).** Backend config routes and schema modules, `frontend/config.html` and `js/views/config.js`, their tests
    and `convert-cfg.toml` move to `archive/`; backend settings (ports, paths, first run) stay.
-3. **Old trees.** `nodes/`, `manager/`, `frontend/js/editor*` and `graph.html` (the route `/graph` serves `graph.html`),
+3. **Old trees (done).** `nodes/`, `manager/`, `frontend/js/editor*` and `graph.html` (the route `/graph` serves `graph.html`),
    old tests and `run_tests.py` move to `archive/`; `docs/` is rewritten from the plans (old design docs to `archive/`).
 4. **Flatten.** `git mv next/<each> .`; rewrite `next.` imports (backend, scripts, backend tests), `python -m next.` commands
    (TESTING, docs, `run_server.sh`), the layer table in `scripts/check_imports.py`, and write a new `run_tests.py` that runs
@@ -264,7 +262,7 @@ Answered 2026-10-14: old app, dataset format, spot checks, optimizers, phase ord
 (section 0.1). Still open:
 
 1. Will you supply, for phase 8, a real Anima safetensors **header** (the script is
-   `scripts/dump_header.py`; `rework/tester-brief.md` mission 6 runs it) and later one short real run?
+   `scripts/dump_header.py`; `docs/tester-brief.md` mission 6 runs it) and later one short real run?
 2. May the editor work run beside the Python phases when work spans several sessions,
    or strictly one phase at a time? (Default: beside, after the catalog contract is
    frozen.)

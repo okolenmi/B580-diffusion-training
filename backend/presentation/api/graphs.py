@@ -1,7 +1,7 @@
 """Node-graph endpoints -- catalog, validation, executions, library (M4).
 
 Resource-oriented contract over ``services.graphs``
-(docs/design/backend/05-graph-runtime.md section 6):
+(archive/old-documentation/design/backend/05-graph-runtime.md section 6):
 
 * ``POST /api/v1/graphs/nodes/{class_name}/diagnostics`` -- live per-input
   hints (the palette and shapes are ``/api/v1/catalog``);

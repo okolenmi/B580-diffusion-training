@@ -42,7 +42,7 @@ Two encoders: CLIP-L (about 0.25 GB) and OpenCLIP-bigG (about 1.3 GB). They coul
 NF4 frozen weights (old `nf4_weight_store`, `nf4_lora_layer`; measured on the B580 as 16-20% slower for 180-1361 MB, so only where memory is the binding constraint); block swap; activation offload to the host; oneDNN
 primitive-cache sizing and thrash detection (old `xpu_env`, `cache_thrash`).
 
-## Carried over from the old implementation (measured on the B580, `nodes/xpu_env.py`, `docs/known-issues/open.md`)
+## Carried over from the old implementation (measured on the B580, `nodes/xpu_env.py`, `archive/old-documentation/known-issues/open.md`)
 
 * A new latent shape costs about 3.85 s the first time it reaches the GPU (kernel and primitive creation). With
   oneDNN's default primitive cache (1024 entries) a shape that comes back also costs that much again; with 2048 it

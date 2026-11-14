@@ -1,6 +1,6 @@
 # Performance lab
 
-Part of the trainer manual (`../MANUAL.md` has the short version). Status: `untested` = unit-tested on a CPU in the sandbox only. Design and rules: `../../rework/74-perf-lab.md`.
+Part of the trainer manual (`../MANUAL.md` has the short version). Status: `untested` = unit-tested on a CPU in the sandbox only. Design and rules: `../../docs/74-perf-lab.md`.
 
 The lab answers "where does a step's time go, and how much of it could be recovered". It measures on the device (kernel table, device events), compares every piece with what this card measures it can do (matmul and int8 throughput, copy bandwidth, launch cost), and ranks by **recoverable milliseconds** (measured minus ideal), so a big, efficient matmul ranks below a small slow chain of elementwise kernels.
 

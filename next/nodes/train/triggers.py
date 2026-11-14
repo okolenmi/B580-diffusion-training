@@ -1,7 +1,7 @@
 """Triggers: addons that turn what the trainer reports into checkpoint-due events.
 
 They sit on the graph, so one trigger serves every saver in it; a trainer's step events rise to the graph and the savers hear the
-event by scope, with no wire (rework/31-node-addons.md, 6c).
+event by scope, with no wire (docs/31-node-addons.md, 6c).
 """
 
 from __future__ import annotations

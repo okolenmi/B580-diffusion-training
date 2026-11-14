@@ -3,7 +3,7 @@
     python scripts/check_imports.py            # exit 1 on any violation
     python scripts/check_imports.py --list     # print the layer table
 
-Rules come from rework/80-developer-guide.md section 2.1. Each file under
+Rules come from docs/80-developer-guide.md section 2.1. Each file under
 ``next/`` belongs to one layer, decided by its path; a layer may import only the
 layers listed for it, and a *pure* layer may import nothing outside the standard
 library. Relative imports are resolved before checking, so a ``..`` that climbs

@@ -3,7 +3,7 @@
 Status: **proposal.** The owner accepted the earlier dataset plan (library,
 caption stages, batcher) and asked for improvements where visible. Needs 10
 (events), 40 (`LatentSpec`, `Conditioning`), 41 (`VAEPart`), 42 (prompt
-channels). Inputs: component-map doc, `docs/design/backend/04-dataset-format.md`,
+channels). Inputs: component-map doc, `archive/old-documentation/design/backend/04-dataset-format.md`,
 `manager/db.py`, `manager/builder.py`, `nodes/dataset/*`, `step_pipeline.py`.
 
 > **Superseded in part (2026-10-13 18:21):** the owner dropped all compatibility and migration work. Read `90-build-plan.md`: no shims, aliases, deprecation windows, old-port support or old-versus-new parity gates; the new tree is built clean beside `nodes/`.

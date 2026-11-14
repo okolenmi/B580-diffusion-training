@@ -13,7 +13,7 @@ tenant, each stay under their own ceiling, and together overrun it.
 
 **The ~600 MB overhead figure is confirmed, and it is specific to a loaded
 process.** Measured on this card on 2026-10-05
-([`docs/known-issues/pending-testing.md`](../known-issues/pending-testing.md),
+([`archive/old-documentation/known-issues/pending-testing.md`](../../archive/old-documentation/known-issues/pending-testing.md),
 MEM-08 (b)): steady-state overhead during a rank-64 LoRA run at 1024 px is
 **~530 MB** (538.9 / 539.0 / 525.0 / 530.9 MB across the last four steps,
 from timestamp-paired driver and allocator readings of one run). So
@@ -45,7 +45,7 @@ peak lower than the highest recorded in 69 of 150 trials.
 
 Measured dataset-task demands on this card (allocator MB; the ledger adds
 the 600 MB overhead to reach device MB) --
-[`docs/known-issues/pending-testing.md`](../known-issues/pending-testing.md),
+[`archive/old-documentation/known-issues/pending-testing.md`](../../archive/old-documentation/known-issues/pending-testing.md),
 MEM-08 (f):
 
 | kind | input | allocator MB | device MB |
@@ -156,7 +156,7 @@ per relief attempt, and never when already under budget, so it is not the
 per-step reclaim that `text_encoder.py`'s `offload()` docstring measures as a
 real cost.
 
-Left open, and recorded in `docs/known-issues/pending-testing.md`: the lease
+Left open, and recorded in `archive/old-documentation/known-issues/pending-testing.md`: the lease
 API accounts by declared footprint (which *does* drop on offload) while the
 handle accounts by `reserved` (which does not). The two answer different
 questions on purpose, but reconciling them is still needed before per-step

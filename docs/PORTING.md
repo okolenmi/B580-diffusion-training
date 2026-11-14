@@ -36,10 +36,10 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/dataset/prefetch.py` | 157 | 45 | next/data/prefetch.py | rewrite | done (worker lives in the batcher; no separate node) |
 | `nodes/dataset/timestep_modes.py` | 51 | 92 | next/nodes/dataset/batching.py (Noiser node) | rewrite | done |
 | `nodes/memory/control_handle.py` | 489 | 70 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger stays in backend, phase 6) |
-| `nodes/memory/coordinator.py` | 115 | 43 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger stays in backend, phase 6) |
+| nodes/memory/coordinator.py | 115 | 43 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger moved to backend/infrastructure/admission) |
 | `nodes/memory/device_reservations.py` | 282 | 59 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger stays in backend, phase 6) |
-| `nodes/memory/graph_memory.py` | 661 | 46 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger stays in backend, phase 6) |
-| `nodes/memory/handle.py` | 82 | 66 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger stays in backend, phase 6) |
+| nodes/memory/graph_memory.py | 661 | 46 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger moved to backend/infrastructure/admission) |
+| nodes/memory/handle.py | 82 | 66 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger moved to backend/infrastructure/admission) |
 | `nodes/memory/manager.py` | 206 | 54 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger stays in backend, phase 6) |
 | `nodes/memory/profile.py` | 84 | 68 | superseded | - | dropped: the memory ledger, `runtime.profile` and the per-phase timings cover it |
 | `nodes/memory/vram_budget_controller.py` | 103 | 27 | next/engine/runtime/memory.py | rewrite | done (residency, budget, levers; the cross-run admission ledger stays in backend, phase 6) |
@@ -74,7 +74,7 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/model/nf4_weight_store.py` | 221 | 53 | next/families/general/adapters/ or quantization/ | ? | todo |
 | `nodes/model/node.py` | 53 | 2 | next/graph/ | rewrite | done |
 | `nodes/model/parameters.py` | 35 | 26 | next/ (triage) | ? | todo |
-| `nodes/model/resource_inspection.py` | 149 | 38 | superseded | - | dropped: header detection in families/api/detection |
+| nodes/model/resource_inspection.py | 149 | 149 | backend/infrastructure/resource_inspection.py | moved | the asset-inspection endpoint still uses it |
 | `nodes/model/resources_controller.py` | 477 | 46 | next/engine/runtime/memory.py | rewrite | done |
 | `nodes/model/sdxl_architecture.py` | 71 | 62 | next/families/sdxl/ | ? | todo |
 | `nodes/model/text_encoder.py` | 346 | 50 | next/families/general/ + sdxl/conditioning | ? | todo |
@@ -130,4 +130,4 @@ Totals: 133 files, 27,586 lines, 40.9% comments/docstrings (11,285 lines), 3,642
 | `nodes/train/t_probe.py` | 362 | 31 | next/engine/step/probe.py + Trainer node ports `probe_*` | rewrite | done (forward probe, adapter vs gated-to-zero base on fixed samples, noise and timesteps; gradient alignment `gc_*` in engine/step/alignment.py) |
 | `nodes/train/xpu_graph_step.py` | 336 | 32 | next/engine/step/graphed.py | rewrite | done (CPU-verified with a fake graph API; XPU unverified; same refusals, shared pool, capture at micro-step 0 after 3 eager sightings, held gradients, optimizer `touch`)|
 | `nodes/ui.py` | 185 | 40 | next/graph/ (field/display descriptors) | rewrite | done |
-| `nodes/xpu_env.py` | 284 | 65 | next/engine/xpu_env.py | rewrite | done (measurements in rework/71-memory.md) |
+| `nodes/xpu_env.py` | 284 | 65 | next/engine/xpu_env.py | rewrite | done (measurements in docs/71-memory.md) |

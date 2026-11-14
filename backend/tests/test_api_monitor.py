@@ -1,7 +1,7 @@
 """Monitor stream tests -- the SSE contract for one monitor_id (M6).
 
 Verifies the pinned frame sequence from
-``docs/design/backend/03-migration-strategy.md`` section 4 end to end
+``archive/old-documentation/design/backend/03-migration-strategy.md`` section 4 end to end
 against the real composition root: opener, history replay, live
 reports, clear broadcast, clean shutdown on disconnect -- plus the
 guarantee that page routes never shadow the API's error envelope.

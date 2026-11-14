@@ -61,7 +61,7 @@ Rules:
 10. `addons` (on a node, and at the top level for the graph): ordered; `id` is stable inside its host (`[a-z][a-z0-9_]*`),
     `kind` an addon class name. A disabled addon is neither built nor checked; its params stay. An addon's parameter that is
     wired is the port `<id>.<param>` of its host, and a slot filled by a wire is the port `slot:<slot>`. An event wire may end at
-    `<uid>.<id>` or `graph.<id>`. Rules and issue codes (`addon_*`): `rework/31-node-addons.md`.
+    `<uid>.<id>` or `graph.<id>`. Rules and issue codes (`addon_*`): `docs/31-node-addons.md`.
 
 ## Views
 

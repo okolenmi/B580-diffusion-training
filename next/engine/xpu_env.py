@@ -1,6 +1,6 @@
 """SYCL and oneDNN environment variables for Intel GPUs. Call before the first step runs; no torch import needed.
 
-The measurements behind the values are in rework/71-memory.md.
+The measurements behind the values are in docs/71-memory.md.
 """
 
 from __future__ import annotations

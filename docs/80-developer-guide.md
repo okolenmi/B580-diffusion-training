@@ -60,7 +60,7 @@ The three questions to ask before any change:
 | `engine/` | `graph`, `families/api`, `families/registry`, torch | nodes, backend, concrete families | step phases and runtime services (residency, memory, capture) |
 | `nodes/` | `graph`, `families/api`, `families/registry`, `data`, `engine`, `nodes/*` | a concrete family, `backend/` | thin; wires family calls and handles together |
 | `data/` (replaces `manager/`, plan 90) | stdlib, torch, `families/api`, `families/registry` | nodes, backend | dataset library, latent cache, prompt table, batching; family constants come from `LatentSpec` |
-| `backend/` | its own layers (docs/design/backend/01-architecture.md, the ten rules); `graph`, `families/api` | torch at import time; a concrete family | infrastructure may import `nodes/` (the catalog) |
+| `backend/` | its own layers (archive/old-documentation/design/backend/01-architecture.md, the ten rules); `graph`, `families/api` | torch at import time; a concrete family | infrastructure may import `nodes/` (the catalog) |
 | `frontend/` | itself | anything on the Python side by name | talks to the server over `/api/v1` only |
 
 **Pinned by (target):** one import-boundary check (a new `scripts/check_imports.py`, wired into
@@ -234,7 +234,7 @@ A checklist, in order. The first four steps need no model weights.
    something else must change, the interface was wrong: fix the interface.
 5. Starter graph (plan 60) for the family; it is the integration test.
 6. Hardware numbers (VRAM, steps per second) go to
-   `docs/known-issues/` **only after they are measured**, never guessed.
+   `docs/experiment-results.md` **only after they are measured**, never guessed.
 
 ### 4.3 Adding a model type to an existing family
 
@@ -379,21 +379,21 @@ incident narrative. They go stale and they bury the code. The rules:
 | a short comment | **why** a non-obvious choice was made, one to three lines, true now |
 | the docstring | the contract: what a caller must know, no history |
 | `docs/decisions/NNNN-*.md` | a decision with a cost and a test that pins it |
-| `docs/known-issues/*.md` | measured numbers, incidents, open or resolved findings; code **cites** the entry, it does not copy it |
+| `docs/experiment-results.md` | measured numbers, incidents, open or resolved findings; code **cites** the entry, it does not copy it |
 | `CHANGELOG.md` | what changed for a user |
 | git history | how it used to be |
 
 Hard rules:
 
 1. **No measured numbers in code comments** (VRAM, speed, thresholds). They go
-   to `docs/known-issues/` with the date and hardware, and the comment points
+   to `docs/experiment-results.md` with the date and hardware, and the comment points
    there. `scripts/check_docs.py` already checks numbers asserted in docs against
    the code; extend it, do not duplicate the habit.
 2. **No history in comments** ("previously", "used to", "after the fix").
 3. A comment that restates the next line is deleted.
 4. If a long explanation is needed to make the code understandable, the design
    is the problem; say so in a decision record and simplify.
-5. Do not delete or rename a `docs/known-issues` entry that a source comment
+5. Do not delete or rename a `docs/experiment-results.md` entry that a source comment
    cites (the known-issues README says this; keep it).
 6. Docs are checked by `scripts/check_docs.py` in `full_gate.sh`: a new fact
    about the code that is a number or a name should be registered there.
@@ -480,7 +480,7 @@ catalog format, setting keys, REST routes, DB schemas. They are written in
 
 ## 17. Process rules for agents working on this repo
 
-* Read `rework/00-index.md` (during the rework) or `docs/design/README.md`
+* Read `docs/00-index.md` (during the rework) or `archive/old-documentation/design/README.md`
   (after) before editing.
 * Facts about code go in `audit/` or the doc with file:line; do not re-derive
   them each session.
@@ -488,7 +488,7 @@ catalog format, setting keys, REST routes, DB schemas. They are written in
   concerns; later agents do not reopen it without a new reason.
 * A change that cannot be verified here (hardware, weights, network) is marked
   unverified in the commit message and in
-  `docs/known-issues/pending-testing.md` with how to confirm it.
+  `archive/old-documentation/known-issues/pending-testing.md` with how to confirm it.
 * Small commits; each runs the gate it touches. Do not reformat files you do
   not otherwise change.
 * The sandbox-only workflow (patches via `git format-patch`) does not change
@@ -502,15 +502,15 @@ catalog format, setting keys, REST routes, DB schemas. They are written in
 
 | # | Decision | Options | Recommendation |
 |---|---|---|---|
-| D1 | Where this guide lives | one file; a folder | docs/developing-nodes.md (short, linked; not written yet) plus the plans kept as `docs/design/` records after the rework |
+| D1 | Where this guide lives | one file; a folder | docs/developing-nodes.md (short, linked; not written yet) plus the plans kept as `archive/old-documentation/design/` records after the rework |
 | D2 | Enforcement | review only; tests for the mechanical rules | Tests for imports, groups, no frontend node names, no module-level mutable state in `nodes/`; review for the rest |
 | D3 | Comment policy | advisory; checked | Advisory plus one cheap checker for digits-with-units (`MB`, `GB`, `it/s`, `ms`) in comments, warning only |
-| D4 | Plan documents after the rework | delete; keep | Move to `docs/design/` as numbered records, mark superseded where reality differed |
+| D4 | Plan documents after the rework | delete; keep | Move to `archive/old-documentation/design/` as numbered records, mark superseded where reality differed |
 
 ## 19. Open questions for the owner
 
 1. Do you accept the comment policy of section 12 (measurements to
-   `docs/known-issues`, no history in code)? It means a one-time cleanup of
+   `docs/experiment-results.md`, no history in code)? It means a one-time cleanup of
    existing comments, which I would do in its own commit, not mixed with logic.
 2. Is the 400/300/500 line guidance acceptable as soft limits, or do you want
    a hard check?

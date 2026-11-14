@@ -1,7 +1,7 @@
 /* ---------------------------------------------------------------------------
    graph/shapes.js -- the shape of every node on the canvas: the catalog's
    static ports, or the ports the server resolved for the node's current
-   params (rework/contracts/resolve.md).
+   params (docs/contracts/resolve.md).
 
    `ShapeStore.shapeOf(node)` is what `GraphDoc` and the views read. A class
    with `dynamic: {depends_on, debounce_ms}` is re-resolved (debounced,

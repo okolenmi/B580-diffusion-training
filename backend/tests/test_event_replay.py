@@ -4,7 +4,7 @@ The bug this exists for: `/api/v1/events` had no replay, so a browser tab
 that slept through `graph_execution_finished` came back still believing it was
 running. The frontend papered over it by refetching on every reconnect,
 which was racy and cost a full fetch per reconnect
-(`docs/design/backend/09-event-contract.md`).
+(`archive/old-documentation/design/backend/09-event-contract.md`).
 
 Run directly: python backend/tests/test_event_replay.py
 """

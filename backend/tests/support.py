@@ -467,7 +467,7 @@ def gedge(src: str, out: str, dst: str, inp: str) -> dict:
 
 
 def gdoc(nodes=(), edges=(), settings: dict | None = None, **rest) -> dict:
-    """A graph document (rework/contracts/graph-json.md) from compact pieces."""
+    """A graph document (docs/contracts/graph-json.md) from compact pieces."""
     return {"format": 3, "settings": dict(settings or {}), "nodes": list(nodes), "edges": list(edges), **rest}
 
 

@@ -1,6 +1,6 @@
 """Graph settings: the environment of a run, kept out of node ports.
 
-See rework/contracts/settings.md and plan 20. A setting is data (a ``SettingSpec``);
+See docs/contracts/settings.md and plan 20. A setting is data (a ``SettingSpec``);
 nodes and families contribute specs; the registry validates a graph's values; a run
 gets an immutable ``Settings`` snapshot and each node sees only the keys it declared in
 ``READS_SETTINGS``.

@@ -13,7 +13,7 @@ everything else, so "the child found its nodes" is genuinely tested.
 
 Each spawn costs about two seconds, nearly all of it importing torch and
 walking ``nodes/`` -- measured, not guessed (see the WP-22 note in
-``docs/design/13-process-isolation.md``). That is the price of a
+``archive/old-documentation/design/13-process-isolation.md``). That is the price of a
 per-run process, and it is the number the default-flip step is judged on.
 
 Run directly: python backend/tests/test_graph_task_gateway.py

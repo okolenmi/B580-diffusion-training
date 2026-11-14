@@ -1,6 +1,6 @@
 """The one place where the backend names the new node tree.
 
-``next`` is the working name of the rewrite (rework/90-build-plan.md); the swap in phase 9 moves its
+``next`` is the working name of the rewrite (docs/90-build-plan.md); the swap in phase 9 moves its
 contents to the repository root, and this module is then the only import that changes.
 """
 

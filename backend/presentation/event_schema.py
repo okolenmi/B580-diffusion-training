@@ -6,7 +6,7 @@ release -- which is the bug this exists to prevent. The failure it guards
 against has no other guard at all: the backend renames a field, every
 frame stops carrying it, and the frontend reads `undefined` and renders an
 em dash, with no error on either side and coverage green on both
-(`docs/design/backend/09-event-contract.md`).
+(`archive/old-documentation/design/backend/09-event-contract.md`).
 
 What is on the wire is **not** just the dataclass
 ----------------------------------------------------

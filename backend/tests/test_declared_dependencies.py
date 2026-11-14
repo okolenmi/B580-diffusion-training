@@ -8,15 +8,13 @@ exists because they already had.
 Two training-tier packages were missing while being hard top-level imports
 of live modules:
 
-* `tqdm` -- `from tqdm import tqdm` at the top of `manager/builder.py`,
-  where it drives dataset ingest. Without it that module does not import,
-  so the entire dataset builder is unavailable. It predates this work.
-* `regex` -- the CLIP tokenizer's word splitter (`nodes/model/tokenizer.py`,
-  design doc 12 section 7.3-C2). CLIP's pattern needs `\p{L}` and `\p{N}`,
+* `tqdm` -- `from tqdm import tqdm` at the top of the old dataset builder,
+  which drove dataset ingest. Without it that module did not import.
+* `regex` -- the CLIP tokenizer's word splitter. CLIP's pattern needs `\p{L}` and `\p{N}`,
   which the standard library's `re` does not have.
 
 Neither appeared in `requirements.txt`, in the manifest, or in
-`docs/setup.md`. The manifest's own docstring names this failure -- "a
+`archive/old-documentation/setup.md`. The manifest's own docstring names this failure -- "a
 package the trainer imports, which appears in no requirements file at
 all" -- and then nothing checked for it, so for a while it was a
 description rather than a guarantee.
@@ -38,15 +36,15 @@ either in the manifest or in the allowlist below, with a reason.
   production, and they are allowed to reach further than the code they
   check.
 
-**The one direction between our own packages** (MEM-05 #5): `nodes/` is
-the layer the backend is built on top of, so a node module importing
-`backend/` inverts that and is refused here. `backend/` importing
-`nodes/` is the whole design and stays legal. The rule is a directional
-AST check over the `nodes/` tree -- absolute `backend` imports and
+**The one direction between our own packages** (MEM-05 #5): the trainer
+tree (`next/`) is the layer the backend is built on top of, so a module in
+it importing `backend/` inverts that and is refused here. `backend/`
+importing `next/` is the whole design and stays legal. The rule is a
+directional AST check over the trainer tree -- absolute `backend` imports and
 relative ones whose level resolves up to the top-level `backend` -- and
 it reports the offending file and line, not just a count. A live smoke
 test (`smoke_test_graph_memory.py`) reaches into `backend/` to test the
-worker's own wiring helpers; that is why `nodes/smoke_tests` is excluded
+worker's own wiring helpers; that is why the trainer's tests are excluded
 above rather than this rule carving out exceptions.
 
 Run: `python backend/tests/test_declared_dependencies.py`
@@ -101,8 +99,7 @@ EXCLUDED_PREFIXES = (
     "archive",
     "scripts",
     "backend/tests",
-    "nodes/smoke_tests",
-    "manager/smoke_tests",
+    "next/tests",
     "frontend",
     # These two run inside ComfyUI's own interpreter, where `comfy` is provided by ComfyUI itself.
     "next/accept/comfy_forward.py",
@@ -267,12 +264,12 @@ def _backend_target(node, package_parts: list[str]) -> str | None:
     Two shapes count, because both are ways to actually import it:
     ``import backend.x`` / ``from backend.x import y`` (absolute), and
     a relative import whose level climbs out of the importing file's own
-    package to the repo root. For ``nodes/memory/graph_memory.py`` the
-    package is ``nodes.memory``, so ``.`` is ``nodes.memory``, ``..`` is
-    ``nodes`` and ``...`` is the top level -- only the last reaches
+    package to the repo root. For ``next/engine/runtime/memory.py`` the
+    package is ``next.engine.runtime``, so ``.`` is that package, ``..`` is
+    ``next.engine``, ``...`` is ``next`` and ``....`` is the top level -- only the last reaches
     ``backend``. Walking the package parts up by ``level - 1`` and
     reading the target off whatever is left is what keeps a
-    ``from ..backend`` inside ``nodes/memory/`` (which is ``nodes.backend``,
+    ``from ...backend`` inside ``next/engine/runtime/`` (which is ``next.backend``,
     a different thing) from being flagged.
     """
     if isinstance(node, ast.Import):
@@ -313,25 +310,25 @@ def backend_imports_under(prefix: str) -> list[tuple[str, int]]:
     return hits
 
 
-layering_violations = backend_imports_under("nodes/")
+layering_violations = backend_imports_under("next/")
 report(not layering_violations,
-       f"no node module imports backend ({len(layering_violations)} violation(s)) "
-       f"-- nodes/ is the layer the backend runs on top of, never the other "
+       f"no trainer module imports backend ({len(layering_violations)} violation(s)) "
+       f"-- next/ is the layer the backend runs on top of, never the other "
        f"way round (task rule 9 / ADR 0005 'Layering')",
        "reached backend from: "
        + "; ".join(f"{f}:{line}" for f, line in layering_violations[:6]))
 
 # Guard against the check quietly measuring nothing: it must actually walk
-# the node tree, or a future refactor that moves the files would turn this
+# the trainer tree, or a future refactor that moves the files would turn this
 # into a green that means nothing.
 node_modules = [
     path for path in REPO.rglob("*.py")
-    if path.relative_to(REPO).as_posix().startswith("nodes/")
+    if path.relative_to(REPO).as_posix().startswith("next/")
     and not path.relative_to(REPO).as_posix().startswith(EXCLUDED_PREFIXES)
 ]
 report(len(node_modules) > 100,
-       f"and the pass actually walked the node tree ({len(node_modules)} modules)",
-       f"only {len(node_modules)} modules found under nodes/ -- the rule "
+       f"and the pass actually walked the trainer tree ({len(node_modules)} modules)",
+       f"only {len(node_modules)} modules found under next/ -- the rule "
        f"would pass by measuring nothing")
 
 finish()

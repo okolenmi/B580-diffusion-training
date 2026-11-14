@@ -1,6 +1,6 @@
 """The event plane: typed notifications between nodes during a run.
 
-See rework/contracts/events.md. Dispatch is synchronous and happens on the run thread, so
+See docs/contracts/events.md. Dispatch is synchronous and happens on the run thread, so
 an emitter that pauses at a safe point (the end of an epoch) knows every subscriber has
 finished when ``emit`` returns.
 """

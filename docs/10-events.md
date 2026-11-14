@@ -1,7 +1,7 @@
 # 10. Events: a second plane beside the data wires
 
 Status: **proposal; the owner called events "the biggest helpful update".**
-Everything else in `rework/` leans on this plan (dataset prompt swap, prewarm,
+Everything else in `docs/` leans on this plan (dataset prompt swap, prewarm,
 periodic saving, probes, widgets, templates). Inputs:
 `audit/backend-graph-engine.md`, `audit/frontend-graph-ui.md`.
 
@@ -131,7 +131,7 @@ new channel is needed:
   frames to the server; this reuses that path);
 * lifecycle-class events (those the UI must never miss) also as domain events
   on the numbered `EventBus`, so a reconnecting tab gets them replayed under the
-  existing contract (`docs/design/backend/09-event-contract.md`);
+  existing contract (`archive/old-documentation/design/backend/09-event-contract.md`);
 * node state (`resolving`, `running`, `ready`, `error`) is the same mechanism:
   a `node_state` event, which is how plan 30's "processing... please wait"
   works for slow server-side steps.

@@ -1,6 +1,6 @@
 /* ---------------------------------------------------------------------------
    graph/ports.js -- what a port is, from the catalog's PortInfo
-   (rework/contracts/catalog.md). Pure functions; no DOM, no state.
+   (docs/contracts/catalog.md). Pure functions; no DOM, no state.
 
    The browser decides wire compatibility exactly as the server does: an
    output satisfies an input when the input's type name is in the output's

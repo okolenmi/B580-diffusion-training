@@ -1,6 +1,6 @@
 """The installer surface: what it reports, and when it refuses.
 
-Round-3 follow-on to `docs/design/11-first-run-and-installer.md`. The
+Round-3 follow-on to `archive/old-documentation/design/11-first-run-and-installer.md`. The
 document's §1 asks for a machine-readable requirements list and its §5
 asks for the wizard's checks; this file is the backend half of both, and
 it is deliberately the *hardest* half to get wrong, because every claim it

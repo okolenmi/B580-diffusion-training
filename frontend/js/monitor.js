@@ -1,7 +1,7 @@
 /* ---------------------------------------------------------------------------
    Monitor page entry (M6) -- ES-module port of the legacy
    server/static/monitor_dashboard.js. The visualization is pinned by
-   docs/design/backend/03-migration-strategy.md section 1 (keep what the
+   archive/old-documentation/design/backend/03-migration-strategy.md section 1 (keep what the
    legacy dashboard did): same frame handling, same readouts, same
    window/freeze/CSV controls. What changed:
 

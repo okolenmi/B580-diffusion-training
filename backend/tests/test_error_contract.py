@@ -4,7 +4,7 @@ Two things are pinned here, and both used to be able to drift silently
 (docs 08 S-10):
 
 * every ``ApplicationError`` subclass declares the status that
-  ``docs/design/backend/02-api-reference.md`` documents. The test
+  ``archive/old-documentation/design/backend/02-api-reference.md`` documents. The test
   *parses that table* rather than restating it, so there is one source:
   the doc. A new error that forgets its status, or a status that
   changed in one place only, fails at the gate instead of in a client;
@@ -43,7 +43,7 @@ from backend.application.errors import (  # noqa: E402
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-API_DOC = REPO_ROOT / "docs/design/backend/02-api-reference.md"
+API_DOC = REPO_ROOT / "archive/old-documentation/design/backend/02-api-reference.md"
 
 _TABLE_ROW = re.compile(r"^\s*\|\s*(.+?)\s*\|\s*(\d{3})\s*\|")
 

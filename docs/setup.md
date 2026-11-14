@@ -1,280 +1,74 @@
 # Setup and running
 
-This doc collects the setup/run information that used to live only as
-scattered comments in `run_server.sh`, `.env.example`, and `paths.py`.
-If something here disagrees with those files, the files win -- this is
-a summary, not a second source of truth (see
-[`review_notes.md`](review_notes.md) for the general caveat about
-docs drifting from code).
-
 ## Python 3.14 or newer
 
-Both quality tools are configured for it -- `pyproject.toml` sets ruff's
-`target-version` and mypy's `python_version` to `3.14` -- and the code
-depends on it at runtime: `backend/presentation/event_schema.py` decides
-"is this annotation `X | None`" with `get_origin(annotation) is Union`,
-an identity that only holds from 3.14.
+`pyproject.toml` sets ruff and mypy to 3.14, and the backend depends on it at runtime
+(`backend/presentation/event_schema.py` tells `X | None` annotations apart with an identity that only holds from 3.14).
+The floor is stated once, in `backend/python_floor.py`; `python -m backend.cli` and the graph child check it first.
 
-The floor is stated once, in
-[`backend/python_floor.py`](../backend/python_floor.py), and both process
-entry points (`python -m backend.cli` and the graph execution child) check
-it before doing anything else. An older interpreter therefore gets one
-readable line instead of a wrong schema, or a `TypeError` from somewhere
-deep in start-up.
+## Folder layout
 
-## Expected folder layout
-
-The default, zero-config assumption is that this project, a ComfyUI
-checkout, and a Python virtual environment are three **sibling**
-directories:
+Zero-config layout: this project, a ComfyUI checkout and a virtual environment are siblings.
 
 ```
 some-parent-dir/
 ├── ComfyUI/
-├── venv/                 # has torch, ComfyUI's own deps, etc. installed
+├── venv/                      # torch (XPU or CUDA) and ComfyUI's own packages
 └── B580-diffusion-training/   # this repo
 ```
 
-If your layout matches this, nothing below needs configuring.
-`paths.py` auto-detects `ComfyUI/` from this repo's own location, and
-the venv is found as a sibling `venv/` (by `run_server.sh`, by
-`path_tiers.py` and by `run_tests.py` -- all three fall back to it).
+Another layout: copy `.env.example` to `.env` (gitignored) and set `COMFY_DIR` and `VENV_PYTHON`, or export them for one
+run (environment variables win over `.env`). `VENV_PYTHON` is the interpreter that has torch; the server and every run it
+starts use it. The browser wizard at `/setup` can also create the environment on a first run.
 
-## Configuring a different layout
-
-If your layout is different, set `COMFY_DIR` and `VENV_PYTHON` one of
-two ways (env vars always take precedence over `.env`):
-
-- **`.env` file** (recommended for a persistent setup): copy
-  `.env.example` to `.env` in this repo's root and fill in the two
-  paths. `.env` is gitignored -- it's meant to hold machine-specific
-  paths, not something to commit.
-- **Real environment variables**, e.g.:
-  ```bash
-  COMFY_DIR=/path/to/ComfyUI VENV_PYTHON=/path/to/venv/bin/python ./run_server.sh
-  ```
-
-`VENV_PYTHON` should point at the interpreter *inside* your venv (the
-one with `torch` and ComfyUI's own dependencies already installed) --
-it's used both to launch the server itself and, internally, to launch
-each training subprocess it spawns.
-
-## Installing this project's own dependencies
-
-This project's own direct requirements are minimal (the training math
-itself depends on whatever's already in your ComfyUI venv -- `torch`,
-etc.):
+## This project's own packages
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt        # the server only (five lines); torch comes from the venv
 ```
 
-## Running: two ways to actually train something
+The trainer itself needs `torch`, `numpy`, `pillow`, `safetensors`, `tqdm`, `regex` and `tokenizers` (Anima) in the venv;
+the manifest the wizard checks is `backend/application/ports/requirements_manifest.py`.
 
-One trainer, two front ends -- see [`architecture.md`](architecture.md)
-for how they relate to each other's code.
+## Running
 
-### 1. The TOML trainer (`core/`/`manager/`)
+| What | Command |
+|---|---|
+| Server and UI (editor at `/graph`, Templates, Datasets, Settings) | `./run_server.sh` (port 8765 by default) |
+| One run from the command line | `python -m next.run sdxl-lora --help`, then see `MANUAL.md` |
+| Everything the sandbox can check | `python run_tests.py` |
 
-Config-driven: one TOML file, many flat fields. This is also what the
-web UI runs underneath (see section 2), so the config format is shared.
+The command-line trainer and the editor run the same graphs: `python -m next.run ... --dump graph.json` writes the graph a
+command would run, and the editor opens it with *Import file*.
 
-Run it from **this repo's root** so `core` is importable. ComfyUI's own
-directory is resolved separately, by `paths.get_comfy_dir()` -- nothing
-about the working directory needs to be ComfyUI:
+## Tests
 
-```bash
-cd /path/to/B580-diffusion-training
-python -m core.cli --config config.toml
-```
+`python run_tests.py` runs the Python checks (`next/tests`), the backend tests and the frontend tests with an interpreter
+that has torch. It filters by name part (`python run_tests.py memory`). Checks that need the card are listed in
+`TESTING.md`, not run here.
 
-`config.example.toml` in this repo's root is the committed template to
-copy and edit:
-
-```bash
-cp config.example.toml config.toml
-```
-
-`config.toml` itself is gitignored -- it holds machine-specific values
-(real checkpoint/dataset names, real paths, real preview prompts) and
-isn't committed; the example carries the same structure with
-placeholders. `--config` will create a defaults-filled config for any
-filename you point it at, so the copy step is a convenience rather than
-a requirement. `--reset-config PATH` rewrites one from current defaults
-and exits, which is how you pick up new config fields.
-
-### 2. Node-graph web UI (`nodes/`/`backend/`, the active rewrite)
-
-```bash
-./run_server.sh                  # binds 0.0.0.0:8766 by default
-./run_server.sh --host 127.0.0.1 --port 8080   # override either
-```
-
-This starts a browser-based visual node editor for building and
-running training graphs out of the `nodes/` package's Node classes.
-Open the printed URL in a browser once the server starts.
-`run_server.sh` launches `python -m backend.cli` -- the `backend/`
-package (REST API under `/api/v1` + the frontend it serves). The
-first-cut `server/` web layer is retired under `archive/` as of M9;
-`archive/server_cli.py` still launches it for reference.
-
-## Running the test suite
-
-Every test here is a plain, independently-runnable `smoke_test_*.py`
-script -- CPU-only, no ComfyUI/XPU hardware required, no test
-framework dependency beyond what's already installed:
-
-```bash
-# Everything, both suites (nodes/ + manager/), one command:
-python run_tests.py
-
-# Filter by filename substring, e.g. only memory-related tests
-python run_tests.py memory
-
-# The CPU-bound files run in parallel; the ones under
-# nodes/smoke_tests/gpu/ stay one at a time, because there is one card
-# and two of them at once OOM each other rather than merely running
-# slower. Measured on this six-core box: 368 s serial, 168 s as shipped.
-
-python run_tests.py --jobs 6      # more workers (default: cores - 1, max 4)
-python run_tests.py --serial      # one file at a time, as this always was
-python run_tests.py --no-gpu      # skip the accelerator tests entirely
-
-# Per-suite runners still work on their own:
-python nodes/smoke_tests/run_all.py          # nodes/ only
-python manager/smoke_tests/smoke_test_lora_raw_dataset.py
-```
-
-(`server/`'s six smoke tests retired with `archive/` at M9.) The web
-backend has its own suite, run under the torch venv interpreter, and
-the full gate ties every suite together:
-
-```bash
-$VENV_PYTHON backend/tests/run_all.py   # backend suite (API, pages, use cases)
-scripts/full_gate.sh                    # everything: nodes/manager suites, backend suite,
-                                         # node --check, doc links, ruff (F,E9)
-```
-
-### The browser smoke
-
-`full_gate.sh` deliberately does **not** include the browser layer:
-`backend/tests/visual_smoke.py` needs a live server *and* a separate
-Playwright venv, so it is run by hand, in two terminals. `BACKEND_DB_PATH`
-is the point of the recipe -- it keeps the run off your real
-`backend/data/backend.db`.
-
-```bash
-# terminal 1 -- a scratch database, so nothing touches your real one
-BACKEND_DB_PATH=/tmp/opencode/smoke.db \
-  "$VENV_PYTHON" -m backend.cli --port 8766
-
-# terminal 2
-~/.venvs/pw/bin/python backend/tests/visual_smoke.py
-```
-
-It prints one line per check and exits non-zero on any failure. What it
-does *not* cover is listed in
-`docs/design/backend/06-visual-smoke.md`.
-
-### The bare-checkout check
-
-`backend/tests/run_all.py` ends with a self-check that runs two
-representative files under ComfyUI settings this machine does not have —
-`COMFY_DIR` removed, and pointing at a path that does not exist — and fails
-the run if either errors. That catches the suite depending on this
-checkout's `.env`, but it is a probe rather than a proof: `.env` resolves
-relative to `paths.py`, so only the second variant can actually fail.
-
-The proof is a `git archive` of HEAD, which is what a fresh clone looks
-like, extracted somewhere with nothing of yours in it:
-
-```bash
-scripts/check_bare_checkout.sh
-```
-
-It is slow, so it is not in `full_gate.sh` — run it when touching
-`backend/tests/support.py`, `paths.py`, or anything that resolves a
-ComfyUI path. `run_all.py`'s self-check is the cheap guard in between.
-
-### Backend environment variables
+## Backend environment variables
 
 | Variable | Effect |
 |---|---|
 | `BACKEND_HOST`, `BACKEND_PORT` | defaults for the CLI; command-line flags win |
-| `BACKEND_DB_PATH` | database location (use a scratch path for tests/smokes) |
+| `BACKEND_DB_PATH` | database location (a scratch path for tests) |
 | `BACKEND_ALLOWED_HOSTS` | extra `Host` names the server answers to (comma-separated) |
 | `BACKEND_ALLOWED_ORIGINS` | extra origins allowed to make state changes |
+| `BACKEND_LOG_LEVEL` | log level of the backend's own loggers (default `INFO`) |
+| `BACKEND_ACCESS_LOG` | `1` prints one uvicorn line per request (off by default) |
 
-The first three are documented in `backend/config.py`. The last two are
-the request guard's escape hatch, and they matter if you ever serve the
-UI from somewhere other than the backend's own origin: without them a
-cross-site write is refused by design (see
-`docs/design/backend/02-api-reference.md`).
+A `comfy_dir` / `venv_python` set in Settings is stored in the database; it sits below the environment for those two keys
+and above it for `checkpoints_dir` and `loras_dir` (`backend/infrastructure/path_tiers.py` owns that order).
 
-One asymmetry worth knowing: a `comfy_dir` / `venv_python` set through
-the UI (`POST /settings`) is persisted in the database and sits *below*
-the environment for those two keys but *above* it for `checkpoints_dir`
-and `loras_dir` -- `backend/infrastructure/path_tiers.py` owns that
-order, and it is the reason an old `.env` value can appear to be
-ignored.
+## Where model files live
 
-### Where model files live
+The app reads and writes inside ComfyUI's layout (`models/checkpoints`, `models/loras`) and the repository's `datasets/`.
+`POST /api/v1/settings {"models_dir": "/srv/models"}` moves checkpoints and loras to `<dir>/checkpoints` and
+`<dir>/loras`; an explicit `checkpoints_dir` or `loras_dir` still wins, and `""` clears it.
 
-This app reads and writes inside **ComfyUI's** directory layout --
-`models/checkpoints`, `models/loras`, and the repo's own `datasets/`.
-That is the default and it is what you want in the normal case: nothing
-to configure, and the picker shows the models you already have.
+## ComfyUI is not imported
 
-It is also a dependency on another project's layout, which is worth
-being able to undo in one place rather than three. There are now two:
-
-**As an operator**, through the settings API (or the Config page):
-
-```
-POST /api/v1/settings   {"models_dir": "/srv/models"}
-```
-
-`checkpoints_dir` and `loras_dir` then resolve to `/srv/models/checkpoints`
-and `/srv/models/loras`. An explicit `checkpoints_dir`/`loras_dir` still
-wins over `models_dir` -- that one is a deliberate choice about a single
-directory. Send `{"models_dir": ""}` to clear it and go back to
-ComfyUI's layout. `models_dir` must point at a directory that exists;
-the resolver never creates one on the strength of a settings value.
-
-**In code**, when you need the paths in hand rather than in the
-database:
-
-```python
-from backend.infrastructure.workspace import WorkspaceDirs, WorkspaceLayout
-
-layout = WorkspaceLayout(
-    project_root,
-    dirs=WorkspaceDirs(checkpoints=tmp / "ckpt", loras=tmp / "loras"),
-)
-```
-
-Every field of `WorkspaceDirs` is optional; unnamed directories resolve
-as usual, so you can redirect one and leave the rest alone. This is how
-the tests that need a throwaway model layout do it -- which is the point.
-Before it existed, a test wanting temporary directories had to know the
-name of each settings key *and* that two of them live under
-`<comfy>/models/`, and a test that got that wrong silently resolved
-against the real ComfyUI and passed for the wrong reason.
-
-`run_tests.py` picks the interpreter itself: the tests import torch,
-which lives in your ComfyUI venv, not in whatever system `python`
-happens to be first on PATH. If the running interpreter has no torch,
-it resolves `VENV_PYTHON` (environment variable, then `.env`, then
-the sibling `../venv/`) and runs every test under that -- rather than
-emitting a wall of identical `ModuleNotFoundError: No module named
-'torch'` tracebacks, which is exactly what running the suite with the
-wrong python looks like.
-
-## Hardware notes
-
-Development and tuning happened against Intel Arc B580 (XPU) hardware
-specifically -- several fixes in `docs/known-issues/` are
-XPU-specific (device-lost/hang reports, CPU-side kernel-dispatch
-overhead on optimizer math). Nothing here is known to *require*
-Intel/XPU hardware, but CUDA-specific behavior hasn't been the focus of
-testing.
+Production code never imports ComfyUI modules. Only the acceptance scripts `accept/comfy_forward.py` and
+`accept/comfy_render.py` do, as separate processes that put ComfyUI first on `sys.path` (and take our own folders off it);
+`scripts/check_imports.py` fails if one of them forgets.

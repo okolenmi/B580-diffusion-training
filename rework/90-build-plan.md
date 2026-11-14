@@ -191,13 +191,32 @@ in phase 1; the plans give the substance, the contracts give the exact JSON:
 
 ## 7. Swap
 
-1. Big test green here; the owner runs both starters on the B580.
-2. `git mv nodes archive/nodes_v1`, same for `manager/` and the old graph routes;
-   `next/*` to the root; `graph.html` replaced by `graph2.html`.
-3. The backend's graph layer already runs on `next/graph` since phase 6.
-4. Docs regenerated from the plans; the plans move to `docs/design/`.
+Owner's decisions (2026-11-14): the new tree is **flattened into the repo root** (`next/*` becomes `graph/`, `data/`,
+`engine/`, `families/`, `nodes/`, `perf/`, `lab/`, `accept/`, `tests/`, `run.py`, `starters.py`, `console.py`); the old
+**config-file training path is archived** (`TrainingConfig`, the Config page and its backend routes, `convert-cfg.toml`).
+Clashes with ComfyUI's top-level module names (`nodes.py`, `utils`, ...) are solved by construction: our code never imports
+ComfyUI modules; the only scripts that do (`accept/comfy_*.py`, run as separate processes) remove the repo root and their
+own folder from `sys.path` before putting ComfyUI first, and `scripts/check_imports.py` fails when one of them does not.
 
-Rollback: git. (There are no users to protect, which is the point of the decision.)
+Gate: the big test green (`python -m next.tests.run_all`), and the owner has run both starters on the B580 (done 2026-11-14).
+
+Stages, each ending with every check green and a commit (the tree stays runnable throughout):
+
+1. **Survivors.** The backend still imports eight old modules (`nodes/memory/{graph_memory,coordinator,handle}`,
+   `nodes/components/device`, `nodes/xpu_env`, `nodes/model/resource_inspection`, `nodes/config_{model,io}`). The first six are
+   live (the admission ledger, the device probe, the environment variables set before torch loads, model-file inspection):
+   they move into the new tree (`backend/infrastructure/` for the ledger, `engine/` for the device and environment parts,
+   `families/` for inspection) with their tests. The config pair goes with the config path (stage 2).
+2. **Config path.** Backend config routes and schema modules, `frontend/config.html` and `js/views/config.js`, their tests
+   and `convert-cfg.toml` move to `archive/`; backend settings (ports, paths, first run) stay.
+3. **Old trees.** `nodes/`, `manager/`, `frontend/js/editor*` and `graph.html` (the route `/graph` serves `graph2.html`),
+   old tests and `run_tests.py` move to `archive/`; `docs/` is rewritten from the plans (old design docs to `archive/`).
+4. **Flatten.** `git mv next/<each> .`; rewrite `next.` imports (backend, scripts, backend tests), `python -m next.` commands
+   (TESTING, docs, `run_server.sh`), the layer table in `scripts/check_imports.py`, and write a new `run_tests.py` that runs
+   the Python checks, the backend tests and the frontend tests with the right interpreter.
+5. **Verify.** Everything green; the owner repeats the short hardware list (one run of each starter from the editor).
+
+Rollback: git.
 
 ## 8. Size and session budget (honest estimate)
 

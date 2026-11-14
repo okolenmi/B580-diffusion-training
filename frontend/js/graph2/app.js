@@ -28,32 +28,64 @@ import { ShapeStore } from "./shapes.js";
 import { StarterDialog } from "./starters.js";
 
 const LAYOUT_KEY = "g2.layout.v1";
+const MODE_KEY = "g2.mode";
 
 function readLayout() {
   try {
-    return { left: true, right: true, runs: false, ...JSON.parse(localStorage.getItem(LAYOUT_KEY)) };
+    return { left: true, right: true, ...JSON.parse(localStorage.getItem(LAYOUT_KEY)) };
   } catch {
-    return { left: true, right: true, runs: false };
+    return { left: true, right: true };
   }
 }
 
-function bindLayout() {
+/** Build or Watch: which of the two jobs the whole window is given to. ``?mode=watch`` opens a window straight into Watch
+ *  (the other window can stay in Build); otherwise the choice of this browser is kept. */
+function startMode() {
+  const asked = new URLSearchParams(location.search).get("mode");
+  if (asked === "watch" || asked === "build") return asked;
+  try {
+    return localStorage.getItem(MODE_KEY) === "watch" ? "watch" : "build";
+  } catch {
+    return "build";
+  }
+}
+
+function bindLayout(onMode) {
   const layout = readLayout();
+  let mode = startMode();
   const apply = () => {
-    document.body.classList.toggle("ed-left-off", !layout.left);
-    document.body.classList.toggle("ed-right-off", !layout.right);
+    const watching = mode === "watch";
+    document.body.classList.toggle("mode-watch", watching);
+    document.body.classList.toggle("mode-build", !watching);
+    document.body.classList.toggle("ed-left-off", watching || !layout.left);
+    document.body.classList.toggle("ed-right-off", watching || !layout.right);
     el("btn-toggle-left").setAttribute("aria-pressed", String(layout.left));
     el("btn-toggle-right").setAttribute("aria-pressed", String(layout.right));
-    el("exec-section").open = layout.runs;
+    for (const [id, on] of [["mode-build", !watching], ["mode-watch", watching]]) {
+      el(id).classList.toggle("active", on);
+      el(id).setAttribute("aria-selected", String(on));
+    }
+    // Watch gives every section the whole window, so none of them is folded.
+    for (const id of ["monitor-section", "views-section", "exec-section"]) el(id).open = watching;
   };
   const keep = () => {
     apply();
     try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch { /* a convenience only */ }
   };
+  const setMode = (next) => {
+    mode = next;
+    if (!new URLSearchParams(location.search).get("mode")) {
+      try { localStorage.setItem(MODE_KEY, mode); } catch { /* not remembered */ }
+    }
+    apply();
+    onMode?.(mode);
+  };
   el("btn-toggle-left").addEventListener("click", () => { layout.left = !layout.left; keep(); });
   el("btn-toggle-right").addEventListener("click", () => { layout.right = !layout.right; keep(); });
-  el("exec-section").addEventListener("toggle", () => { layout.runs = el("exec-section").open; keep(); });
+  el("mode-build").addEventListener("click", () => setMode("build"));
+  el("mode-watch").addEventListener("click", () => setMode("watch"));
   apply();
+  return { mode: () => mode };
 }
 
 /** What a picker offers: model files of the node's `scope`, or the image libraries the nodes can open. */
@@ -72,7 +104,9 @@ function pickerOptions(spec, values) {
 }
 
 async function boot() {
-  bindLayout();
+  let monitor = null;
+  let views = null;
+  const layout = bindLayout((mode) => { if (mode === "watch") { monitor?.shown(); views?.shown(); } });
   const doc = new GraphDoc({ shapeOf: (node) => shapes.shapeOf(node) });
   const shapes = new ShapeStore({
     resolve: (className, body) => api(`/graphs/nodes/${encodeURIComponent(className)}/resolve`, { method: "POST", body }),
@@ -150,7 +184,7 @@ async function boot() {
 
   const issues = new IssuesPanel(el("issues"), { onFocus: (uid) => canvas.focusNode(uid) });
   const live = new LiveStreams();
-  const monitor = new Monitor(el("monitor"), doc, shapes, { live });
+  monitor = new Monitor(el("monitor"), doc, shapes, { live });
   let runs = null;
   let saver = null;
   const instance = new InstanceView({
@@ -165,16 +199,17 @@ async function boot() {
     onLeave: () => runs.deselect(),
   });
   const modeBox = el("run-mode");
-  const MODE_KEY = "graph2.runMode";
-  try { modeBox.value = localStorage.getItem(MODE_KEY) || "auto"; } catch { /* private window: the default stays */ }
-  modeBox.addEventListener("change", () => { try { localStorage.setItem(MODE_KEY, modeBox.value); } catch { /* not remembered */ } });
+  const RUN_MODE_KEY = "graph2.runMode";
+  try { modeBox.value = localStorage.getItem(RUN_MODE_KEY) || "auto"; } catch { /* private window: the default stays */ }
+  modeBox.addEventListener("change", () => { try { localStorage.setItem(RUN_MODE_KEY, modeBox.value); } catch { /* not remembered */ } });
   const startRun = () => {
     if (instance.open) return log("This is a frozen run. Copy it to the editor to run it again.", "warn");
     if (!doc.nodes.size) return log("Canvas is empty.", "warn");
     return runs.run(doc.toJSON(), modeBox.value, el("lib-name").value.trim() || null);
   };
-  const views = new Views(el("views"), doc, live, { onRun: startRun, onStop: () => runs.stop(), onNote: log, execution: () => runs?.current() ?? null });
+  views = new Views(el("views"), doc, live, { onRun: startRun, onStop: () => runs.stop(), onNote: log, execution: () => runs?.current() ?? null });
   el("views-section").addEventListener("toggle", () => views.shown());
+  if (layout.mode() === "watch") { monitor.shown(); views.shown(); } // the sections opened before the page could listen
   el("monitor-section").addEventListener("toggle", () => monitor.shown());
   runs = new Runs(el("exec-list"), canvas, {
     onNote: log,
@@ -184,7 +219,7 @@ async function boot() {
     onOpen: (detail) => instance.enter(detail),
     onRunState: (running) => {
       el("btn-stop").hidden = !running;
-      if (running) el("monitor-section").open = true;
+      el("mode-watch").classList.toggle("running", running);
       views.running(running);
       memory.refreshLater();
     },

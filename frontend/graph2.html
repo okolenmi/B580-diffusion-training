@@ -36,6 +36,11 @@
 
     <main class="ed-main">
         <div class="ed-toolbar">
+            <div class="seg" role="tablist" aria-label="Window">
+                <button id="mode-build" class="seg-btn" role="tab" title="Build the graph: palette, canvas, inspector">Build</button>
+                <button id="mode-watch" class="seg-btn" role="tab" title="Watch runs: charts, boards, run history (this window shows the whole screen to them)">Watch</button>
+            </div>
+            <a id="watch-window" class="btn btn-secondary btn-small" href="?mode=watch" target="_blank" rel="noopener" title="Open the Watch window in a second browser window, e.g. on another screen">&#8599;</a>
             <button id="btn-toggle-left" class="btn btn-secondary btn-small" aria-pressed="true" title="Show or hide the node palette">Nodes</button>
             <button id="btn-starter" class="btn btn-secondary btn-small" title="A ready-made training graph">Quick workflow</button>
             <button id="btn-validate" class="btn btn-secondary btn-small">Validate</button>

@@ -182,3 +182,24 @@ g.selected > .g2-edge, .g2-edge.selected { stroke: var(--accent); stroke-width: 
 .inst-bar #instance-title { flex: 1; }
 body.is-instance :is(.g2-canvas, #graph-settings, #inspector) :is(input, select, textarea, button) { pointer-events: none; opacity: 0.8; }
 body.is-instance .ed-palette .ed-scroll { opacity: 0.5; pointer-events: none; }
+
+/* ---- Build / Watch: one job at a time gets the whole window ---- */
+.ed-toolbar .seg { display: inline-flex; gap: 2px; padding: 2px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); }
+.ed-toolbar .seg-btn { border: 0; background: transparent; color: var(--text-dim); font: inherit; font-size: 12px; padding: 3px 12px; border-radius: 4px; cursor: pointer; }
+.ed-toolbar .seg-btn:hover { color: var(--text); }
+.ed-toolbar .seg-btn.active { background: var(--surface-alt); color: var(--text); box-shadow: 0 0 0 1px var(--border); }
+.ed-toolbar .seg-btn.running::after { content: " \25CF"; color: var(--green); }
+
+body.mode-build .ed-monitor, body.mode-build .ed-views, body.mode-build .ed-executions { display: none; }
+
+body.mode-watch .ed-main { overflow-y: auto; }
+body.mode-watch #g2-canvas, body.mode-watch #instance-bar,
+body.mode-watch #btn-toggle-left, body.mode-watch #btn-toggle-right, body.mode-watch #btn-fit, body.mode-watch #btn-arrange,
+body.mode-watch #btn-validate, body.mode-watch #btn-clear, body.mode-watch #btn-starter, body.mode-watch #ed-selection { display: none; }
+body.mode-watch .ed-monitor, body.mode-watch .ed-views, body.mode-watch .ed-executions { flex: none; }
+body.mode-watch .ed-section > summary { cursor: default; pointer-events: none; }
+body.mode-watch .mon-sections { max-height: none; }
+body.mode-watch .ed-executions[open] .ed-list { max-height: none; }
+.ed-toolbar { flex-wrap: wrap; }
+.ed-toolbar .btn, .ed-toolbar .seg-btn { white-space: nowrap; }
+.ed-toolbar #run-mode { width: auto; }

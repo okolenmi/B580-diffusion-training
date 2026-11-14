@@ -171,5 +171,8 @@ Write a graph with `python -m next.run sdxl-lora ... --dump graph.json`, press *
 ## 92. Loss chart: the old focus and the average
 On a real run: the main loss line should fill the middle half of the chart (linear) with the low/mid/high-t thirds in the logarithmic top and bottom quarters, and the hover tooltip leads with an average (the step's own value in parentheses). The *Average* selector in the chart's bar (Mean 10/24/100, EMA 24/100, Median 25) changes both the drawn average line and the tooltip number; the choice is kept per browser. Say which method you want as the default, and whether the tooltip number now tells you where the loss is.
 
+## 93. Editor: Build and Watch
+`/graph2` has *Build* (palette, canvas, inspector; nothing below the canvas) and *Watch* (charts, boards and the run list over the whole window). Nothing opens by itself when a run starts; *Watch* shows a green dot while a run is going. The arrow beside the switch opens a second window straight into Watch (`?mode=watch`), so building and watching can sit on two screens. Report what is missing in either window, and whether a run's history belongs in Watch (now) or somewhere else.
+
 ## Reading a bundle automatically
 `python -m next.accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m next.perf hwcheck` without running anything.

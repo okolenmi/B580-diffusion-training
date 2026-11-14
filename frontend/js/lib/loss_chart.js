@@ -70,6 +70,8 @@ class LossChart {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d");
     this.smoothWindow = (options && options.smoothWindow) || 24;
+    this.averageMethod = (options && options.averageMethod) || "mean";
+    this.showAverage = !options || options.scale !== "linear"; // the tooltip leads with the average, the raw step in parentheses
     this.maxPoints = (options && options.maxPoints) || 1000;
     this.series = (options && options.series && options.series.length)
       ? options.series
@@ -133,21 +135,61 @@ class LossChart {
     this._requestDraw();
   }
 
-  /* Running mean over the last smoothWindow *present* values of this
-     series (gaps skipped, not counted as 0), null until the window has
-     enough -- same fill rule the single-series version used, applied per
-     series so one sparse series can't shorten another's smoothing. */
+  /* The average of this series at a new point: over the last smoothWindow *present* values (gaps skipped, not counted
+     as 0), by ``averageMethod`` -- "mean" (running mean), "ema" (exponential, weight 2/(window+1)) or "median". Null until
+     the window has that many values, so the drawn line starts where it is meaningful. */
   _smoothedFor(key, value) {
     if (value === null || value === undefined) return null;
-    const recent = [];
-    for (let i = this.points.length - 1; i >= 0 && recent.length < this.smoothWindow - 1; i--) {
-      const prev = this.points[i].values[key];
-      if (prev !== null && prev !== undefined) recent.push(prev);
-    }
+    const recent = this._recent(key, this.points.length, this.smoothWindow - 1);
     recent.push(value);
-    const filled = this._filledCount(key) + 1;
-    if (filled < this.smoothWindow) return null;
-    return recent.reduce((a, b) => a + b, 0) / recent.length;
+    if (recent.length < this.smoothWindow) return null;
+    return this._reduce(recent);
+  }
+
+  /* Present values of ``key`` among the ``count`` points before index ``end``, oldest first. */
+  _recent(key, end, count) {
+    const out = [];
+    for (let i = end - 1; i >= 0 && out.length < count; i--) {
+      const v = this.points[i].values[key];
+      if (v !== null && v !== undefined) out.push(v);
+    }
+    return out.reverse();
+  }
+
+  _reduce(values) {
+    if (this.averageMethod === "median") {
+      const sorted = [...values].sort((a, b) => a - b), mid = sorted.length >> 1;
+      return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    }
+    if (this.averageMethod === "ema") {
+      const alpha = 2 / (this.smoothWindow + 1);
+      return values.reduce((acc, v) => acc + alpha * (v - acc));
+    }
+    return values.reduce((a, b) => a + b, 0) / values.length;
+  }
+
+  /* What the hover tooltip calls the average at ``point``: the same method over whatever the window holds there, so
+     it also exists in the first steps (the drawn line waits for a full window). */
+  _averageAt(point, key) {
+    const end = this.points.indexOf(point);
+    if (end < 0 || point.values[key] == null) return null;
+    const values = this._recent(key, end, this.smoothWindow - 1);
+    values.push(point.values[key]);
+    return this._reduce(values);
+  }
+
+  /* Change how the average is taken ({method, window}); every point is recomputed from its raw values. */
+  setAverage({ method, window } = {}) {
+    if (method) this.averageMethod = ["mean", "ema", "median"].includes(method) ? method : "mean";
+    if (window) this.smoothWindow = Math.max(1, Math.floor(window));
+    const raw = this.points;
+    this.points = [];
+    for (const p of raw) {  // each point is averaged against the ones before it, as when it arrived
+      for (const s of this.series) p.s[s.key] = this._smoothedFor(s.key, p.values[s.key]);
+      p.smoothed = p.s[this.primaryKey];
+      this.points.push(p);
+    }
+    this._requestDraw();
   }
 
   _filledCount(key) {
@@ -291,13 +333,17 @@ class LossChart {
     // clipping outside the computed bounds. Hidden (legend-toggled-off)
     // series don't participate, and neither do points outside an active
     // view window: the axis should follow what's on screen.
+    // The linear middle band is sized by the main series' average alone (the first one that is shown): the others
+    // (low/mid/high timestep thirds) spread far wider, and sizing the band from them flattens the line that matters.
+    // They still widen the logarithmic ends through their raw values below.
+    const main = this.series.find((s) => !s.hidden);
     const smoothVals = [], lossVals = [];
     for (const s of this.series) {
       if (s.hidden) continue;
       for (const p of this.points) {
         if (vr && (p.step < vr.min || p.step > vr.max)) continue;
         const sv = p.s[s.key];
-        if (sv != null && sv > 0) smoothVals.push(sv);
+        if (s === main && sv != null && sv > 0) smoothVals.push(sv);
         const rv = p.values[s.key];
         if (rv != null && rv > 0) lossVals.push(rv);
       }
@@ -644,9 +690,10 @@ class LossChart {
       if (s.hidden) continue;
       const v = best.values[s.key];
       if (v == null) continue;
-      let text = `${s.label}: ${LossChart._formatNum(v)}`;
-      const sv = best.s[s.key];
-      if (sv != null) text += ` (${LossChart._formatNum(sv)})`;
+      const avg = this._averageAt(best, s.key);
+      const text = this.showAverage && avg != null
+        ? `${s.label}: ${LossChart._formatNum(avg)}  (step ${LossChart._formatNum(v)})`
+        : `${s.label}: ${LossChart._formatNum(v)}`;
       lines.push({ text, color: s.color });
     }
 

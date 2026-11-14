@@ -61,6 +61,25 @@ function chartDisplay({ module, state }) {
   csv.className = "bd-btn bd-csv";
   csv.textContent = "CSV";
   csv.title = "Download every record this view holds as CSV";
+  const AVERAGES = [["mean", 10], ["mean", 24], ["mean", 100], ["ema", 24], ["ema", 100], ["median", 25]];
+  const AVERAGE_KEY = "bd.average";
+  const label = ([method, window]) => `${method === "ema" ? "EMA" : method === "median" ? "Median" : "Mean"} ${window}`;
+  let average = AVERAGES[1];
+  try {
+    const saved = localStorage.getItem(AVERAGE_KEY);
+    average = AVERAGES.find((a) => label(a) === saved) || average;
+  } catch { /* storage may be unavailable: the default stays */ }
+  const averageSelect = document.createElement("select");
+  averageSelect.className = "bd-btn bd-average";
+  averageSelect.title = "How the average line and the tooltip's average are taken (steps in the window)";
+  averageSelect.setAttribute("aria-label", "Average");
+  for (const a of AVERAGES) averageSelect.append(new Option(label(a), label(a)));
+  averageSelect.value = label(average);
+  averageSelect.addEventListener("change", () => {
+    average = AVERAGES.find((a) => label(a) === averageSelect.value) || average;
+    try { localStorage.setItem(AVERAGE_KEY, label(average)); } catch { /* per-browser convenience only */ }
+    if (chart) chart.setAverage({ method: average[0], window: average[1] });
+  });
   bar.append(freeze, counts, readout, csv);
 
   const root = div("bd-chart");
@@ -82,7 +101,8 @@ function chartDisplay({ module, state }) {
   let lastCount = 0;
   const hidden = new Map(); // series key -> hidden, survives a rebuild
   const trend = module.scale !== "linear"; // the loss-like chart: is it getting better?
-  const smoothWindow = module.scale === "linear" ? 3 : 24;
+  const averaged = module.scale !== "linear";
+  if (averaged) bar.insertBefore(averageSelect, csv);
 
   const build = (list) => {
     if (chart) {
@@ -95,7 +115,8 @@ function chartDisplay({ module, state }) {
       })),
       maxPoints: MAX_DRAWN_ROWS + 8,
       scale: module.scale === "linear" ? "linear" : "symlog",
-      smoothWindow,
+      smoothWindow: averaged ? average[1] : 3,
+      averageMethod: averaged ? average[0] : "mean",
       trend,
       xLabel: module.x === "t" ? "t (s)" : "Step",
     });
@@ -139,7 +160,7 @@ function chartDisplay({ module, state }) {
     lastCount = all.length;
     xs = all.map((r) => r.x);
     const v = view.apply(xs);
-    const shown = rowsForWindow(all, v.range, smoothWindow * 3);
+    const shown = rowsForWindow(all, v.range, (averaged ? average[1] : 3) * 3);
     const rows = decimate(shown, MAX_DRAWN_ROWS, keys);
     chart.reset();
     for (const r of rows) chart.addPoint(r.x, r.values);

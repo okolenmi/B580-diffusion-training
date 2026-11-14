@@ -168,5 +168,8 @@ Write a graph with `python -m next.run sdxl-lora ... --dump graph.json`, press *
 ## 90. Anima: what no report has covered yet
 `python -m next.run anima-lora ... --resolution 512 --steps 50 --graph` against the same without `--graph` (time per step, losses), and then 1024 px, batch 1: peak memory and time per step. For one picture at 1024 px through the VAE (`get_family("anima").load_vae(part, device="xpu")`): encode and decode time and peak memory.
 
+## 92. Loss chart: the old focus and the average
+On a real run: the main loss line should fill the middle half of the chart (linear) with the low/mid/high-t thirds in the logarithmic top and bottom quarters, and the hover tooltip leads with an average (the step's own value in parentheses). The *Average* selector in the chart's bar (Mean 10/24/100, EMA 24/100, Median 25) changes both the drawn average line and the tooltip number; the choice is kept per browser. Say which method you want as the default, and whether the tooltip number now tells you where the loss is.
+
 ## Reading a bundle automatically
 `python -m next.accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m next.perf hwcheck` without running anything.

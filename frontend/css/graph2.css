@@ -26,11 +26,12 @@ g.selected > .g2-edge, .g2-edge.selected { stroke: var(--accent); stroke-width: 
 
 /* ---- nodes ---- */
 .g2-node {
-    position: absolute; box-sizing: border-box; display: flex; flex-direction: column;
+    position: absolute; z-index: 1; /* its own stacking context: sockets and the hub stay with their node when another node covers it */
+    box-sizing: border-box; display: flex; flex-direction: column;
     background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
     box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); font-size: 0.74rem; user-select: none;
 }
-.g2-node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+.g2-node.selected { z-index: 2; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
 .g2-node.unknown { border-style: dashed; border-color: var(--red); }
 .g2-node[data-resolve="error"] { border-color: var(--red); }
 .g2-node[data-resolve="needs_choice"] { border-color: #f59e0b; }

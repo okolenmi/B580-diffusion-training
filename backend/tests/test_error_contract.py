@@ -33,7 +33,6 @@ from backend.tests.support import check, finish  # noqa: E402
 from backend.presentation import security as _security  # noqa: E402,F401
 from backend.application.errors import (  # noqa: E402
     ApplicationError,
-    ConfigNotFoundError,
     GraphExecutionNotActiveError,
     InvalidQueryError,
     NodeDiagnosticsError,
@@ -190,7 +189,6 @@ def test_handler_replies_with_the_declared_status() -> None:
         TrainingLaunchError("exec failed"),
         GraphExecutionNotActiveError("already finished"),
         NodeDiagnosticsError("bad params"),
-        ConfigNotFoundError("no such config"),
     ):
         status, body = asyncio.run(call(error))
         check(

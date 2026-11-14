@@ -30,7 +30,6 @@ ASSETS = (
     "/ui/css/shell.css",
     "/ui/css/monitor.css",
     "/ui/css/editor.css",
-    "/ui/css/config.css",
     "/ui/css/datasets.css",
     "/ui/css/help.css",
     "/ui/css/settings.css",
@@ -38,7 +37,6 @@ ASSETS = (
     "/ui/js/api.js",
     "/ui/js/monitor.js",
     "/ui/js/lib/loss_chart.js",
-    "/ui/js/views/config.js",
     "/ui/js/views/datasets.js",
     "/ui/js/datasets/client.js",
     "/ui/js/datasets/library_list.js",
@@ -130,12 +128,6 @@ def test_pages_and_assets() -> None:
             f"/graph serves the editor page (got {status})",
         )
 
-        status, _, body = asgi_request(app, "/config")
-        check(
-            status == 200 and isinstance(body, str) and "config-form" in body,
-            f"/config serves the config editor page (got {status})",
-        )
-
         status, _, body = asgi_request(app, "/datasets")
         check(
             status == 200 and isinstance(body, str) and "ds-title" in body,
@@ -223,7 +215,7 @@ def test_every_page_route_has_a_file_behind_it() -> None:
                          "requesting it raises rather than answering")
             return
 
-        served = ["/", "/graph", "/config", "/datasets", "/help", "/settings",
+        served = ["/", "/graph", "/datasets", "/help", "/settings",
                   "/monitor/mon-test", "/datasets/anything"]
         for path in served:
             status, _, body = asgi_request(app, path)
@@ -263,7 +255,7 @@ def test_static_cache_headers() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         app = create_app(_container(tmp).services, static_dir=FRONTEND)
 
-        for path in ("/", "/graph", "/config", "/datasets",
+        for path in ("/", "/graph", "/datasets",
                      "/help", "/settings", "/monitor/mon-test",
                      "/ui/css/style.css", "/ui/js/editor.js"):
             status, headers, _ = asgi_request(app, path)

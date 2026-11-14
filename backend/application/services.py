@@ -7,7 +7,7 @@ than in presentation) keeps the dependency direction honest: the web
 layer depends on application, never the other way around.
 
 Use cases are grouped by domain so the aggregate stays navigable as
-it grows: ``config``, ``settings``, ``assets``, ``libraries``, ``graphs``.
+it grows: ``settings``, ``assets``, ``libraries``, ``graphs``.
 
 There is no ``runs`` group. Training is started from the graph route
 (``graphs``), which runs the ``nodes/`` pipeline in-process; the separate
@@ -42,8 +42,6 @@ from .use_cases.template_crud import (
     SaveTemplate,
 )
 from .use_cases.delete_graph_executions import DeleteGraphExecutions
-from .use_cases.get_config import GetConfig
-from .use_cases.get_config_options import GetConfigOptions
 from .use_cases.get_graph import GetGraph
 from .use_cases.get_execution_metrics import GetExecutionMetrics
 from .use_cases.get_graph_execution import GetGraphExecution
@@ -60,30 +58,16 @@ from .use_cases.image_libraries import (
 )
 from .use_cases.node_shapes import GetNodeCatalog, ListImageLibraries, ListModelFiles, ResolveNode
 from .use_cases.starters import BuildStarter, ListStarters
-from .use_cases.read_config_raw import ReadConfigRaw
 from .use_cases.reconcile_graph_executions import ReconcileGraphExecutions
 from .use_cases.subscribe_monitor import SubscribeMonitor
 from .use_cases.save_graph import SaveGraph
 from .use_cases.start_graph_execution import StartGraphExecution
 from .use_cases.rename_graph_execution import RenameGraphExecution
 from .use_cases.stop_graph_execution import StopGraphExecution
-from .use_cases.update_config import UpdateConfig
 from .use_cases.update_settings import UpdateSettings
 from .use_cases.upload_asset import UploadAsset
 from .use_cases.preview_graph_memory import PreviewGraphMemory
 from .use_cases.validate_graph import ValidateGraph
-from .use_cases.write_config_raw import WriteConfigRaw
-
-
-@dataclass(frozen=True, slots=True)
-class ConfigServices:
-    """Config-file document + schema + launch-picker operations."""
-
-    read: GetConfig
-    update: UpdateConfig
-    read_raw: ReadConfigRaw
-    write_raw: WriteConfigRaw
-    options: GetConfigOptions
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,8 +199,7 @@ class MonitorServices:
 
 @dataclass(frozen=True, slots=True)
 class ApplicationServices:
-    # config / settings / assets domains (M3)
-    config: ConfigServices
+    # settings / assets domains (M3)
     settings: SettingsServices
     installer: InstallerServices
     assets: AssetServices

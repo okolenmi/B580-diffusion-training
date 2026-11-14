@@ -5,7 +5,7 @@ Order of business:
 1. ``Settings`` arrive fully built (from the CLI);
 2. infrastructure objects are constructed (database + migrations,
    repository, event bus, clock, settings store, workspace layout,
-   config inspector/files/options, assets store, image-library and graph
+   assets store, image-library and graph
    subsystems);
 3. the supervisors and use cases are constructed with those ports;
 4. ``ReconcileGraphExecutions`` sweeps rows
@@ -28,7 +28,6 @@ from .application.graph_peak_source import GraphPeakSource
 from .application.graph_supervisor import GraphExecutionSupervisor
 from .application.lifecycle_writer import ExecutionLifecycleWriter
 from .application.memory_admission import LedgerProvider
-from .application.project_paths import ProjectPaths
 from .application.ports.clock import Clock
 from .application.event_publisher import EventPublisher
 from .application.use_cases.graph_modules import DescribeGraphModules, ResolveTemplate
@@ -42,7 +41,6 @@ from .application.use_cases.template_crud import (
 from .application.services import (
     ApplicationServices,
     AssetServices,
-    ConfigServices,
     GraphServices,
     LibraryServices,
     InstallerServices,
@@ -61,8 +59,6 @@ from .application.use_cases import (
     DeleteGraph,
     DeleteGraphExecutions,
     DescribeRequirements,
-    GetConfig,
-    GetConfigOptions,
     GetGraph,
     GetExecutionMetrics,
     GetGraphExecution,
@@ -73,7 +69,6 @@ from .application.use_cases import (
     ListGraphs,
     MakeAssetFolder,
     NodeDiagnostics,
-    ReadConfigRaw,
     ReconcileGraphExecutions,
     SweepExecutionScratch,
     SaveGraph,
@@ -81,17 +76,13 @@ from .application.use_cases import (
     SubscribeMonitor,
     RenameGraphExecution,
     StopGraphExecution,
-    UpdateConfig,
     UpdateSettings,
     UploadAsset,
     PreviewGraphMemory,
     ValidateGraph,
-    WriteConfigRaw,
 )
 from .config import GRAPH_EXECUTION_CHILD, Settings
 from .infrastructure.clock import SystemClock
-from .infrastructure.config_options import PydanticConfigOptions
-from .infrastructure.core_config_files import CoreConfigFiles
 from .infrastructure.image_libraries import FsImageLibraries
 from .infrastructure.events.callback_event_bus import CallbackEventBus
 from .infrastructure.file_asset_store import FileSystemAssetStore
@@ -171,7 +162,6 @@ def build_container(settings: Settings) -> Container:
 
     event_bus = CallbackEventBus()
     publisher = EventPublisher(events=event_bus)
-    paths = ProjectPaths(root=settings.project_root)
     clock = SystemClock()
 
     # Settings first: the workspace layout resolves its override tier
@@ -181,8 +171,6 @@ def build_container(settings: Settings) -> Container:
     layout = WorkspaceLayout(
         settings.project_root, settings_kv=settings_store.get
     )
-    config_files = CoreConfigFiles()
-    config_options = PydanticConfigOptions()
 
     # Shared by readiness and by the wizard's GPU choice: one probe, one
     # answer, one 1.8s import.
@@ -313,13 +301,6 @@ def build_container(settings: Settings) -> Container:
 
     image_libraries = FsImageLibraries(layout)
     services = ApplicationServices(
-        config=ConfigServices(
-            read=GetConfig(files=config_files, paths=paths),
-            update=UpdateConfig(files=config_files, paths=paths),
-            read_raw=ReadConfigRaw(files=config_files, paths=paths),
-            write_raw=WriteConfigRaw(files=config_files, paths=paths),
-            options=GetConfigOptions(options=config_options),
-        ),
         installer=InstallerServices(
             # One probe object, used by both `check` and the devices route.
             # Two instances would each pay the 1.8s torch import; and a

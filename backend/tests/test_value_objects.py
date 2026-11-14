@@ -27,7 +27,6 @@ from backend.application.limits import (  # noqa: E402
     MAX_GRAPH_DESCRIPTION,
     MAX_PAGE_SIZE,
 )
-from backend.application.project_paths import ProjectPaths  # noqa: E402
 from backend.application.requests import AssetRequest  # noqa: E402
 from backend.application.lifecycle_writer import (  # noqa: E402
     ExecutionLifecycleWriter,
@@ -94,39 +93,6 @@ def _expect_error(fn, exc_type, fragment: str, label: str) -> None:
         check(fragment in str(exc), f"{label} (got {exc})")
     else:
         check(False, f"{label} -- nothing raised")
-
-
-# ---------------------------------------------------------------------------
-# S-06: ProjectPaths -- "a path the client named"
-# ---------------------------------------------------------------------------
-
-
-def test_project_paths() -> None:
-    print("\n== ProjectPaths: one definition of 'relative means the root' ==")
-    root = Path(tempfile.mkdtemp(prefix="paths-test-"))
-    paths = ProjectPaths(root=root)
-
-    check(
-        paths.resolve("cfg/a.toml") == root / "cfg/a.toml",
-        "a relative path hangs off the project root",
-    )
-    check(
-        paths.resolve("/etc/hosts") == Path("/etc/hosts"),
-        "an absolute path is taken as sent",
-    )
-    check(paths.config("cfg/a.toml") == root / "cfg/a.toml", "config() resolves")
-    _expect_error(
-        lambda: paths.config(""),
-        InvalidQueryError,
-        "config path is required",
-        "a missing config path names the field",
-    )
-    _expect_error(
-        lambda: paths.require("", "image dir"),
-        InvalidQueryError,
-        "image dir is required",
-        "require() names whichever field asked",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -456,7 +422,6 @@ def test_bind_rejects_a_non_positive_or_non_integer_id() -> None:
 
 def main() -> None:
     test_bind_rejects_a_non_positive_or_non_integer_id()
-    test_project_paths()
     test_event_publisher()
     test_limits()
     test_asset_request()

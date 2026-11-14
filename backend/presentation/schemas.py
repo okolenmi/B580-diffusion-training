@@ -44,44 +44,6 @@ class HealthOut(BaseModel):
     memory: dict | None = None
 
 # --------------------------------------------------------------------------
-# Config
-# --------------------------------------------------------------------------
-
-
-class ConfigPatchIn(BaseModel):
-    """Partial update: ``overrides`` mirrors the config's nested
-    structure and is deep-merged into the existing file."""
-
-    path: str = Field(min_length=1)
-    overrides: dict[str, Any] = Field(default_factory=dict)
-
-
-class ConfigRawIn(BaseModel):
-    path: str = Field(min_length=1)
-    content: str
-
-
-class ConfigRawOut(BaseModel):
-    content: str
-
-
-class ConfigSavedOut(BaseModel):
-    ok: bool = True
-
-
-class ConfigOptionsOut(BaseModel):
-    """The field schema; values come from ``GET /config``."""
-
-    options: list[dict[str, Any]]
-
-
-class StartOptionOut(BaseModel):
-    path: str
-    available: bool
-    label: str
-
-
-# --------------------------------------------------------------------------
 # Settings
 # --------------------------------------------------------------------------
 

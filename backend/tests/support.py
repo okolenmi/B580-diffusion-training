@@ -24,12 +24,6 @@ from urllib.parse import unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backend.application.ports.config_inspector import (
-    ConfigDescription,
-    ConfigInspector,
-    ConfigSummary,
-    StartOption,
-)
 from backend.application.ports.environment import (
     DeviceProbe,
     DeviceReport,
@@ -41,7 +35,6 @@ from backend.application.ports.graph_execution_repository import (
 from backend.application.ports.graph_library import GraphLibrary
 from backend.application.ports.graph_runtime import GraphRuntime
 from backend.application.ports.monitor_bus import MonitorBus as MonitorBusPort
-from backend.application.errors import ConfigNotFoundError
 from backend.application.memory_admission import (
     LedgerProvider,
 )
@@ -49,7 +42,6 @@ from backend.application.memory_ledger import (
     DEFAULT_FOREIGN_RESERVE_MB,
     DEFAULT_PROCESS_OVERHEAD_MB,
 )
-from backend.application.project_paths import ProjectPaths
 from backend.application.graph_peak_source import GraphPeakSource
 from backend.application.graph_supervisor import GraphExecutionSupervisor
 from backend.application.event_publisher import EventPublisher
@@ -59,7 +51,6 @@ from backend.application.lifecycle_writer import (
 from backend.application.services import (
     ApplicationServices,
     AssetServices,
-    ConfigServices,
     GraphServices,
     InstallerServices,
     MonitorServices,
@@ -85,8 +76,6 @@ from backend.application.use_cases import (
     DeleteGraph,
     DeleteGraphExecutions,
     DescribeRequirements,
-    GetConfig,
-    GetConfigOptions,
     GetGraph,
     GetExecutionMetrics,
     GetGraphExecution,
@@ -102,7 +91,6 @@ from backend.application.use_cases import (
     ListModelFiles,
     ResolveNode,
     PreviewGraphMemory,
-    ReadConfigRaw,
     ReconcileGraphExecutions,
     SaveGraph,
     StartGraphExecution,
@@ -110,15 +98,11 @@ from backend.application.use_cases import (
     StopGraphExecution,
     SubscribeMonitor,
     SweepExecutionScratch,
-    UpdateConfig,
     UpdateSettings,
     UploadAsset,
     ValidateGraph,
-    WriteConfigRaw,
 )
 from backend.domain.events import DomainEvent
-from backend.infrastructure.config_options import PydanticConfigOptions
-from backend.infrastructure.core_config_files import CoreConfigFiles
 from backend.infrastructure.events.callback_event_bus import CallbackEventBus
 from backend.infrastructure.file_asset_store import FileSystemAssetStore
 from backend.infrastructure.graph.contract_catalog import ContractNodeCatalog
@@ -439,45 +423,6 @@ class RecordingEventBus(CallbackEventBus):
 
 
 
-class FakeConfigInspector(ConfigInspector):
-    """Existence check is real; summaries/descriptions are scripted.
-
-    ``invalid`` maps a path string to an exception to raise (for
-    config_invalid tests); everything else resolves to the defaults.
-    """
-
-    def __init__(self) -> None:
-        self.default = ConfigSummary(mode="distillation", total_steps=100)
-        self.summaries: dict[str, ConfigSummary] = {}
-        self.descriptions: dict[str, ConfigDescription] = {}
-        self.default_description = ConfigDescription(
-            mode="distillation",
-            total_steps=100,
-            start_from={
-                "teacher": StartOption(path="", available=False, label="Base Model"),
-                "student": StartOption(path="", available=False, label="Student"),
-                "resume": StartOption(path="", available=False, label="Resume"),
-            },
-        )
-        self.invalid: dict[str, Exception] = {}
-
-    def _guard(self, config_path: Path) -> str:
-        key = str(config_path)
-        if key in self.invalid:
-            raise self.invalid[key]
-        if not config_path.exists():
-            raise ConfigNotFoundError(f"config file not found: {config_path}")
-        return key
-
-    def summarize(self, config_path: Path) -> ConfigSummary:
-        key = self._guard(config_path)
-        return self.summaries.get(key, self.default)
-
-    def describe(self, config_path: Path) -> ConfigDescription:
-        key = self._guard(config_path)
-        return self.descriptions.get(key, self.default_description)
-
-
 class RecordingMonitorBus(MonitorBusPort):
     """Port test double: records thread-side calls; no queues/loops."""
 
@@ -612,8 +557,6 @@ def build_services(
     runs_dir: Path | None = None,
     poll_interval: float = 0.05,
     settings_store: SqliteSettingsStore | None = None,
-    config_files: CoreConfigFiles | None = None,
-    config_options: PydanticConfigOptions | None = None,
     assets: FileSystemAssetStore | None = None,
     graph_registry: Any | None = None,
     graph_runtime: GraphRuntime | None = None,
@@ -644,13 +587,6 @@ def build_services(
     runs_dir = runs_dir if runs_dir is not None else Path(
         tempfile.mkdtemp(prefix="backend-runs-")
     )
-    # After the defaults above, not before: this used to be built from
-    # `project_root` while that was still None for every caller that did not
-    # pass one, so ProjectPaths.root was None and any relative path through
-    # it raised TypeError. Latent until ProjectPaths.config() started
-    # resolving its root, which turned the TypeError into an AttributeError
-    # -- but the wiring was wrong either way.
-    paths = ProjectPaths(root=project_root)
     if settings_store is None:
         database = SqliteDatabase(project_root / "test-settings.db")
         database.initialize()
@@ -661,10 +597,6 @@ def build_services(
     image_libraries = FsImageLibraries(layout)
     if assets is None:
         assets = FileSystemAssetStore(layout)
-    if config_files is None:
-        config_files = CoreConfigFiles()
-    if config_options is None:
-        config_options = PydanticConfigOptions()
     if graph_registry is None:
         graph_registry = fixture_tree_registry()
     contract_catalog = ContractNodeCatalog(graph_registry)
@@ -761,13 +693,6 @@ def build_services(
     )
     describe_modules = DescribeGraphModules(catalog=contract_catalog)
     return ApplicationServices(
-        config=ConfigServices(
-            read=GetConfig(files=config_files, paths=paths),
-            update=UpdateConfig(files=config_files, paths=paths),
-            read_raw=ReadConfigRaw(files=config_files, paths=paths),
-            write_raw=WriteConfigRaw(files=config_files, paths=paths),
-            options=GetConfigOptions(options=config_options),
-        ),
         installer=InstallerServices(
             check=CheckRequirements(
                 inventory=MetadataPackageInventory(),

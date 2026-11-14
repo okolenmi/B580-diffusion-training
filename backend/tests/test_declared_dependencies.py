@@ -122,7 +122,6 @@ EXCLUDED_PREFIXES = (
 #: the reasoning lives here instead.
 TRANSITIVE_BUT_DIRECT: dict[str, str] = {
     "pydantic": "fastapi requires it, in every version since 0.100",
-    "pydantic_core": "a pydantic implementation detail, same reasoning",
     "starlette": "fastapi requires it; we import it directly in the ASGI "
                  "app's own plumbing",
 }

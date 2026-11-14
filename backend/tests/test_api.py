@@ -162,8 +162,7 @@ def test_request_guard() -> None:
 
         # Cross-site write: refused, whatever the body was going to be.
         status, _, body = asgi_request(
-            app, "/api/v1/config", method="PATCH",
-            json_body={"path": "cfg/missing.toml", "overrides": {}},
+            app, "/api/v1/graphs/library/missing", method="DELETE",
             extra_headers={"origin": "http://evil.example"},
         )
         check(
@@ -173,12 +172,11 @@ def test_request_guard() -> None:
 
         # Same-origin write: allowed (this is what the frontend does).
         status, _, body = asgi_request(
-            app, "/api/v1/config", method="PATCH",
-            json_body={"path": "cfg/missing.toml", "overrides": {}},
+            app, "/api/v1/graphs/library/missing", method="DELETE",
             extra_headers={"origin": "http://localhost"},
         )
         check(
-            status == 404 and body["error"]["code"] == "config_not_found",
+            status == 404 and body["error"]["code"] == "graph_not_found",
             f"a same-origin write reaches the handler (got {status} {body!r})",
         )
 
@@ -190,8 +188,7 @@ def test_request_guard() -> None:
 
         # No Origin at all is not a browser cross-site request.
         status, _, body = asgi_request(
-            app, "/api/v1/config", method="PATCH",
-            json_body={"path": "cfg/missing.toml", "overrides": {}},
+            app, "/api/v1/graphs/library/missing", method="DELETE",
         )
         check(
             status == 404,

@@ -2,7 +2,7 @@
 
 Page routes, deliberately *not* a root mount:
 
-* ``/``, ``/monitor/{monitor_id}``, ``/graph``, ``/templates[/{name}]``, ``/config``,
+* ``/``, ``/monitor/{monitor_id}``, ``/graph``, ``/templates[/{name}]``,
   ``/datasets``, ``/datasets/{name}``, ``/help`` and ``/settings`` serve
   the page files (monitor/dataset ids live in the URL; the HTML is
   generic and the client script reads it, like the legacy dashboard);
@@ -81,7 +81,6 @@ _STATIC_PAGES: tuple[tuple[str, str], ...] = (
     ("/graph2", "graph2.html"),
     ("/templates", "templates.html"),
     ("/templates/{name}", "templates.html"),
-    ("/config", "config.html"),
     ("/datasets", "datasets.html"),
     ("/datasets/{name}", "datasets.html"),
     ("/help", "help.html"),

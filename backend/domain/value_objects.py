@@ -73,23 +73,6 @@ class TrainingMode(str, Enum):
     FULL = "full"
 
 
-class StartFrom(str, Enum):
-    """What a launch starts from -- a checkpoint, a teacher run, or a
-    previous run's own state.
-
-    The values are exactly the keys ``ConfigInspector.describe`` returns
-    in its ``start_from`` map (the options a config actually offers), so
-    the launch vocabulary and the offered one cannot drift apart: the
-    UI sends a key the inspector produced, or the use case refuses it
-    with the list (docs 08 S-24).
-    """
-
-    TEACHER = "teacher"
-    STUDENT = "student"
-    RESUME = "resume"
-    LORA_CHECKPOINT = "lora_checkpoint"
-
-
 RUN_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
     # FAILED is reachable from CREATED: a launch can fail before the
     # process ever starts (missing interpreter, unreadable config), and

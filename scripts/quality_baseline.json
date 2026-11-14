@@ -1,6 +1,5 @@
 {
   "mypy": {
-    "backend/infrastructure/config_schema.py|call-arg": 1,
     "backend/infrastructure/dataset_library.py|arg-type": 1,
     "backend/infrastructure/dataset_task_worker.py|arg-type": 2,
     "backend/infrastructure/dataset_tasks.py|arg-type": 1,
@@ -14,8 +13,6 @@
   "ruff": {
     "backend/application/lifecycle_writer.py|UP046": 1,
     "backend/domain/lifecycle.py|UP046": 1,
-    "backend/infrastructure/config_options.py|C901": 1,
-    "backend/infrastructure/config_schema.py|C901": 1,
     "backend/infrastructure/graph/runtime.py|ARG002": 1,
     "backend/infrastructure/graph/runtime.py|C901": 1,
     "backend/presentation/sse.py|ASYNC109": 1,

@@ -68,20 +68,6 @@ class AssetExistsError(ApplicationError):
     status_code = 409
 
 
-class ConfigNotFoundError(ApplicationError):
-    """The training config file does not exist."""
-
-    code = "config_not_found"
-    status_code = 404
-
-
-class ConfigInvalidError(ApplicationError):
-    """The config exists but cannot be parsed/validated."""
-
-    code = "config_invalid"
-    status_code = 422
-
-
 class RunAlreadyActiveError(ApplicationError):
     """Another run is created or running; single-run invariant holds."""
 

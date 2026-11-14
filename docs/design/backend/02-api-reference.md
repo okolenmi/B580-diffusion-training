@@ -63,8 +63,6 @@ the other processes it talks to. That is this document.
   | `run_not_found`, `no_active_run` | 404 | runs |
   | `run_already_active`, `run_not_running` | 409 | runs |
   | `run_directory_conflict` | 409 | runs (`runs/run_<id>/` already holds files — never overwritten, docs 07 F-04) |
-  | `config_not_found` | 404 | config |
-  | `config_invalid` | 422 | config |
   | `training_launch_failed` | 500 | runs |
   | `settings_invalid` | 400 | settings |
   | `asset_too_large` | 413 | assets (upload body over the 8 GiB cap, or a declared `Content-Length` over it — the body is streamed, so the running total is the authoritative check) |

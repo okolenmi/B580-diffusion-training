@@ -3,7 +3,7 @@
 
    A field block edits one value of the template's draft graph: a node's
    input port, or one of the graph's own settings. The control is the graph
-   editor's own (`editor/widgets.js` `buildWidget`), driven from the same port
+   editor's own (`lib/port_widgets.js` `buildWidget`), driven from the same port
    description the backend sent, so a value looks and validates the same on
    the page as on the canvas and cannot drift from it.
 
@@ -19,7 +19,7 @@
      * a bool that shows its *default* while unset.
    --------------------------------------------------------------------------- */
 
-import { buildWidget, rowVisible } from "../editor/widgets.js";
+import { buildWidget, rowVisible } from "../lib/port_widgets.js";
 import { getFieldValue, setFieldValue } from "./model.js";
 
 /** `params` stand-in for a graph-scope field: the one key is the setting's

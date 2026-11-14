@@ -160,7 +160,7 @@ Send the zip. How to read it: the report's table of adapters against the first a
 Run `python -m next.perf ipc --out perf-ipc` on the B580 with nothing else using the card (a few minutes) and send `perf-ipc/ipc.md`. It answers the gates of `rework/76-parallel-runs.md`: what this torch and driver offer for sharing, whether a device tensor can be handed to another process (G1), used there (G2), and what the borrower sees when the owner frees it (G3); what two processes on one card cost each other (G4, needs no sharing); how long park and reload of 1 GB takes (G5). A failure is an answer, not a bug: it decides whether the shared-weights route is built or parallel runs stay on separate copies. If a gate hangs the card or the driver, say which one.
 
 ## 76. Editor: a graph written by a console run
-Write a graph with `python -m next.run sdxl-lora ... --dump graph.json`, press *Import file* in `/graph2` and pick it: the nodes must arrive in columns left to right with no overlap (*Arrange* redoes it once the cards have their real size). Then *Export* and import the exported file again.
+Write a graph with `python -m next.run sdxl-lora ... --dump graph.json`, press *Import file* in `/graph` and pick it: the nodes must arrive in columns left to right with no overlap (*Arrange* redoes it once the cards have their real size). Then *Export* and import the exported file again.
 
 ## 90. Anima: what no report has covered yet
 `python -m next.run anima-lora ... --resolution 512 --steps 50 --graph` against the same without `--graph` (time per step, losses), and then 1024 px, batch 1: peak memory and time per step. For one picture at 1024 px through the VAE (`get_family("anima").load_vae(part, device="xpu")`): encode and decode time and peak memory.
@@ -169,7 +169,7 @@ Write a graph with `python -m next.run sdxl-lora ... --dump graph.json`, press *
 On a real run: the main loss line should fill the middle half of the chart (linear) with the low/mid/high-t thirds in the logarithmic top and bottom quarters, and the hover tooltip leads with an average (the step's own value in parentheses). The *Average* selector in the chart's bar (Mean 10/24/100, EMA 24/100, Median 25) changes both the drawn average line and the tooltip number; the choice is kept per browser. Say which method you want as the default, and whether the tooltip number now tells you where the loss is.
 
 ## 93. Editor: Build and Watch
-`/graph2` has *Build* (palette, canvas, inspector; nothing below the canvas) and *Watch* (charts, boards and the run list over the whole window). Nothing opens by itself when a run starts; *Watch* shows a green dot while a run is going. The arrow beside the switch opens a second window straight into Watch (`?mode=watch`), so building and watching can sit on two screens. Report what is missing in either window, and whether a run's history belongs in Watch (now) or somewhere else.
+`/graph` has *Build* (palette, canvas, inspector; nothing below the canvas) and *Watch* (charts, boards and the run list over the whole window). Nothing opens by itself when a run starts; *Watch* shows a green dot while a run is going. The arrow beside the switch opens a second window straight into Watch (`?mode=watch`), so building and watching can sit on two screens. Report what is missing in either window, and whether a run's history belongs in Watch (now) or somewhere else.
 
 ## Reading a bundle automatically
 `python -m next.accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m next.perf hwcheck` without running anything.

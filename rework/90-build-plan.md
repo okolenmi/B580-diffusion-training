@@ -89,7 +89,7 @@ repo/
 | `nodes/` | **parallel rewrite** in `next/` | owner's request; 41% comments; structure issues from the audits |
 | `manager/` (ingest, loader, 2.9k lines) | rewritten into `next/data/` | the dataset design changes (per-VAE cache, prompt table, events) so it is not a move |
 | `backend/` (26k lines, layered, tested) | **keep and extend in place**; at phase 6 its graph layer switches to `next/graph` (no v2 routes, decision 0.1-1) | its layering is the best-structured part of the repo; the graph validator and runtime logic move into `next/graph` because they are node-contract code |
-| `frontend/js` (10k lines) | **editor modules rewritten in a parallel folder** (`frontend/js/graph2/`, page `graph2.html`); the rest untouched | plan 30 changes the render model (incremental), so it is not a patch; other pages are unaffected |
+| `frontend/js` (10k lines) | **editor modules rewritten in a parallel folder** (`frontend/js/graph/`, page `graph.html`); the rest untouched | plan 30 changes the render model (incremental), so it is not a patch; other pages are unaffected |
 | `docs/` | rewritten at the swap from the plans; old design docs move to `archive/` | |
 
 ## 3. Working method (the "AI-native" rules)
@@ -209,7 +209,7 @@ Stages, each ending with every check green and a commit (the tree stays runnable
    `families/` for inspection) with their tests. The config pair goes with the config path (stage 2).
 2. **Config path.** Backend config routes and schema modules, `frontend/config.html` and `js/views/config.js`, their tests
    and `convert-cfg.toml` move to `archive/`; backend settings (ports, paths, first run) stay.
-3. **Old trees.** `nodes/`, `manager/`, `frontend/js/editor*` and `graph.html` (the route `/graph` serves `graph2.html`),
+3. **Old trees.** `nodes/`, `manager/`, `frontend/js/editor*` and `graph.html` (the route `/graph` serves `graph.html`),
    old tests and `run_tests.py` move to `archive/`; `docs/` is rewritten from the plans (old design docs to `archive/`).
 4. **Flatten.** `git mv next/<each> .`; rewrite `next.` imports (backend, scripts, backend tests), `python -m next.` commands
    (TESTING, docs, `run_server.sh`), the layer table in `scripts/check_imports.py`, and write a new `run_tests.py` that runs

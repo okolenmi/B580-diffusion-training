@@ -78,7 +78,6 @@ class _UiStaticFiles(StaticFiles):
 # (`/templates/{name}`) -- the handler ignores them and serves the one file.
 _STATIC_PAGES: tuple[tuple[str, str], ...] = (
     ("/graph", "graph.html"),
-    ("/graph2", "graph2.html"),
     ("/templates", "templates.html"),
     ("/templates/{name}", "templates.html"),
     ("/datasets", "datasets.html"),

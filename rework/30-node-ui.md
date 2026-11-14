@@ -261,7 +261,7 @@ tell an old server from a new one. Saved graphs gain per-node `layout` entries
 
 * Rewriting `canvas.js` can regress dragging, wiring, selection. Mitigation:
   write the pure geometry and doc-change code first with tests, then build the new
-  renderer as a new module set (`frontend/js/graph2/`, plan 90) with the same
+  renderer as a new module set (`frontend/js/graph/`, plan 90) with the same
   public surface; the old editor stays untouched until the swap.
 * Pin geometry on very small nodes. Mitigation: minimum node height from the
   larger of inputs and outputs; a "+n" overflow.

@@ -30,6 +30,7 @@ ASSETS = (
     "/ui/css/shell.css",
     "/ui/css/monitor.css",
     "/ui/css/editor.css",
+    "/ui/css/graph.css",
     "/ui/css/datasets.css",
     "/ui/css/help.css",
     "/ui/css/settings.css",
@@ -55,13 +56,8 @@ ASSETS = (
     "/ui/js/datasets/dialogs.js",
     "/ui/js/datasets/caption_edit.js",
     "/ui/js/datasets/icons.js",
-    "/ui/js/editor.js",
-    "/ui/js/editor/state.js",
-    "/ui/js/editor/canvas.js",
-    "/ui/js/editor/inspector.js",
-    "/ui/js/editor/palette.js",
-    "/ui/js/editor/executions.js",
-    "/ui/js/editor/library.js",
+    "/ui/js/graph/app.js",
+    "/ui/js/lib/port_widgets.js",
 )
 
 
@@ -124,7 +120,7 @@ def test_pages_and_assets() -> None:
 
         status, _, body = asgi_request(app, "/graph")
         check(
-            status == 200 and isinstance(body, str) and "graph-canvas" in body,
+            status == 200 and isinstance(body, str) and "g2-canvas" in body,
             f"/graph serves the editor page (got {status})",
         )
 
@@ -257,7 +253,7 @@ def test_static_cache_headers() -> None:
 
         for path in ("/", "/graph", "/datasets",
                      "/help", "/settings", "/monitor/mon-test",
-                     "/ui/css/style.css", "/ui/js/editor.js"):
+                     "/ui/css/style.css", "/ui/js/graph/app.js"):
             status, headers, _ = asgi_request(app, path)
             check(
                 status == 200 and headers.get("cache-control") == "no-cache",

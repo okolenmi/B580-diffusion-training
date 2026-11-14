@@ -37,7 +37,7 @@ Repeat Mission 2 steps 3 and 5 with the NF4 graph (batch 1) at budgets 4996, 571
 ## Mission 3: the editor in a browser (TESTING 76, 79, 80, 82, 83; about 1.5 hours)
 Mission 3 was run once (2026-11-12) and stopped when the runs died of the budget bug fixed afterwards. Still open: 76 tabs/addons (76.14, 76.15), input-drop list (76.16), LR and number fields (76.17b/c), 79 live curves, reload mid-run and older-run selection, 80, 82 (Parallel refusal text, planned run starting, step times), 83. Re-check that Stop now ends the *running* run when a planned one is selected, and that a new starter graph is fitted entirely in view. Tip for a weaker browser tester: output sockets sit on the card's right edge; scroll the canvas so no card is under the right-hand panel before dragging.
 Needs Playwright (`pip install playwright && playwright install chromium`); if it cannot be installed, skip the mission and say so. Open
-`http://127.0.0.1:<port>/graph2`, and for each item in `TESTING.md` (read only items 76, 79, 80, 82, 83) do what it says through Playwright and report PASS/FAIL per
+`http://127.0.0.1:<port>/graph`, and for each item in `TESTING.md` (read only items 76, 79, 80, 82, 83) do what it says through Playwright and report PASS/FAIL per
 numbered point. Take a screenshot only where a point is a visual judgement (layout, overlap) or fails, at 1200x800, and name the file in the report; do not
 describe screenshots at length. Keep one real training running for the points that need one (a 200-step starter).
 

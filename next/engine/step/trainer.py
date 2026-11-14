@@ -332,6 +332,7 @@ class Trainer:
         """Out-of-memory errors say where the card's memory was; anything else passes through unchanged."""
         if self.residency is None or not is_out_of_memory(error):
             return error
+        self.residency.note_failure(f"step {step + 1}", error)
         rows = ", ".join(f"{r['name']} {r['mb']:.0f}" for r in self.residency.ledger())
         return MemoryBudgetExceeded(f"step {step + 1} ran out of memory ({str(error).splitlines()[0] if str(error) else type(error).__name__}); "
                                     f"MB by claim: {rows}")

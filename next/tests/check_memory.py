@@ -297,6 +297,11 @@ def allocator_cap():
     m.recover(3, RuntimeError("out of memory"))
     check(device.caps[-1] == 12000 - 2400 - 2 * m.policy.margin_mb and m.trace[-1]["event"] == "allocator_cap"
           and any(t["event"] == "out_of_memory" for t in m.trace), "after an out-of-memory error the driver is given more room")
+    from ..engine.step.trainer import Trainer
+    explained = Trainer._explained(SimpleNamespace(residency=m), 3, RuntimeError("XPU out of memory. Tried to allocate 20 MiB"))
+    failed = [t for t in m.trace if t["event"] == "failed"]
+    check(isinstance(explained, MemoryBudgetExceeded) and failed and failed[-1]["why"] == "step 4" and failed[-1]["parts"],
+          "a step that ends the run out of memory leaves a failed record with the ledger")
     check(is_out_of_memory(RuntimeError("UR_RESULT_ERROR_OUT_OF_RESOURCES")) and is_out_of_memory(RuntimeError("XPU out of memory. Tried"))
           and not is_out_of_memory(RuntimeError("shape mismatch")), "driver refusals count as out of memory, other errors do not")
 

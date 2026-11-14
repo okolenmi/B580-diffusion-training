@@ -32,6 +32,8 @@ predicts out-of-memory; the allocator's own peak understates it.
 
 An encoder visit is sized as the encoders' weights plus 512 MB of working room (loading stages tensors and the first forward allocates activations), and `make_room` first gives the allocator's free cached blocks back, so a visit is judged on what is really held. A refused or failed load or encode leaves a `failed` memory event with the allocator's numbers and the ledger (`ResidencyManager.note_failure`), and each visit's cache release a `cache_returned` event; a run that still fails at a refresh shows from these what held the memory. Whether the allowance is enough on the B580 is for the owner's re-run of the native prompt refresh (TESTING, Mission 7 repeat).
 
+A stated budget below what the first training step needs cannot be rescued by lending the model: the step runs out of memory, the run ends with a `MemoryBudgetExceeded` naming the MB per claim, and a `failed` event carries the allocator's numbers. Measured on the B580 with a native SDXL model at batch 2, 512 px: 6302 MB trains (model lent for the prompt refresh, step time unchanged), 5900 MB does not.
+
 ## Why the SDXL text encoders weigh 1.5 GB
 Two encoders: CLIP-L (about 0.25 GB) and OpenCLIP-bigG (about 1.3 GB). They could be loaded one at a time when the budget is small, but the larger one alone is most of the load, so that saves only about 0.17 GB and costs a second round trip; the model parking above is the lever that actually frees room.
 

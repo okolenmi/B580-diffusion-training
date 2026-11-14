@@ -93,7 +93,10 @@ def main(argv: list[str] | None = None) -> int:
 
     PlannedRunsPump(container.services.graphs.start_execution.promote_planned).start()
 
-    uvicorn.run(app, host=settings.host, port=settings.port, log_level="info")
+    # One access line per request buries the lines that matter (a page polls several routes a second);
+    # BACKEND_ACCESS_LOG=1 brings them back for the rare case of checking whether a request arrived.
+    access_log = os.environ.get("BACKEND_ACCESS_LOG", "").lower() in ("1", "true", "yes", "on")
+    uvicorn.run(app, host=settings.host, port=settings.port, log_level="info", access_log=access_log)
     return 0
 
 

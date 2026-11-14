@@ -1,5 +1,5 @@
 /* ---------------------------------------------------------------------------
-   graph2/starters.js -- "New from starter": the few choices made before a graph
+   graph2/starters.js -- "Quick workflow": the few choices made before a graph
    exists (checkpoint, dataset, output, length), drawn by the same controls a
    node port uses; the server returns the whole graph and the document loads it.
    The answers are kept per starter in this browser so the next graph starts

@@ -55,7 +55,7 @@ more". Needs 10 (events), 20 (settings), 30 (node displays). Inputs:
 * "A preset that only subscribes to events" is a **View**: a set of blocks that
   subscribe to display modules, event topics and settings of a graph.
 * "A way to begin" is a **Starter**. Making a graph from a starter is an explicit
-  copy the person sees ("New graph from starter"), which is the honest version
+  copy the person sees ("Quick workflow"), which is the honest version
   of today's "new from a graph".
 * An **App** is a graph that has a default page view, opened in *use* mode at
   `/apps/<name>`: what a beginner sees. It is not a separate document type.

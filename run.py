@@ -142,7 +142,7 @@ def _parser() -> argparse.ArgumentParser:
         p.add_argument("--param", action="append", metavar="NODE.PORT=VALUE",
                        help="a node's parameter by the node's name in the starter (for example adapter.attention_fraction=0.5)")
         p.add_argument("--addons", metavar="FILE.json",
-                       help="an addon set: JSON mapping a node (title, class or uid) or 'graph' to addons to switch on (docs/31-node-addons.md)")
+                       help="an addon set: JSON mapping a node (title, class or uid) or 'graph' to addons to switch on (docs/internals/addons.md)")
         p.add_argument("--verbose", action="store_true")
         p.add_argument("--perf", nargs="?", const="perf-report", metavar="DIR",
                        help="profile a few steps of the trainer (after a warm-up) and write a rated performance report to DIR (default perf-report)")

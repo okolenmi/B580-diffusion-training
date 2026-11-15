@@ -1,7 +1,7 @@
 """Changing a graph's addons without an editor: enable, configure, disable, remove, and loading an addon-set file.
 
 Every function takes a ``GraphDoc`` and returns a new one, or raises ``AddonError`` with the validator's messages when the
-result would break an addon rule. The editor, the command line and scripts use the same calls (docs/31-node-addons.md, 6b).
+result would break an addon rule. The editor, the command line and scripts use the same calls (docs/internals/addons.md).
 """
 
 from __future__ import annotations

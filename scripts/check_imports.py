@@ -4,7 +4,7 @@
     python scripts/check_imports.py            # exit 1 on any violation
     python scripts/check_imports.py --list     # print the layer table
 
-Rules come from docs/80-developer-guide.md section 2.1. Each file belongs to one layer, decided by its path; a layer may
+Rules come from docs/developing.md. Each file belongs to one layer, decided by its path; a layer may
 import only the layers listed for it, and a *pure* layer may import nothing outside the standard library. Inside one
 top-level package imports are relative; between packages they are absolute. A relative import that climbs out of its
 package is refused, and so is an import of the backend, the old trees or the root helpers the backend uses.

@@ -1,6 +1,6 @@
 # ADR-0005: Memory admission and per-graph memory
 
-**Status:** accepted
+**Status:** accepted; implemented in `backend/infrastructure/admission/graph_memory.py` (grant, budget, physical check). The file names in the text (`nodes/memory/...`) are the earlier tree's; the lease and eviction policy it mentions was removed unused.
 **Date:** 2026-10-04
 
 ## Context

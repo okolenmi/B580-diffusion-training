@@ -1,4 +1,4 @@
-"""Can two processes use the same weights that sit once on the card? Gates for the shared-weights design in docs/76-parallel-runs.md.
+"""Can two processes use the same weights that sit once on the card? Gates for the shared-weights design in docs/internals/parallel-runs.md.
 Each gate runs in its own process(es) so a crash or a hang of the driver costs one row, not the run; every row says what happened in words."""
 
 from __future__ import annotations

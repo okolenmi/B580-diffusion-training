@@ -1,9 +1,8 @@
 # Contracts
 
 Short normative documents for the JSON and Python interfaces that more than one
-region depends on. A plan gives the reasons; a contract gives the exact shape. When
-code and a contract disagree, one of them is a bug: fix the contract first (plan 80,
-section 15).
+region depends on. A contract gives the exact shape. When code and a contract disagree, one of them
+is a bug: fix the contract first (`../developing.md`, "Changing a public contract").
 
 | File | Governs |
 |---|---|

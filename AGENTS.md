@@ -10,6 +10,8 @@
    hardware-tested system (memory levers, B580 findings, known issues). Only its structure was messy. Before
    writing or "investigating" anything performance- or memory-related, read what the old code and `docs/` already
    say, and port that knowledge; do not rediscover it by testing again.
+5. **Docs stay true.** `docs/status.md` is the one place that says what is built; read it first and change it in the same commit that builds,
+   removes or verifies something. Finished plans go to `archive/`; do not leave "proposal" pages beside working code.
 
 ## Tests: keep it clean
 - Remove what is already useles or have almost no value. Don't be "sentimental" about it.

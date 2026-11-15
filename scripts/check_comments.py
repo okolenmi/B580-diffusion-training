@@ -3,7 +3,7 @@
     python scripts/check_comments.py           # report, exit 0
     python scripts/check_comments.py --strict  # exit 1 when anything is flagged
 
-Flags (docs/80-developer-guide.md section 12): a comment or docstring line that holds a
+Flags (docs/developing.md): a comment or docstring line that holds a
 measurement (a number with a unit) or history wording. They belong in
 ``docs/experiment-results.md`` or git history. Also reports each file's comment share, so a file
 that drifts toward the old 40 percent is visible.

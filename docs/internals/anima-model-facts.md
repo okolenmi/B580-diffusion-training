@@ -132,7 +132,7 @@ attention width 768, a single `cond_stage_model.`), Flux (`double_blocks.`,
   subject, character, series, artist (`@` prefix), general tags; dataset tags
   on a first line then a newline, optional second line with alt text;
   natural-language prompts should be at least two sentences. This is relevant
-  to caption stages (plan 50): the Anima prompt format is structured text, not
+  to caption stages: the Anima prompt format is structured text, not
   one tag list.
 * Whether a 12 GB card can train it: the model is about 2B parameters; with
   block swap and no fp8 the guide's own recommendations apply. Nothing was

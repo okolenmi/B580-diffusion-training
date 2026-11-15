@@ -1,7 +1,6 @@
 # Contract: graph document
 
-Implements plan 60 section 4, plan 10 section 4, plan 20 section 6. No earlier
-format is read (plan 90 section 0). Python: `graph/document.py`.
+No earlier format is read. Python: `graph/document.py`.
 
 ```jsonc
 {
@@ -15,7 +14,7 @@ format is read (plan 90 section 0). Python: `graph/document.py`.
       "params": { "scope": "checkpoints", "file": "x.safetensors" },
       "layout": { "x": 80, "y": 120, "w": 280, "h": null,
                   "collapsed": false, "groups": { "advanced": true } },
-      "addons": [                     // optional; omitted when empty (plan 31)
+      "addons": [                     // optional; omitted when empty (`internals/addons.md`)
         { "id": "a1", "kind": "RegionLadder", "enabled": true, "params": { "start": 9 } }
       ]
     }
@@ -28,7 +27,7 @@ format is read (plan 90 section 0). Python: `graph/document.py`.
     { "from_node": "n_a", "from_port": "epoch_ending",
       "to_node": "n_b",   "to_port": "epoch_ending" }
   ],
-  "views": [                           // plan 60; opaque to graph/ (kept verbatim), see "Views" below
+  "views": [                           // opaque to graph/ (kept verbatim), see "Views" below
     { "id": "v1", "title": "Monitor", "mode": "monitor", "columns": 12,
       "blocks": [ { "id": "b1", "ref": { "scope": "node", "node": "n_a", "kind": "display", "name": "loss" },
                     "x": 0, "y": 0, "w": 12, "h": 6, "collapsed": false, "title": null, "options": {} } ] }
@@ -61,7 +60,7 @@ Rules:
 10. `addons` (on a node, and at the top level for the graph): ordered; `id` is stable inside its host (`[a-z][a-z0-9_]*`),
     `kind` an addon class name. A disabled addon is neither built nor checked; its params stay. An addon's parameter that is
     wired is the port `<id>.<param>` of its host, and a slot filled by a wire is the port `slot:<slot>`. An event wire may end at
-    `<uid>.<id>` or `graph.<id>`. Rules and issue codes (`addon_*`): `docs/31-node-addons.md`.
+    `<uid>.<id>` or `graph.<id>`. Rules and issue codes (`addon_*`): `docs/internals/addons.md`.
 
 ## Views
 
@@ -76,4 +75,4 @@ no target, so it cannot be orphaned; allowed in both kinds of view). A monitor v
 * Whether a block's target still exists is answered by `POST /templates/resolve` (a draft document whose `graph` is the open
   graph); a block that lost its node is kept and shown as orphaned.
 * The runtime ignores views and a run payload strips them. Views are saved with the graph in the library and in the browser's draft.
-* Buttons other than Run/Stop (triggering an event input) wait for a control channel into the running process (plan 60 section 8).
+* Buttons other than Run/Stop (triggering an event input) wait for a control channel into the running process.

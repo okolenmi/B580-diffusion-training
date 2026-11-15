@@ -1,6 +1,6 @@
 # Contract: graph settings
 
-Implements plan 20. Python: `graph/settings.py`.
+Python: `graph/settings.py`.
 
 `SettingSpec` JSON (also the dialog's row description):
 
@@ -12,14 +12,14 @@ Implements plan 20. Python: `graph/settings.py`.
   "contributed_by": "core" | "<family id>" | "<node class>" }
 ```
 
-Resolution: `node explicit override > graph setting > app default (config) > spec default`.
-The node override exists only where a node declares one (plan 20 section 5).
+Resolution: `node explicit override > graph setting > app default > spec default`.
+The node override exists only where a node declares one.
 
 Values: a value equal to the string `"auto"` is allowed only when `allow_auto`. Numbers
 must satisfy `minimum`/`maximum`. Cross-key rules (core): `memory.vram_min_mb <=
 memory.vram_max_mb` when both numeric.
 
-Core keys (initial; see plan 20 section 4 for meaning): `memory.vram_max_mb`,
+Core keys (`graph/settings.py` holds each one's meaning): `memory.vram_max_mb`,
 `memory.vram_min_mb`, `memory.strict`, `memory.ram_max_mb`, `device.default`,
 `precision.denoiser`, `precision.encoders`, `precision.vae`, `precision.autocast`,
 `runtime.graph_capture`, `runtime.residency.safety_margin`,

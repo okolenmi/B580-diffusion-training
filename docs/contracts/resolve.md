@@ -1,6 +1,6 @@
 # Contract: shape resolution
 
-Implements plan 41 sections 2, 6, 7 and plan 30 section 6.3. Python:
+Python:
 `graph/resolve.py`, hook `Node.resolve(params, env) -> Resolution` (`env` is the `Environment`: named machine services such as the model library; may be absent).
 
 A node whose ports depend on its params declares `DYNAMIC = DynamicShape(depends_on,
@@ -41,5 +41,4 @@ Rules:
 3. The graph validator calls the same `resolve` for every node, so what the editor
    showed is what a run is checked against.
 4. A wire whose port vanished after a resolve is **dangling**: it stays in the document
-   and the validator reports `unknown_output_port` / `unknown_input_port` (plan 41,
-   section 6).
+   and the validator reports `unknown_output_port` / `unknown_input_port` .

@@ -1,6 +1,6 @@
 # Contract: runs
 
-Implements plan 30 section 6.1, plan 10 section 6. Python: `graph/runtime.py`.
+Python: `graph/runtime.py`.
 
 ## Lifecycle
 

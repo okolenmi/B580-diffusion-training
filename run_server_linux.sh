@@ -49,7 +49,7 @@ fi
 #      browser needs no .env edit to find its own environment next start
 #   3. <parent-of-this-project>/venv/bin/python, if it exists (the
 #      project / ComfyUI / venv sibling-folder layout)
-#   4. Whatever "python" resolves to on PATH
+#   4. Whatever "python" (else "python3") resolves to on PATH
 #
 # Step 2 before step 3 on purpose: a wizard-created venv is a deliberate
 # choice by this install, so it outranks a folder that happens to be
@@ -63,8 +63,10 @@ elif [ -x "$PROJECT_VENV_PYTHON" ]; then
     PYTHON="$PROJECT_VENV_PYTHON"
 elif [ -x "$SIBLING_VENV_PYTHON" ]; then
     PYTHON="$SIBLING_VENV_PYTHON"
-else
+elif command -v python >/dev/null 2>&1; then
     PYTHON="python"
+else
+    PYTHON="python3"   # Debian and Ubuntu ship only python3 unless python-is-python3 is installed
 fi
 
 # M9: the backend replaces the old server/ (still launchable from

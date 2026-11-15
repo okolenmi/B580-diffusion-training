@@ -202,6 +202,11 @@ def create_venv(target: Path, python: str) -> Path:
         ) from exc
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "").strip().splitlines()
+        if "ensurepip is not available" in (exc.stderr or ""):
+            raise BootstrapError(
+                f"{python} cannot create environments because its venv support is not installed. "
+                f"On Debian and Ubuntu: sudo apt install python3-venv"
+            ) from exc
         raise BootstrapError(
             f"could not create a temporary environment with "
             f"{python} -m venv"

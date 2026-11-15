@@ -41,7 +41,7 @@ def dotenv_python() -> str | None:
 
 
 def resolve_interpreter() -> str:
-    sibling = ROOT.parent / "venv" / "bin" / "python"
+    sibling = ROOT.parent / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     candidates = [os.environ.get("VENV_PYTHON"), dotenv_python(), str(sibling)]
     if has_torch(sys.executable):
         return sys.executable

@@ -104,7 +104,7 @@ def venv_python(project_root: Path, get_setting: GetSetting) -> str:
     env = os.environ.get("VENV_PYTHON", "")
     if env:
         return env
-    sibling = project_root.parent / "venv" / "bin" / "python"
+    sibling = project_root.parent / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     if sibling.exists():
         return str(sibling)
     override = get_setting("venv_python", "")

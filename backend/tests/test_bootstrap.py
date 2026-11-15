@@ -278,4 +278,18 @@ check("ensurepip" in detail or "by hand" in detail,
 check("venv" not in detail.lower() or "temporary" not in detail.lower(),
       "and it did not quietly install somewhere else instead")
 
+# On Windows the restart goes through run_server.bat: a .sh cannot be started there.
+import os as _os
+import types as _types
+
+_real_os = bootstrap.os
+bootstrap.os = _types.SimpleNamespace(name="nt", environ=_os.environ)  # type: ignore[assignment]
+try:
+    windows_argv = bootstrap.next_argv(["--port", "9000"])
+finally:
+    bootstrap.os = _real_os  # type: ignore[assignment]
+check(Path(windows_argv[0]).name == "run_server.bat" and windows_argv[1:] == ["--port", "9000"],
+      f"on Windows the restart is run_server.bat with the same arguments ({windows_argv})")
+check((HERE.parents[1] / "run_server.bat").is_file(), "run_server.bat exists beside run_server.sh")
+
 finish()

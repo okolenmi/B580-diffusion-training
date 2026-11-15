@@ -34,7 +34,7 @@ the manifest the wizard checks is `backend/application/ports/requirements_manife
 
 | What | Command |
 |---|---|
-| Server and UI (editor at `/graph`, Templates, Datasets, Settings) | `./run_server.sh` (port 8765 by default) |
+| Server and UI (editor at `/graph`, Templates, Datasets, Settings) | `./run_server.sh`, on Windows `run_server.bat` (port 8766 by default) |
 | One run from the command line | `python -m run sdxl-lora --help`, then see `MANUAL.md` |
 | Everything the sandbox can check | `python run_tests.py` |
 

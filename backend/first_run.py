@@ -372,7 +372,8 @@ def next_argv(argv: list[str]) -> list[str]:
     `--host 0.0.0.0` *before* `"$@"`, so a user-supplied host still wins
     by argparse's last-value rule.
     """
-    return [str(Path(__file__).resolve().parents[1] / "run_server.sh"), *argv]
+    script = "run_server.bat" if os.name == "nt" else "run_server.sh"
+    return [str(Path(__file__).resolve().parents[1] / script), *argv]
 
 
 def bootstrap(python: str, host: str, port: int, argv: list[str]) -> None:
@@ -435,7 +436,11 @@ def bootstrap(python: str, host: str, port: int, argv: list[str]) -> None:
         # hand. The install test caught it because it redirects.
         sys.stdout.flush()
         sys.stderr.flush()
-        os.execve(command[0], command, dict(os.environ, VENV_PYTHON=str(interpreter)))
+        env = dict(os.environ, VENV_PYTHON=str(interpreter))
+        if os.name == "nt":
+            # os.exec* does not replace the process on Windows and cannot run a .bat; wait for the server and pass its exit code on.
+            raise SystemExit(subprocess.call(command, env=env))
+        os.execve(command[0], command, env)
     except OSError as exc:
         raise BootstrapError(
             f"could not restart run_server.sh ({exc}). The packages are "

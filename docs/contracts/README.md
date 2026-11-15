@@ -12,6 +12,6 @@ is a bug: fix the contract first (`../developing.md`, "Changing a public contrac
 | `events.md` | the event plane and its mirroring |
 | `runs.md` | run lifecycle, node states, progress and results |
 | `settings.md` | graph settings: specs, resolution order, core keys |
+| `errors.md` | the HTTP error envelope and every error code with its status |
 
-Status: **frozen at the end of phase 1** (`graph` implements all of them);
-until then they may change while the code is written.
+Status: implemented and stable. Change one only as `../developing.md` describes (contract page first, every user in the same commit).

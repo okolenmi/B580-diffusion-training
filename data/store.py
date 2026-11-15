@@ -6,7 +6,7 @@ import re
 import shutil
 from pathlib import Path
 
-from .latent_cache import cache_label
+from .cache_index import cache_label
 from .library import ImageLibrary
 
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$")

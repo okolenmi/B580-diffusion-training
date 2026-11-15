@@ -64,7 +64,7 @@ class ForbiddenHostError(ApplicationError):
     Declared here rather than in ``application/errors.py`` because the
     guard is its only source -- but it is an ``ApplicationError`` so the
     code and its 403 come from the same declaration as every other API
-    error, and the documented table in ``02-api-reference.md`` has a
+    error, and the documented table in ``docs/contracts/errors.md`` has a
     class behind each row (docs 08 S-10).
     """
 

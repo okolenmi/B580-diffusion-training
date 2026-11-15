@@ -23,13 +23,13 @@ import torch
 from safetensors import safe_open
 from safetensors.torch import save_file
 
+from .cache_index import INDEX
 from .ids import image_of, sample_id, spec_fields
 from .images import SizePolicy, load_crops
 from .library import ImageSet
 from .prefetch import Prefetch
 
 SHARD_SAMPLES = 256
-INDEX = "index.sqlite"
 
 _SCHEMA = """
 create table if not exists meta(key text primary key, value text not null);
@@ -180,21 +180,6 @@ class LatentSet:
     def get(self, sample: str) -> torch.Tensor:
         return self.cache.read(self.shards[sample], sample)
 
-
-def cache_label(folder: str | Path) -> str:
-    """The readable name stored with one cache, or "" when it has none or its index cannot be read (a damaged cache must
-    stay listable so it can be deleted)."""
-    index = Path(folder) / INDEX
-    if not index.is_file():
-        return ""
-    try:
-        db = sqlite3.connect(index)
-        try:
-            return dict(db.execute("select key, value from meta")).get("label", "")
-        finally:
-            db.close()
-    except sqlite3.Error:
-        return ""
 
 
 

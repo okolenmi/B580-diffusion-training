@@ -1,10 +1,9 @@
 """The error contract: codes, statuses, and the envelope around them.
 
-Two things are pinned here, and both used to be able to drift silently
-(docs 08 S-10):
+Two things are pinned here so they cannot drift silently:
 
 * every ``ApplicationError`` subclass declares the status that
-  ``archive/old-documentation/design/backend/02-api-reference.md`` documents. The test
+  ``docs/contracts/errors.md`` documents. The test
   *parses that table* rather than restating it, so there is one source:
   the doc. A new error that forgets its status, or a status that
   changed in one place only, fails at the gate instead of in a client;
@@ -43,13 +42,13 @@ from backend.application.errors import (  # noqa: E402
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-API_DOC = REPO_ROOT / "archive/old-documentation/design/backend/02-api-reference.md"
+API_DOC = REPO_ROOT / "docs/contracts/errors.md"
 
 _TABLE_ROW = re.compile(r"^\s*\|\s*(.+?)\s*\|\s*(\d{3})\s*\|")
 
 
 def documented_codes() -> dict[str, int]:
-    """The code -> status table as written in the API reference.
+    """The code -> status table as written in the errors contract.
 
     Rows look like::
 
@@ -61,10 +60,8 @@ def documented_codes() -> dict[str, int]:
     heading.
     """
     text = API_DOC.read_text(encoding="utf-8")
-    start = text.index("**Error codes**")
-    end = text.index("## 2.", start)
     table: dict[str, int] = {}
-    for line in text[start:end].splitlines():
+    for line in text.splitlines():
         match = _TABLE_ROW.match(line)
         if not match:
             continue
@@ -88,7 +85,7 @@ def _subclasses(cls: type) -> list[type]:
 def test_every_error_declares_its_status() -> None:
     print("\n== every ApplicationError declares the documented status ==")
     documented = documented_codes()
-    check(len(documented) >= 25, f"the API reference table was parsed ({len(documented)} codes)")
+    check(len(documented) >= 25, f"the errors contract table was parsed ({len(documented)} codes)")
 
     subclasses = _subclasses(ApplicationError)
     check(

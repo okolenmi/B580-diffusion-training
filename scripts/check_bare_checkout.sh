@@ -30,7 +30,7 @@ set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON="${GATE_PYTHON:-/home/okolenmi/comfy/venv/bin/python}"
 WORK="$(mktemp -d /tmp/bare-checkout-XXXXXX)"
-FILES="${BARE_FILES:-test_config.py test_settings.py test_installer.py}"
+FILES="${BARE_FILES:-test_settings.py test_installer.py}"
 FAILURES=0
 
 cleanup() { rm -rf "$WORK"; }

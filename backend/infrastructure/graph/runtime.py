@@ -1,4 +1,4 @@
-"""ContractGraphRuntime -- the ``GraphRuntime`` port over ``next/graph``.
+"""ContractGraphRuntime -- the ``GraphRuntime`` port over ``graph``.
 
 Validation and execution are the node tree's own (``GraphRunner``); this class only translates: the document
 in, the port's issue and result types out. A failing node or an invalid graph never raises -- it comes back as an

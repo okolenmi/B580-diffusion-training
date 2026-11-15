@@ -75,7 +75,7 @@ Rules:
 5. `nodes/` imports `families.api` and `families.registry`, never a concrete
    family. This is what keeps node code family-agnostic.
 
-Where the current files go (the per-file ledger is `PORTING.md`; files are rewritten into `next/families/`, plan 90): `nodes/model/unet.py`,
+Where the current files go (the per-file ledger is `PORTING.md`; files are rewritten into `families/`, plan 90): `nodes/model/unet.py`,
 `attention.py`, `unet_wrapper.py`, `lora.py` targets -> `families/sdxl/` and
 `families/general/adapters/`; `clip.py`, `tokenizer.py` -> `general/clip`;
 `vae.py`, `vae_decode.py` -> `general/vae` plus family constants;
@@ -261,8 +261,8 @@ Test: "does its code mention a family?" If it does, it belongs in the family.
 
 ### 7.1 Built so far (phase 8)
 
-Checked key-for-key against the owner's headers (`next/tests/fixtures/anima_headers.json.gz`) and number-for-number against
-ComfyUI's and Hugging Face's code on shared random weights (`next/tests/reference/`):
+Checked key-for-key against the owner's headers (`tests/fixtures/anima_headers.json.gz`) and number-for-number against
+ComfyUI's and Hugging Face's code on shared random weights (`tests/reference/`):
 
 * `families/anima/dit.py`, `adapter.py`: the transformer (3-D rotary, AdaLN-LoRA, per-block checkpointing) and the text adapter.
 * `text.py`: Qwen3-0.6B (last layer after its final norm; the file's keys under `model.`).
@@ -282,7 +282,7 @@ ComfyUI's and Hugging Face's code on shared random weights (`next/tests/referenc
   `sigma` is the noise-to-signal ratio `s / (1 - s)`, so loss weightings written for it keep their meaning (uniform is the default).
 * `adapters.py`: groups attention (self, cross), feed-forward on by default (280 modules for the base DiT); timestep modulation,
   embeddings and the text adapter off. Saved as kohya `lora_unet_<path>` keys, which ComfyUI maps onto `diffusion_model.<path>`.
-* `denoiser.py`, `family.py`; the `anima-lora` starter (CLI `python -m next.run anima-lora`, backend starter list) wires three Load
+* `denoiser.py`, `family.py`; the `anima-lora` starter (CLI `python -m run anima-lora`, backend starter list) wires three Load
   Model nodes (DiT, Qwen3, VAE).
 * Not built: block swap (the base DiT is about 4 GB in bf16, so the first runs do not need it; the 40-block file will), the
   self-perceptual loss tap, previews while training (decode works through the codec).
@@ -290,7 +290,7 @@ ComfyUI's and Hugging Face's code on shared random weights (`next/tests/referenc
 ## 8. Risks
 
 * The old `nodes/model/` stays until the swap, so nothing that imports it breaks
-  while `next/families/` is written (plan 90). The risk moves to the swap, where
+  while `families/` is written (plan 90). The risk moves to the swap, where
   imports in `scripts/` and tests are rewritten once.
 * An interface designed from two families will have mistakes a third exposes.
   Mitigation: keep each Kit small, and mark the Anima kit methods that are

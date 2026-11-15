@@ -45,7 +45,7 @@ trap cleanup EXIT
 # `paths` resolves the developer's own ComfyUI.
 echo "== an unconfigured project, in a venv with only the server's packages =="
 mkdir -p "$WORK/project"
-cp -r "$REPO/backend" "$REPO/nodes" "$WORK/project/"
+cp -r "$REPO/backend" "$REPO"/{accept,data,engine,families,graph,lab,nodes,perf} "$WORK/project/"
 cp "$REPO"/*.py "$REPO/run_server.sh" "$WORK/project/"
 
 "$PYTHON" -m venv "$WORK/server"

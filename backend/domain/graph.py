@@ -1,7 +1,7 @@
 """GraphDefinition -- the submitted node graph, as data: the graph document of docs/contracts/graph-json.md.
 
 The document itself (nodes with a ``uid``, data and event edges, settings, views, addons) is defined and parsed
-by ``next/graph/document.py``; this module wraps it with what the server needs: the memory settings read from the
+by ``graph/document.py``; this module wraps it with what the server needs: the memory settings read from the
 graph's ``memory.*`` and ``device.default`` settings, and a decoder for the snapshots of older executions.
 No validation happens here: ``GraphRuntime.validate()`` gives one complete issue list instead of an exception on the
 first problem.
@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 
-from next.graph.document import FORMAT as GRAPH_FORMAT
-from next.graph.document import Edge, GraphDoc, GraphFormatError, NodeSpec, parse
+from graph.document import FORMAT as GRAPH_FORMAT
+from graph.document import Edge, GraphDoc, GraphFormatError, NodeSpec, parse
 
 from .memory_settings import MemorySettings
 

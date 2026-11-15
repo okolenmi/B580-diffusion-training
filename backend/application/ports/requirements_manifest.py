@@ -14,7 +14,7 @@ Measured on this machine, by reading the source rather than by guessing
     server   fastapi, uvicorn, python-multipart, tomli_w, packaging
              (requirements.txt, exactly -- five lines)
     training torch, numpy, pillow, safetensors, tqdm, regex, tokenizers
-             (imported by next/; in NO requirements file,
+             (imported by the trainer; in NO requirements file,
              because they are expected to come from ComfyUI's venv)
 
 Two rows here were missing and are now present, which is the whole

@@ -97,7 +97,7 @@ from backend.tests.support import (
     finish,
     wait_until,
 )
-from next.graph import Node, Port
+from graph import Node, Port
 
 NOW = datetime(2026, 3, 1, 9, 0, 0, tzinfo=UTC)
 

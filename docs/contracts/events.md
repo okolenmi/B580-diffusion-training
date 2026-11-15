@@ -1,6 +1,6 @@
 # Contract: events
 
-Implements plan 10. Python: `next/graph/events.py`.
+Implements plan 10. Python: `graph/events.py`.
 
 ## Plane
 

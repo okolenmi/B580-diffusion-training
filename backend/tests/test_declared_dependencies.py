@@ -37,9 +37,9 @@ either in the manifest or in the allowlist below, with a reason.
   check.
 
 **The one direction between our own packages** (MEM-05 #5): the trainer
-tree (`next/`) is the layer the backend is built on top of, so a module in
+tree (`accept data engine families graph lab nodes perf` and the three root modules) is the layer the backend is built on top of, so a module in
 it importing `backend/` inverts that and is refused here. `backend/`
-importing `next/` is the whole design and stays legal. The rule is a
+importing it is the whole design and stays legal. The rule is a
 directional AST check over the trainer tree -- absolute `backend` imports and
 relative ones whose level resolves up to the top-level `backend` -- and
 it reports the offending file and line, not just a count. A live smoke
@@ -73,9 +73,8 @@ REPO = Path(__file__).resolve().parents[2]
 #: This project's own packages, which are not dependencies of each other in
 #: any way an installer should be told about.
 LOCAL = frozenset({
-    "nodes", "next", "backend", "server", "manager", "runs", "runs_hw_validation",
-    "paths", "run_tests", "config_io", "config_model", "compute_update",
-    "monitor_bus", "frozen_lora_sd",
+    "accept", "console", "data", "engine", "families", "graph", "lab", "nodes", "perf", "run", "starters",
+    "backend", "paths", "run_tests", "monitor_bus",
     # `scripts` is this project's own measurement harness (hw_validate.py and
     # the sweep drivers), and the analysis scripts under "shapes diversity
     # problem 2" import it to reuse the harness rather than reimplement it.
@@ -95,15 +94,19 @@ LOCAL = frozenset({
 #: COMFY_ADDITIONS and pip-install an oracle into the trainer's own
 #: environment, which is the wrong dependency direction. The trainer
 #: reaches its training deps only through the manifest below.
+#: The trainer tree: what the backend is built on top of.
+TRAINER_PREFIXES = tuple(f"{d}/" for d in ("accept", "data", "engine", "families", "graph", "lab", "nodes", "perf")) + (
+    "console.py", "run.py", "starters.py")
+
 EXCLUDED_PREFIXES = (
     "archive",
     "scripts",
     "backend/tests",
-    "next/tests",
+    "tests",
     "frontend",
     # These two run inside ComfyUI's own interpreter, where `comfy` is provided by ComfyUI itself.
-    "next/accept/comfy_forward.py",
-    "next/accept/comfy_render.py",
+    "accept/comfy_forward.py",
+    "accept/comfy_render.py",
 )
 
 #: Imported directly, declared only transitively. Each is present because a
@@ -264,12 +267,12 @@ def _backend_target(node, package_parts: list[str]) -> str | None:
     Two shapes count, because both are ways to actually import it:
     ``import backend.x`` / ``from backend.x import y`` (absolute), and
     a relative import whose level climbs out of the importing file's own
-    package to the repo root. For ``next/engine/runtime/memory.py`` the
-    package is ``next.engine.runtime``, so ``.`` is that package, ``..`` is
-    ``next.engine``, ``...`` is ``next`` and ``....`` is the top level -- only the last reaches
+    package to the repo root. For ``engine/runtime/memory.py`` the
+    package is ``engine.runtime``, so ``.`` is that package, ``..`` is
+    ``engine``, ``...`` is the top level -- only the last reaches
     ``backend``. Walking the package parts up by ``level - 1`` and
     reading the target off whatever is left is what keeps a
-    ``from ...backend`` inside ``next/engine/runtime/`` (which is ``next.backend``,
+    ``from ..backend`` inside ``engine/runtime/`` (which is ``engine.backend``,
     a different thing) from being flagged.
     """
     if isinstance(node, ast.Import):
@@ -288,7 +291,7 @@ def _backend_target(node, package_parts: list[str]) -> str | None:
     return resolved if resolved == "backend" or resolved.startswith("backend.") else None
 
 
-def backend_imports_under(prefix: str) -> list[tuple[str, int]]:
+def backend_imports_under(prefix: str | tuple[str, ...]) -> list[tuple[str, int]]:
     """Every `backend` import reached from a module under ``prefix``.
 
     Returns ``(relative path, line number)`` for each hit, so a failure
@@ -310,10 +313,10 @@ def backend_imports_under(prefix: str) -> list[tuple[str, int]]:
     return hits
 
 
-layering_violations = backend_imports_under("next/")
+layering_violations = backend_imports_under(TRAINER_PREFIXES)
 report(not layering_violations,
        f"no trainer module imports backend ({len(layering_violations)} violation(s)) "
-       f"-- next/ is the layer the backend runs on top of, never the other "
+       f"-- the trainer tree is the layer the backend runs on top of, never the other "
        f"way round (task rule 9 / ADR 0005 'Layering')",
        "reached backend from: "
        + "; ".join(f"{f}:{line}" for f, line in layering_violations[:6]))
@@ -323,12 +326,12 @@ report(not layering_violations,
 # into a green that means nothing.
 node_modules = [
     path for path in REPO.rglob("*.py")
-    if path.relative_to(REPO).as_posix().startswith("next/")
+    if path.relative_to(REPO).as_posix().startswith(TRAINER_PREFIXES)
     and not path.relative_to(REPO).as_posix().startswith(EXCLUDED_PREFIXES)
 ]
 report(len(node_modules) > 100,
        f"and the pass actually walked the trainer tree ({len(node_modules)} modules)",
-       f"only {len(node_modules)} modules found under next/ -- the rule "
+       f"only {len(node_modules)} modules found in the trainer tree -- the rule "
        f"would pass by measuring nothing")
 
 finish()

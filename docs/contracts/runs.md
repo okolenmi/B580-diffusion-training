@@ -1,6 +1,6 @@
 # Contract: runs
 
-Implements plan 30 section 6.1, plan 10 section 6. Python: `next/graph/runtime.py`.
+Implements plan 30 section 6.1, plan 10 section 6. Python: `graph/runtime.py`.
 
 ## Lifecycle
 
@@ -58,7 +58,7 @@ unfinished and every source ran.
 
 ## Observer
 
-`RunObserver` (Protocol in `next/graph/runtime.py`) receives `node_state`, `node_done`,
+`RunObserver` (Protocol in `graph/runtime.py`) receives `node_state`, `node_done`,
 `event` and `run` callbacks. The server turns them into stream frames and domain events.
 A failing observer never aborts a run.
 
@@ -69,7 +69,7 @@ must know the configuration before the child starts, so it reads **declarations,
 a node class lists the params that change its memory peak in `memory_fields` (`BatcherNode`: `batch_size`;
 `InjectAdapterNode`: `rank`, `kind`, `checkpointing`, ...; `LatentCacheNode`: the size policy). The key is the dataset
 (the first `dataset` param in the graph) plus, per declaring node, its class and each declared value: the node's param,
-else the port's default. A declared name must be a port of the class (`next/tests/check_node_surface.py`).
+else the port's default. A declared name must be a port of the class (`tests/check_node_surface.py`).
 
 The fingerprint is unknown, never defaulted, when no node names a dataset, a declared port is fed by another node, a
 required one is not set, or no node declares anything. An unknown fingerprint is not a zero peak: the run is admitted as

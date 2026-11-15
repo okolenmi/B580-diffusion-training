@@ -37,8 +37,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 #: Where the project's tests live. Anything matching these is scanned.
-TEST_GLOBS = ("backend/tests/test_*.py", "nodes/smoke_tests/smoke_test_*.py",
-              "manager/smoke_tests/smoke_test_*.py")
+TEST_GLOBS = ("backend/tests/test_*.py", "tests/check_*.py")
 
 #: Prefixes that mean "this is a test" at module level.
 TEST_PREFIXES = ("test_", "check_")

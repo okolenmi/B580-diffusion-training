@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.domain.graph import GraphDefinition, GraphFormatError, NodeSpec
 from backend.tests.support import gdoc, uid
-from next.graph.document import GraphDoc
+from graph.document import GraphDoc
 from backend.domain.memory_settings import (
     AUTO,
     EffectiveMemory,

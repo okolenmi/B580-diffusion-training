@@ -35,15 +35,15 @@ the manifest the wizard checks is `backend/application/ports/requirements_manife
 | What | Command |
 |---|---|
 | Server and UI (editor at `/graph`, Templates, Datasets, Settings) | `./run_server.sh` (port 8765 by default) |
-| One run from the command line | `python -m next.run sdxl-lora --help`, then see `MANUAL.md` |
+| One run from the command line | `python -m run sdxl-lora --help`, then see `MANUAL.md` |
 | Everything the sandbox can check | `python run_tests.py` |
 
-The command-line trainer and the editor run the same graphs: `python -m next.run ... --dump graph.json` writes the graph a
+The command-line trainer and the editor run the same graphs: `python -m run ... --dump graph.json` writes the graph a
 command would run, and the editor opens it with *Import file*.
 
 ## Tests
 
-`python run_tests.py` runs the Python checks (`next/tests`), the backend tests and the frontend tests with an interpreter
+`python run_tests.py` runs the Python checks (`tests`), the backend tests and the frontend tests with an interpreter
 that has torch. It filters by name part (`python run_tests.py memory`). Checks that need the card are listed in
 `TESTING.md`, not run here.
 
@@ -67,8 +67,11 @@ The app reads and writes inside ComfyUI's layout (`models/checkpoints`, `models/
 `POST /api/v1/settings {"models_dir": "/srv/models"}` moves checkpoints and loras to `<dir>/checkpoints` and
 `<dir>/loras`; an explicit `checkpoints_dir` or `loras_dir` still wins, and `""` clears it.
 
-## ComfyUI is not imported
+## What is shared with ComfyUI
 
-Production code never imports ComfyUI modules. Only the acceptance scripts `accept/comfy_forward.py` and
-`accept/comfy_render.py` do, as separate processes that put ComfyUI first on `sys.path` (and take our own folders off it);
-`scripts/check_imports.py` fails if one of them forgets.
+Only things on disk: the model folders (`models/checkpoints`, `models/loras`) and, if you want, the virtual environment.
+No ComfyUI module is imported by the trainer or the server. The one exception is optional and separate: the parity scripts
+`accept/comfy_forward.py` and `accept/comfy_render.py` run ComfyUI's own code in their own process to compare results with
+ours. Because our top-level folders (`nodes`, `graph`, ...) share names with ComfyUI's modules (`nodes.py`, `utils`, ...),
+those two scripts take the repository root off `sys.path` before putting ComfyUI first; `scripts/check_imports.py` fails if
+one of them forgets, and refuses a ComfyUI import anywhere else.

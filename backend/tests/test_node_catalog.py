@@ -1,6 +1,6 @@
 """Node catalog endpoints over the new node tree (docs/contracts/catalog.md and resolve.md).
 
-Real composition root: the catalog is the document ``next/graph`` builds, and a resolve answers with the
+Real composition root: the catalog is the document ``graph`` builds, and a resolve answers with the
 shape the node declares. Run directly: python backend/tests/test_node_catalog.py
 """
 

@@ -246,7 +246,7 @@ changes.
 ## 5. Ports, groups and the editor (target, plan 30)
 
 * **Group** every node that has more than six widget ports; mark the rarely
-  touched ones `advanced`. `next/tests/check_node_surface.py` fails otherwise, and also when a group holds more
+  touched ones `advanced`. `tests/check_node_surface.py` fails otherwise, and also when a group holds more
   than nine fields or more than nine are visible before anything is opened. A new option goes into a collapsed
   group of its own topic (shapes, batches, padding, speed, diagnostics), not into the first group; `visible_when`
   keeps its dependants hidden until it is on.
@@ -401,7 +401,7 @@ Hard rules:
 ## 13. Testing
 
 * Style: standalone scripts with the repo's `check()` helper (no pytest), under
-  `next/tests`, `backend/tests`, `frontend/tests` (`node --test`).
+  `tests`, `backend/tests`, `frontend/tests` (`node --test`).
 * **Policy for the rework (owner, 2026-10-13):** much is rewritten, so detailed
   per-feature suites are not written. What exists: (1) cheap **structural checks**
   over the whole tree (compile, import boundaries, a declaration lint that loads

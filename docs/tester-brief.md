@@ -20,7 +20,7 @@ finished scenarios are kept. Report `accept/verdict.md` (the table as it is) and
 
 ## Mission 2: a real run through the backend (TESTING 74, 82; about 1 hour)
 1. Start the server as `run_server.sh` does (`python -m backend.cli`, port printed on start). Check `GET /api/v1/health` (or `/api/v1/graphs/executions`).
-2. Get a graph: `python -m next.run sdxl-lora --models M --file F --dataset D --output O --dump scratch/g.json` (use `--help` if an option differs), or
+2. Get a graph: `python -m run sdxl-lora --models M --file F --dataset D --output O --dump scratch/g.json` (use `--help` if an option differs), or
    `POST /api/v1/starters/sdxl-lora`. Set steps to about 150 and resolution 512, batch 2.
 3. `POST /api/v1/graphs/validate`, then `POST /api/v1/graphs/run` with `{"graph": <document>, "mode": "parallel"}`. Poll `GET /api/v1/graphs/executions/{id}` every
    30 s until finished. Report: status, per-node timings, the `memory` block (`demand_source`, `reserved_mb`), and whether the adapter file appeared in the output.
@@ -32,7 +32,7 @@ finished scenarios are kept. Report `accept/verdict.md` (the table as it is) and
    Stop all runs when done (`POST /api/v1/graphs/executions/{id}/stop`).
 
 ## Mission 7: preparation on a tight budget (TESTING 85-87; about 1 hour)
-Repeat Mission 2 steps 3 and 5 with the NF4 graph (batch 1) at budgets 4996, 5716 and 6500, then the native graph at 6302 and 5900. For every run report: status, the first error line if any, and the node lines of the console/log (`allocator peak so far`). Also rerun only the speed suite with more steps for steadier medians: `python -m next.accept run --suites speed --steps 80 ...` (same paths as Mission 1) and report its two FAIL rows.
+Repeat Mission 2 steps 3 and 5 with the NF4 graph (batch 1) at budgets 4996, 5716 and 6500, then the native graph at 6302 and 5900. For every run report: status, the first error line if any, and the node lines of the console/log (`allocator peak so far`). Also rerun only the speed suite with more steps for steadier medians: `python -m accept run --suites speed --steps 80 ...` (same paths as Mission 1) and report its two FAIL rows.
 
 ## Mission 3: the editor in a browser (TESTING 76, 79, 80, 82, 83; about 1.5 hours)
 Mission 3 was run once (2026-11-12) and stopped when the runs died of the budget bug fixed afterwards. Still open: 76 tabs/addons (76.14, 76.15), input-drop list (76.16), LR and number fields (76.17b/c), 79 live curves, reload mid-run and older-run selection, 80, 82 (Parallel refusal text, planned run starting, step times), 83. Re-check that Stop now ends the *running* run when a planned one is selected, and that a new starter graph is fitted entirely in view. Tip for a weaker browser tester: output sockets sit on the card's right edge; scroll the canvas so no card is under the right-hand panel before dragging.
@@ -46,7 +46,7 @@ Same method as mission 3 for `http://127.0.0.1:<port>/datasets` with a folder of
 report the sizes of the smallest and largest tile in "Balanced" (ratio is enough).
 
 ## Mission 5: long experiments (only when the owner asks; hours, token-cheap)
-`TESTING.md` items 61 to 75 are lab runs: queue them with `python -m next.lab run <files>` (see the item), check in once per hour with `tail -n 5`, and report the
+`TESTING.md` items 61 to 75 are lab runs: queue them with `python -m lab run <files>` (see the item), check in once per hour with `tail -n 5`, and report the
 result files the item names. They resume from the last saved state after a power cut: run the same command again.
 
 ## Mission 6: headers of the Anima files (about 15 minutes, almost no tokens)

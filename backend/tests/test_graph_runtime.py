@@ -1,6 +1,6 @@
 """ContractGraphRuntime -- the GraphRuntime port over the node tree.
 
-The validator's issue codes and the runner's own behaviour are the tree's (next/tests); this file checks what the
+The validator's issue codes and the runner's own behaviour are the tree's (tests); this file checks what the
 adapter adds: the port's issue and result types, the run settings the server decided, skipped nodes left out of the
 reported results, node failures as outcomes, the stop between nodes, and the memory release.
 

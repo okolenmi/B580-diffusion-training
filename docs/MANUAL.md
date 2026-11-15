@@ -5,7 +5,7 @@ recipes is a lookup, read only the page you need.
 
 ## How to set things
 
-Everything goes through `python -m next.run sdxl-lora ...`.
+Everything goes through `python -m run sdxl-lora ...`.
 
 - **Common options** have their own flag: `--batch 2 --resolution 768 --steps 200 --rank 16 --max-shapes 16 --graph ...` (`--help` lists them).
 - **Anything else is `--set NAME=VALUE`** (repeat it as often as needed). The name decides what it is:

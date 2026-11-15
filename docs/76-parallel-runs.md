@@ -47,7 +47,7 @@ footprint, state (`loading`, `resident`, `parked` (in pinned host memory), `evic
 * **Admission** counts a shared set once, with its lessees listed in the ledger; a new lessee of a resident set costs its private claim only.
 * **Per-process private parking stays** (`ResidencyManager` levers for private claims, optimizer state, adapters); only shared sets go through the broker.
 
-## Gates for the hardware (`python -m next.perf ipc`, TESTING item 81)
+## Gates for the hardware (`python -m perf ipc`, TESTING item 81)
 | Gate | Question | If it fails |
 |---|---|---|
 | inventory | Which sharing routes does this torch/driver offer (torch IPC for XPU tensors, Level Zero loader, DLPack device kind)? | tells which route to try |

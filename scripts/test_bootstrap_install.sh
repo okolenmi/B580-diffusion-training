@@ -63,7 +63,7 @@ mkdir -p "$WORK/project"
 # Derived from the root rather than listed, because a list is what made it
 # wrong twice: every top-level module the server imports, and nothing that
 # is not importable from the project root.
-cp -r "$REPO/backend" "$REPO/nodes" "$WORK/project/"
+cp -r "$REPO/backend" "$REPO"/{accept,data,engine,families,graph,lab,nodes,perf} "$WORK/project/"
 cp "$REPO"/*.py "$REPO/run_server.sh" "$WORK/project/"
 check "the copy has every top-level module the server imports" \
       "$(for m in monitor_bus.py paths.py; do

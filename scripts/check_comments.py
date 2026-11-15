@@ -1,4 +1,4 @@
-"""Comment-policy report for the rework tree (``next/``).
+"""Comment-policy report for the trainer tree (the packages and root modules listed in ``scripts/check_imports.py``).
 
     python scripts/check_comments.py           # report, exit 0
     python scripts/check_comments.py --strict  # exit 1 when anything is flagged
@@ -16,8 +16,9 @@ import re
 import sys
 from pathlib import Path
 
+from check_imports import tracked_files
+
 ROOT = Path(__file__).resolve().parents[1]
-TREE = ROOT / "next"
 MEASURE = re.compile(r"\b\d+(?:\.\d+)?\s?(?:MB|GB|MiB|GiB|ms|it/s|steps?/s|s/step|%)(?![A-Za-z])")
 HISTORY = re.compile(r"\b(previously|used to|no longer|after the fix|was changed|legacy|formerly|since the rewrite)\b", re.I)
 SHARE_LIMIT = 0.25
@@ -48,7 +49,7 @@ def main(argv: list[str]) -> int:
     strict = "--strict" in argv
     flagged = 0
     heavy: list[str] = []
-    files = sorted(p for p in TREE.rglob("*.py") if "__pycache__" not in p.parts)
+    files = tracked_files()
     for path in files:
         source = path.read_text(encoding="utf8")
         total = sum(1 for line in source.splitlines() if line.strip())

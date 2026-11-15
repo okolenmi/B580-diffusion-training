@@ -1,5 +1,5 @@
 /* datasets/caption_edit.js -- what a bulk caption edit will do to one caption, for the preview line. The server does the
-   real edit (next/data/library.py edit_captions); this mirrors it so the preview matches, and the test pins both. */
+   real edit (data/library.py edit_captions); this mirrors it so the preview matches, and the test pins both. */
 
 export const EDITS = [
   ["prepend", "Add at the start"],

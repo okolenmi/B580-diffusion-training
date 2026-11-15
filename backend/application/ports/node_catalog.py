@@ -1,7 +1,7 @@
 """NodeCatalog port -- what the editor learns about node classes (docs/contracts/catalog.md, resolve.md).
 
 The answers are the contract's JSON documents, passed through as plain dictionaries: the catalog is
-defined once, in ``next/graph/catalog.py``, and the server adds nothing to it. Nothing here runs a node.
+defined once, in ``graph/catalog.py``, and the server adds nothing to it. Nothing here runs a node.
 """
 
 from __future__ import annotations

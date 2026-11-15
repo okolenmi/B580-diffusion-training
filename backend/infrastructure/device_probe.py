@@ -23,7 +23,7 @@ class DeviceProbe:
 
     @classmethod
     def for_device(cls, name: str) -> "DeviceProbe":
-        from next.engine.devices import Accelerator, resolve_device  # noqa: PLC0415 - imports torch
+        from engine.devices import Accelerator, resolve_device  # noqa: PLC0415 - imports torch
 
         return cls(Accelerator(resolve_device(name)))
 

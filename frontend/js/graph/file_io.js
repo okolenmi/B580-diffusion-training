@@ -1,6 +1,6 @@
 /* ---------------------------------------------------------------------------
    graph/file_io.js -- a graph as a file: open one written by the command
-   line (`python -m next.run sdxl-lora ... --dump graph.json`) or by an
+   line (`python -m run sdxl-lora ... --dump graph.json`) or by an
    earlier export, and download the open one. Only format 3 is read; the
    document says why when it is not.
    --------------------------------------------------------------------------- */

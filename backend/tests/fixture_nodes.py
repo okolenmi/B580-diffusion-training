@@ -7,7 +7,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from next.graph import DisplayModule, Group, Node, Port, Series
+from graph import DisplayModule, Group, Node, Port, Series
 
 
 class Handle:

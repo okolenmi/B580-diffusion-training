@@ -7,17 +7,17 @@ The lab answers "where does a step's time go, and how much of it could be recove
 ## Commands
 | Goal | Command | Writes |
 |---|---|---|
-| Profile a few steps of a real run | `python -m next.run sdxl-lora ... --perf DIR` (or `--set perf.dir=DIR`) | `DIR/report.md`, `report.json`, `ceilings.json` |
-| Everything pending in one go | `python -m next.perf hwcheck --out DIR --models D:/models --datasets D:/datasets --dataset my_set --file sd_xl_base_1.0.safetensors --output D:/out --batch 2 --resolution 512 [-- more sdxl-lora options]` | `DIR/README.md`, `bundle.zip` (text only), the pieces below |
-| A set of runs you define | `python -m next.perf matrix scenarios.toml --out DIR [--resume]` | `DIR/summary.md`, one folder per scenario |
-| What changed between two runs | `python -m next.perf compare DIR_A DIR_B` | stdout |
-| One operation at a time | `python -m next.perf bench --out DIR [--suites gemm attention layers ...] [--batch 2 --size 768]` | `DIR/bench.md`, `bench.json` |
-| This machine | `python -m next.perf hardware --out DIR` | `hardware.md`, `hardware.json` |
-| Allocator A/B | `PYTORCH_ALLOC_CONF=expandable_segments:True python -m next.perf allocator` (then `:False`) | one JSON line |
-| Do launches link to operators on this build | `python -m next.perf events --out DIR` | `events.md`, `events.json` (raw event fields, kernel attribution of a few known operations) |
-| Re-render a report | `python -m next.perf report DIR` | `report.md` with the current rules |
+| Profile a few steps of a real run | `python -m run sdxl-lora ... --perf DIR` (or `--set perf.dir=DIR`) | `DIR/report.md`, `report.json`, `ceilings.json` |
+| Everything pending in one go | `python -m perf hwcheck --out DIR --models D:/models --datasets D:/datasets --dataset my_set --file sd_xl_base_1.0.safetensors --output D:/out --batch 2 --resolution 512 [-- more sdxl-lora options]` | `DIR/README.md`, `bundle.zip` (text only), the pieces below |
+| A set of runs you define | `python -m perf matrix scenarios.toml --out DIR [--resume]` | `DIR/summary.md`, one folder per scenario |
+| What changed between two runs | `python -m perf compare DIR_A DIR_B` | stdout |
+| One operation at a time | `python -m perf bench --out DIR [--suites gemm attention layers ...] [--batch 2 --size 768]` | `DIR/bench.md`, `bench.json` |
+| This machine | `python -m perf hardware --out DIR` | `hardware.md`, `hardware.json` |
+| Allocator A/B | `PYTORCH_ALLOC_CONF=expandable_segments:True python -m perf allocator` (then `:False`) | one JSON line |
+| Do launches link to operators on this build | `python -m perf events --out DIR` | `events.md`, `events.json` (raw event fields, kernel attribution of a few known operations) |
+| Re-render a report | `python -m perf report DIR` | `report.md` with the current rules |
 
-`hwcheck` runs every step in its own process (a fresh allocator, nothing held by the coordinator), keeps going when a step fails, and puts the text files in `bundle.zip`: send that file back. It uses 28 steps per scenario with a 10-step warm-up (a graph is captured and timed within the first six steps of a shape, and the window must end before the dataset's next shape appears; a window that meets a new shape, a capture or an eager step in a graph run is marked as unsteady in the report and the matrix summary); thirteen scenarios: native and int8, eager and graph, both int8 gradient paths, measured checkpoint placement, the two bf16 graph attention modes, and the allocator setting both ways (they measure speed and memory; losses are compared in the `speed` suite of `python -m next.accept`). Pass your own `--steps`/`--warmup` to `hwcheck`, not inside the train arguments.
+`hwcheck` runs every step in its own process (a fresh allocator, nothing held by the coordinator), keeps going when a step fails, and puts the text files in `bundle.zip`: send that file back. It uses 28 steps per scenario with a 10-step warm-up (a graph is captured and timed within the first six steps of a shape, and the window must end before the dataset's next shape appears; a window that meets a new shape, a capture or an eager step in a graph run is marked as unsteady in the report and the matrix summary); thirteen scenarios: native and int8, eager and graph, both int8 gradient paths, measured checkpoint placement, the two bf16 graph attention modes, and the allocator setting both ways (they measure speed and memory; losses are compared in the `speed` suite of `python -m accept`). Pass your own `--steps`/`--warmup` to `hwcheck`, not inside the train arguments.
 
 ## Settings
 `perf.dir` (empty = off), `perf.warmup_steps` (8), `perf.steps` (3), `perf.modules` (true), `perf.trace` (false), `perf.provenance` (false; `hwcheck` turns it on), `perf.ceilings` (file shared between runs). Steps before the window run untouched; the next `perf.steps` steps are timed alone (device idle at both ends) and give the step time; the `perf.steps` after them run under the profiler and the module hooks, which gives device and module times and makes those steps several times slower than normal. The report is then built from the profiler's raw events; the console line `perf: report written ... (stage seconds)` and `report_seconds` in `report.json` say what each stage cost. A run needs at least `warmup + 2 * steps` steps.

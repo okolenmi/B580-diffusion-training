@@ -43,7 +43,7 @@ from backend.application.ports.graph_task_gateway import (
     GraphTaskLaunch,
 )
 from backend.domain.graph import GraphDefinition, NodeSpec
-from next.graph.document import GraphDoc
+from graph.document import GraphDoc
 from backend.domain.value_objects import ExecutionId, GraphStatus
 from backend.infrastructure.graph_event_stream import (
     EventKind,

@@ -19,8 +19,8 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from next.families.general.quantize.backends import make_backend, shape_problem  # noqa: E402
-from next.families.general.quantize.ops import Int8LinearFn  # noqa: E402
+from families.general.quantize.backends import make_backend, shape_problem  # noqa: E402
+from families.general.quantize.ops import Int8LinearFn  # noqa: E402
 
 # (name, tokens at 1/8 latent scale divided by this per side, in features, out features, layers like it in the UNet)
 LAYERS = (

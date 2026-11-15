@@ -1,6 +1,6 @@
 # Contract: graph settings
 
-Implements plan 20. Python: `next/graph/settings.py`.
+Implements plan 20. Python: `graph/settings.py`.
 
 `SettingSpec` JSON (also the dialog's row description):
 

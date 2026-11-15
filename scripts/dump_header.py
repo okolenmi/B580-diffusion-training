@@ -16,9 +16,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from next.families.api.detection import Match  # noqa: E402
-from next.families.api.header import read_header  # noqa: E402
-from next.families.registry import matchers  # noqa: E402
+from families.api.detection import Match  # noqa: E402
+from families.api.header import read_header  # noqa: E402
+from families.registry import matchers  # noqa: E402
 
 
 def groups(index, depth: int) -> dict:

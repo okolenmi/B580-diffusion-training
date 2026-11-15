@@ -1,6 +1,6 @@
 # 75. Acceptance lab: tests the owner does not have to read, and instruments that make the next test cheaper
 
-Status: **T1 to T3 built (CPU-tested, not run on the card).** Manual: `docs/manual/acceptance.md`. `next/accept/`, beside `next/perf/`. NF4 frozen weights (docs/72) are built with it as the first user: whether a quantized network is
+Status: **T1 to T3 built (CPU-tested, not run on the card).** Manual: `docs/manual/acceptance.md`. `accept/`, beside `perf/`. NF4 frozen weights (docs/72) are built with it as the first user: whether a quantized network is
 good enough is a question about *regions* of the network, and nothing answered it per region.
 
 ## Why
@@ -11,8 +11,8 @@ decide (does this padding look right, is this caption sane). So: automate the nu
 ## Parts
 | # | Delivers | Check here |
 |---|---|---|
-| T1 | **Regions and probes.** `Regions` (a path -> region/level/role map for the UNet, shared with the perf lab's module table), `ModelProbe` (per region statistics of activations and of gradients while a model runs: rms, max, non-finite count), `QuantizationProbe` (a dense network against its quantized copy on fixed inputs: weight error per layer, output and input-gradient error per region; works for int8 and NF4), `python -m next.accept quant-probe` on a real checkpoint | tiny UNet on a CPU: int8 and NF4 errors by region, a planted bad layer is the worst one |
-| T2 | **Acceptance.** `RunArtifacts` (console log parsed into step records, memory csv, `perf/report.json`, output files), `Check` classes (`StepTimeWithin`, `PeakBelow`, `LossCurveClose`, `LinesPresent`, `AdapterFileHolds`, ...), `Verdict` (pass, fail, look: a check that needs eyes names the file to open), suites that restate the `TESTING.md` items as scenarios plus checks, `python -m next.accept run SUITE` using the perf lab's matrix runner, one `verdict.md` | fake artifacts: each check passes and fails when it should; the runner with a fake command |
+| T1 | **Regions and probes.** `Regions` (a path -> region/level/role map for the UNet, shared with the perf lab's module table), `ModelProbe` (per region statistics of activations and of gradients while a model runs: rms, max, non-finite count), `QuantizationProbe` (a dense network against its quantized copy on fixed inputs: weight error per layer, output and input-gradient error per region; works for int8 and NF4), `python -m accept quant-probe` on a real checkpoint | tiny UNet on a CPU: int8 and NF4 errors by region, a planted bad layer is the worst one |
+| T2 | **Acceptance.** `RunArtifacts` (console log parsed into step records, memory csv, `perf/report.json`, output files), `Check` classes (`StepTimeWithin`, `PeakBelow`, `LossCurveClose`, `LinesPresent`, `AdapterFileHolds`, ...), `Verdict` (pass, fail, look: a check that needs eyes names the file to open), suites that restate the `TESTING.md` items as scenarios plus checks, `python -m accept run SUITE` using the perf lab's matrix runner, one `verdict.md` | fake artifacts: each check passes and fails when it should; the runner with a fake command |
 | T3 | **Visual aids.** `ImageSheet` (a labelled grid of images), a padding sheet (the same samples padded with zeros and mirrored, side by side: decides the pending padding question by eye), a checklist the verdict ends with | a sheet from synthetic images |
 
 ## Rules
@@ -24,7 +24,7 @@ decide (does this padding look right, is this caption sane). So: automate the nu
 
 ## As built
 T1: `regions.py`, `recorder.py` (`BlockRecorder`), `quantization.py` (`QuantizationProbe`, `ProbeResult`), `fixtures.py` (`DenoiserInputs`), `loading.py`, `quant-probe`.
-T2: `artifacts.py` (`RunArtifacts` parses the console format of `next/run.py`; a change to those lines needs the regexes changed with it), `checks.py`, `suites.py` (`SuiteBook`:
+T2: `artifacts.py` (`RunArtifacts` parses the console format of `run.py`; a change to those lines needs the regexes changed with it), `checks.py`, `suites.py` (`SuiteBook`:
 speed, memory, nf4, determinism, allocator; scenario names are the ones `perf.hwcheck` runs, plus `{folder}` in an argument for per-scenario output paths), `verdict.py`
 (`Judge`, `write_verdict`), `acceptance.py` (`Acceptance`), commands `run`, `judge`, `list`. `hwcheck` ends by running `judge` as a command (perf does not import accept).
 T3: `visual.py` (`ImageSheet`, `PaddingSheet`), `padding-sheet`.

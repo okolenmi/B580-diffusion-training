@@ -20,7 +20,7 @@ from backend.application.memory_fingerprint import (
     graph_fingerprint,
 )
 from backend.domain.graph import Edge, GraphDefinition, NodeSpec
-from next.graph.document import GraphDoc
+from graph.document import GraphDoc
 
 _FIELDS = {
     "Trainer": (MemoryField("accumulation", 1), MemoryField("graph", False)),

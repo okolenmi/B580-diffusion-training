@@ -1,7 +1,7 @@
 # 31. Node addons: optional parts attached to a node instead of separate nodes
 
 Status: **owner's idea, 2026-11-03.** The direction (items marked DECIDED) is the owner's; the mechanics below are a proposal
-to refine. Builds on `30-node-ui.md` (groups, pins), `10-events.md` (event plane) and the current `next/graph` (ports, groups,
+to refine. Builds on `30-node-ui.md` (groups, pins), `10-events.md` (event plane) and the current `graph` (ports, groups,
 events). Nothing here is implemented; section 11 says what could be built before the editor exists.
 
 ## 1. What the owner asked for
@@ -30,7 +30,7 @@ events). Nothing here is implemented; section 11 says what could be built before
 
 ## 2. The problem in the present code
 
-`next/nodes` has about 30 node classes. Several exist only to hand a collaborator to one other node:
+`nodes` has about 30 node classes. Several exist only to hand a collaborator to one other node:
 
 | Micro node today | What it is | Wired to |
 |---|---|---|
@@ -270,7 +270,7 @@ new class, not an edit of a 350-line node.
 
 ## 11. Build order
 
-1. **Backend, no editor needed** (`next/graph`): **built** (`addons.py`, `addon_edit.py`, hub scopes in `events.py`; `check_addons`).
+1. **Backend, no editor needed** (`graph`): **built** (`addons.py`, `addon_edit.py`, hub scopes in `events.py`; `check_addons`).
    What the code settled, so the proposals above read as decisions:
    * Names on the wire and in the file: an addon's parameter is the port `a1.start` of its host; a slot's socket is `slot:ladder`
      (`many` sockets are multi ports). Event wires may end at `uid.id` or `graph.id`.

@@ -2,7 +2,7 @@
 
 What this covers (all on fixture nodes; nothing here touches a GPU):
 
-  A  (the declaration rules of display modules are checked in next/tests)
+  A  (the declaration rules of display modules are checked in tests)
   B  the catalog carries port hints and a node's modules
   C  domain: template document shape validation (every problem, with a path)
   D  DescribeGraphModules: fields vs wires, streams, the monitor-wire rule
@@ -42,7 +42,7 @@ from backend.tests.support import (
     uid,
     wait_until,
 )
-from next.graph.document import GraphDoc
+from graph.document import GraphDoc
 
 API = "/api/v1/templates"
 

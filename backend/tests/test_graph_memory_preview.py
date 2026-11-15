@@ -42,7 +42,7 @@ def _ledger() -> MemoryLedger:
 
 
 def _graph(**memory) -> GraphDefinition:
-    from next.graph.document import GraphDoc
+    from graph.document import GraphDoc
 
     return GraphDefinition(GraphDoc(settings={f"memory.{key}": value for key, value in memory.items()}))
 

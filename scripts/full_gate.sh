@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Full regression gate: legacy routes (nodes/manager smoke tests, which
-# include nodes/smoke_tests/gpu/; server/'s six retired with archive/ in
-# M9) + the new backend suite + frontend syntax check.
+# Full regression gate: import rules + the trainer's checks + the backend
+# suite + frontend syntax and unit tests + the document and quality checks.
 #
 #     scripts/full_gate.sh
 #
@@ -21,8 +20,8 @@ cd "$(dirname "$0")/.."
 GATE_PYTHON="$("${PYTHON:-python3}" -c 'import run_tests; print(run_tests.resolve_interpreter())')"
 echo "gate interpreter: $GATE_PYTHON"
 
-echo "== legacy suites: nodes + manager =="
-"$GATE_PYTHON" run_tests.py
+echo "== import rules + trainer checks =="
+"$GATE_PYTHON" run_tests.py imports trainer
 
 echo "== backend suite =="
 "$GATE_PYTHON" backend/tests/run_all.py
@@ -100,15 +99,6 @@ if [ "${COVERAGE_REPORT:-1}" = "1" ]; then
 else
   echo "== branch coverage skipped (COVERAGE_REPORT=0) =="
 fi
-
-# Numbers the docs assert and the code determines. The migration-strategy
-# doc claimed 47 backend endpoints against an actual 50 when this was
-# written, and the review that asked for the check had said 48 -- a
-# number wrong in a design document is read as current and used as a
-# baseline. Nothing renders the docs and no test asserted against them,
-# so nothing else would have noticed (docs 08 Q11).
-echo "== documented numbers =="
-"$GATE_PYTHON" scripts/check_docs.py
 
 if "$GATE_PYTHON" -c 'import ruff' 2>/dev/null; then
   echo "== backend lint (F, E9) =="

@@ -1,4 +1,4 @@
-"""ContractNodeCatalog -- the NodeCatalog port over ``next/graph``.
+"""ContractNodeCatalog -- the NodeCatalog port over ``graph``.
 
 The catalog document is built once and kept until a refresh: it is static for a given set of node
 packages. A resolve is answered per call, with the machine's model folders as the environment so that

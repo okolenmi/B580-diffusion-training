@@ -82,4 +82,4 @@ rms+rope and rms+adaLN (Anima, phase 8). Measured on the B580 with the trainer's
 `base_scale` and, with double quantization, the second-level scales in `base_scale2` and the mean in `base_offset`, so all of it moves with the module.
 Double quantization is off by default: it saves about 0.05 byte per weight (about 100 MB on the UNet) and costs two kernels per layer call in a launch-bound step.
 The trainer's first eager steps verify the fused kernel (it synchronises, so never inside a capture), as for int8. Open: a measured loss comparison against native and int8
-(`python -m next.accept quant-probe` gives the per-region error first; TESTING 29).
+(`python -m accept quant-probe` gives the per-region error first; TESTING 29).

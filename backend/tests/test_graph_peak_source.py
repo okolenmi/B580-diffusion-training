@@ -23,7 +23,7 @@ from backend.infrastructure.graph import tree
 from backend.infrastructure.graph.memory_fields import memory_fields_resolver
 from backend.infrastructure.memory_peak_store import SqlitePeakStore
 from backend.tests.support import check, finish
-from next.graph.document import GraphDoc
+from graph.document import GraphDoc
 
 _KEY = "shapes|PeakTrainer(batch_size=2,rank=64)"
 

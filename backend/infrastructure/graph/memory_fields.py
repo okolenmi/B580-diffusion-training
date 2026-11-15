@@ -14,7 +14,7 @@ def memory_fields_resolver(registry: Any) -> MemoryFieldsResolver:
     Reads class-level declarations off the registry's cached classes: data, not code, so nothing is instantiated.
     A class that declares nothing -- or does not exist -- answers None, which the fingerprint reads as "this node
     contributes nothing" rather than as a default. A declared name that is not a port is a bug in the node
-    (``next/tests`` checks it), and is skipped here rather than failing a start.
+    (``tests`` checks it), and is skipped here rather than failing a start.
     """
 
     def resolve(class_name: str) -> tuple[MemoryField, ...] | None:

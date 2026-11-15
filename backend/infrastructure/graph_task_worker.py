@@ -307,7 +307,7 @@ def _engine_high_water_mb() -> float:
     """What the engine saw before it reset its peak counters (it resets them after every step, so a sample of the
     counters alone misses the preparation phase and whatever peaked between two samples)."""
     try:
-        from next.engine.devices import high_water_mb
+        from engine.devices import high_water_mb
     except Exception:  # noqa: BLE001 - a child without the engine on its path reports the counters only
         return 0.0
     return high_water_mb()
@@ -476,7 +476,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Before anything imports torch: SYCL reads these at its own runtime
     # init, so setting them even slightly late is too late.
-    from next.engine.xpu_env import set_perf_env
+    from engine.xpu_env import set_perf_env
 
     set_perf_env()
 

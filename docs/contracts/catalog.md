@@ -1,6 +1,6 @@
 # Contract: catalog
 
-Implements plans 30 section 13, 41 section 7, 20, 40. Python: `next/graph/catalog.py`.
+Implements plans 30 section 13, 41 section 7, 20, 40. Python: `graph/catalog.py`.
 `GET /api/v1/catalog` (`?refresh=true` scans the node packages again) returns:
 
 ```jsonc

@@ -1,6 +1,6 @@
 # 90. Build plan: a clean parallel tree instead of a migration
 
-Status: **in progress. Phases 0 to 5 are built in `next/` (see the step table in `00-index.md`); 6 to 9 are open. Replaces the earlier `90-migration.md`.**
+Status: **in progress. Phases 0 to 8 are built and the swap of phase 9 is done (see the step table in `00-index.md`); the owner's hardware list is open. Replaces the earlier `90-migration.md`.**
 
 ## 0. Owner decision (2026-10-13, 18:21 Kyiv) - DECIDED direction
 
@@ -25,7 +25,7 @@ is superseded by this file (each plan carries a note pointing here).
 
 1. The old app does **not** need to keep working during the build. Consequence: no
    v2 routes beside v1; `backend/` is edited **in place** at the point it switches
-   to `next/graph` (phase 6). Until then the old app simply stays as it is in git.
+   to `graph` (phase 6). Until then the old app simply stays as it is in git.
 2. A new dataset format is fine; old datasets will be regenerated from real images.
 3. Math spot checks: dropped as a separate item. Tests are **classified by region**
    (graph core, families, data, engine, editor, backend), each region with its own
@@ -64,7 +64,8 @@ settled in `00-index.md` (glossary) before building.
 repo/
   nodes/ manager/ ...        old code: stays untouched and runnable until the swap;
                              read-only reference afterwards (moved to archive/)
-  next/                      NEW tree; inside it only relative imports
+  (at the swap the NEW tree below moved to the repository root; "next/" below is how it was built)
+  next/                      NEW tree
     graph/                   node base, ports, groups, events, settings, validator,
                              runtime, graph JSON, catalog serializer, headless runner
     families/                api / general / sdxl / anima (plan 40)
@@ -74,10 +75,10 @@ repo/
     tests/                   the one big test + a few pure self-checks
 ```
 
-* **Relative imports only** inside `next/`, so the swap is `git mv next/* .` with no
-  rewriting. (`next` is a working name; the swap removes it.)
+* The tree was built with relative imports only, and the swap turned imports between top-level packages into absolute ones
+  (relative stays inside a package); `scripts/check_imports.py` holds the rule.
 * The old app keeps working while this is built (decision B1, open question 1).
-  `next/` is exercised by its own **headless runner** (`python -m next.graph.run
+  `next/` is exercised by its own **headless runner** (`python -m graph.run
   graph.json`: validate, run, print events) and, from phase 6, through new routes.
 * The import-boundary rules of plan 80, section 2.1, apply inside `next/` from the
   first file; the check script is the first thing written.
@@ -87,8 +88,8 @@ repo/
 | Region | Strategy | Why |
 |---|---|---|
 | `nodes/` | **parallel rewrite** in `next/` | owner's request; 41% comments; structure issues from the audits |
-| `manager/` (ingest, loader, 2.9k lines) | rewritten into `next/data/` | the dataset design changes (per-VAE cache, prompt table, events) so it is not a move |
-| `backend/` (26k lines, layered, tested) | **keep and extend in place**; at phase 6 its graph layer switches to `next/graph` (no v2 routes, decision 0.1-1) | its layering is the best-structured part of the repo; the graph validator and runtime logic move into `next/graph` because they are node-contract code |
+| `manager/` (ingest, loader, 2.9k lines) | rewritten into `data/` | the dataset design changes (per-VAE cache, prompt table, events) so it is not a move |
+| `backend/` (26k lines, layered, tested) | **keep and extend in place**; at phase 6 its graph layer switches to `graph` (no v2 routes, decision 0.1-1) | its layering is the best-structured part of the repo; the graph validator and runtime logic move into `graph` because they are node-contract code |
 | `frontend/js` (10k lines) | **editor modules rewritten in a parallel folder** (`frontend/js/graph/`, page `graph.html`); the rest untouched | plan 30 changes the render model (incremental), so it is not a patch; other pages are unaffected |
 | `docs/` | rewritten at the swap from the plans; old design docs move to `archive/` | |
 
@@ -140,15 +141,15 @@ Each phase ends with something checkable. "Check" lists what runs **here**.
 | # | Phase | Delivers | Check here |
 |---|---|---|---|
 | 0 | Contracts and rules | `contracts/` (catalog JSON, graph JSON, event wire format, settings, resolve API), glossary, import-check script, comment-lint, empty `next/` skeleton | scripts run on the skeleton |
-| 1 | `next/graph` | node base (`Node`, `Port`, `Group`, ports, modules), settings registry, events (`EventType`, `EventHub`), validator (data + event edges, dynamic ports, dangling wires), runtime (topological, completion, cancel, reactive node retention), graph JSON with `uid`, catalog serializer, headless runner | self-check script with toy nodes: validation errors, event barrier, dangling wires, settings resolution (pure Python, runs here) |
+| 1 | `graph` | node base (`Node`, `Port`, `Group`, ports, modules), settings registry, events (`EventType`, `EventHub`), validator (data + event edges, dynamic ports, dangling wires), runtime (topological, completion, cancel, reactive node retention), graph JSON with `uid`, catalog serializer, headless runner | self-check script with toy nodes: validation errors, event barrier, dangling wires, settings resolution (pure Python, runs here) |
 | 2 | Families API and detection | `families/api`, `general/safetensors_io` (header reader with size cap), SDXL fingerprint, registry, `Load Model` node with resolve (dynamic outputs), scopes and `ProjectLayout` scopes | synthetic safetensors headers for each file kind, including ambiguous and unknown; no weights needed |
 | 3 | General and SDXL (torch) | `general/{clip,vae,adapters,schedules}`, `sdxl/{denoiser,conditioning,latents,objective,adapters,memory}`, conditioning cache, `Conditioner`, adapter plan and injection | with torch on CPU: tiny random SDXL-shaped model, forward, LoRA inject/save/load round trip |
-| 4 | Data | `next/data`: library, per-VAE latent cache, prompt table and stages, bucketer, batcher with epoch barrier and `PromptsChanged`, prefetch, `Noiser`, ingest; dataset nodes | synthetic images and a tiny random VAE: epochs, event order, tag swap |
+| 4 | Data | `data`: library, per-VAE latent cache, prompt table and stages, bucketer, batcher with epoch barrier and `PromptsChanged`, prefetch, `Noiser`, ingest; dataset nodes | synthetic images and a tiny random VAE: epochs, event order, tag swap |
 | 5 | Engine and training nodes | `engine/step`, `engine/runtime` (residency, memory admission, block swap, capture, profiler), `ObjectiveNode`, optimizers, savers, probes, the single trainer | a 5-step run of a tiny model on CPU through the headless runner |
-| 6 | Server and editor (parallel track from phase 1) | `backend/` edited in place to use `next/graph` (catalog, validate, resolve, run, library; decision 0.1-1), settings dialog, `graph2` editor: incremental render, groups, collapse with pins, node states, multi ports, dynamic ports, event wires | `node --test` for pure editor logic; backend tests for the adapter; visual smoke script |
+| 6 | Server and editor (parallel track from phase 1) | `backend/` edited in place to use `graph` (catalog, validate, resolve, run, library; decision 0.1-1), settings dialog, `graph2` editor: incremental render, groups, collapse with pins, node states, multi ports, dynamic ports, event wires | `node --test` for pure editor logic; backend tests for the adapter; visual smoke script |
 | 7 | Views and starters | `views` in the graph, monitor/page boards, starters (SDXL LoRA, Anima LoRA), per-run metrics | starters validate and run headless |
 | 8 | Anima family (built; the owner's hardware checks and block swap remain) | fingerprint, DiT and text adapter, Qwen3 encoder, tokenizers, conditioning kit, Wan VAE for images, flow-matching objective, adapter layout and kohya keys, `anima-lora` starter | tiny random Anima-shaped weights on CPU through the whole starter graph (`check_anima_pipeline`); equivalence against ComfyUI/Hugging Face code in `tests/reference/`; real run is the owner's |
-| P | Performance lab (parallel track, `next/perf/`; plan in `74-perf-lab.md`) | per-run reports that rate every piece of a step against what the card can do, a scenario matrix, micro-benchmarks, a one-command hardware bundle | CPU runs of a tiny model; unit tests of categorising, rating, rules, comparison |
+| P | Performance lab (parallel track, `perf/`; plan in `74-perf-lab.md`) | per-run reports that rate every piece of a step against what the card can do, a scenario matrix, micro-benchmarks, a one-command hardware bundle | CPU runs of a tiny model; unit tests of categorising, rating, rules, comparison |
 | 9 | Acceptance and swap | the big test (section 6); old trees to `archive/`; `next/*` promoted; docs rewritten | the big test; owner's B580 run |
 
 Dependencies: 1 -> 2, 3, 4, 5, 6. 2 -> 3. 3 -> 4 (VAE) and 5. 4 -> 5. 6 starts after
@@ -171,7 +172,7 @@ in phase 1; the plans give the substance, the contracts give the exact JSON:
 
 ## 6. Verification: the one big test, and what this sandbox can show
 
-* **Big test** (phase 9, `next/tests/acceptance`): load each **starter** graph,
+* **Big test** (phase 9, `tests/acceptance`): load each **starter** graph,
   validate, run end to end on the synthetic fixture (a few images, a tiny random
   model and VAE, 5 to 10 steps), assert it finishes, writes a loadable adapter, and
   that events fired in order (epoch barrier, saver on `StepFinished`). Then the same
@@ -198,7 +199,7 @@ Clashes with ComfyUI's top-level module names (`nodes.py`, `utils`, ...) are sol
 ComfyUI modules; the only scripts that do (`accept/comfy_*.py`, run as separate processes) remove the repo root and their
 own folder from `sys.path` before putting ComfyUI first, and `scripts/check_imports.py` fails when one of them does not.
 
-Gate: the big test green (`python -m next.tests.run_all`), and the owner has run both starters on the B580 (done 2026-11-14).
+Gate: the big test green (`python -m tests.run_all`), and the owner has run both starters on the B580 (done 2026-11-14).
 
 Stages, each ending with every check green and a commit (the tree stays runnable throughout):
 
@@ -249,7 +250,7 @@ Rollback: git.
 |---|---|---|
 | B1 | Old app during the build | DECIDED: need not keep working; backend edited in place in phase 6 |
 | B2 | New tree location | `next/` with relative imports; promoted at the swap |
-| B3 | Backend | Extend in place; graph core in `next/graph` |
+| B3 | Backend | Extend in place; graph core in `graph` |
 | B4 | Editor | Parallel `graph2` folder and page |
 | B5 | Datasets | New format directly; old datasets are re-ingested or discarded |
 | B6 | Testing | One acceptance test, cheap structural checks, optional math spot checks |

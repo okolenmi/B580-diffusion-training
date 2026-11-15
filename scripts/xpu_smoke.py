@@ -25,16 +25,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from next.engine.xpu_env import set_perf_env  # noqa: E402
+from engine.xpu_env import set_perf_env  # noqa: E402
 
 set_perf_env()
 
 import torch  # noqa: E402
 
-from next.families.api.adapters import TrainableSelection  # noqa: E402
-from next.families.api.library import ModelLibrary  # noqa: E402
-from next.families.api.parts import make_part  # noqa: E402
-from next.families.registry import detect_file, get_family  # noqa: E402
+from families.api.adapters import TrainableSelection  # noqa: E402
+from families.api.library import ModelLibrary  # noqa: E402
+from families.api.parts import make_part  # noqa: E402
+from families.registry import detect_file, get_family  # noqa: E402
 
 RESULTS: list[dict] = []
 
@@ -63,7 +63,7 @@ def step(name):
 
 class Device:
     def __init__(self, name: str):
-        from next.engine.devices import Accelerator
+        from engine.devices import Accelerator
 
         self.name = name
         self.module = getattr(torch, name, None) if name != "cpu" else None
@@ -138,7 +138,7 @@ def detect(args) -> dict | None:
 
 @step("tokenizer")
 def tokenizer() -> None:
-    from next.families.general.clip.tokenizer import CLIPTokenizer, default_vocabulary_dir
+    from families.general.clip.tokenizer import CLIPTokenizer, default_vocabulary_dir
 
     record("INFO", "vocabulary folder", str(default_vocabulary_dir()))
     tok = CLIPTokenizer()
@@ -202,7 +202,7 @@ def vae(parts, images, dev: Device, resolution: int):
 
 @step("unet forward and backward with LoRA")
 def unet(parts, cond, dev: Device, resolution: int, rank: int, checkpoint: bool, batch: int):
-    from next.families.sdxl.objective import SDXLObjective
+    from families.sdxl.objective import SDXLObjective
 
     family = get_family("sdxl")
     dev.free()
@@ -223,7 +223,7 @@ def unet(parts, cond, dev: Device, resolution: int, rank: int, checkpoint: bool,
     check(out.shape == x_t.shape and bool(torch.isfinite(out.float()).all()), "forward output finite, input-shaped")
     adapted = family.inject_denoiser(denoiser, TrainableSelection(), rank=rank, alpha=float(rank))
     if checkpoint:
-        from next.engine.runtime.checkpointing import ActivationCheckpointer
+        from engine.runtime.checkpointing import ActivationCheckpointer
 
         denoiser.set_checkpointer(ActivationCheckpointer(), 1.0)
     params = adapted.trainable_parameters()
@@ -263,14 +263,14 @@ def unet(parts, cond, dev: Device, resolution: int, rank: int, checkpoint: bool,
 
 @step("dataset chain on real VAE")
 def dataset_chain(codec, images, dev: Device, resolution: int) -> None:
-    from next.data.batcher import Batcher
-    from next.data.images import SizePolicy
-    from next.data.latent_cache import LatentCache
-    from next.data.library import ImageLibrary
-    from next.data.noise import Noiser
-    from next.data.prompts import PromptTable, TagSwap
-    from next.families.sdxl.latents import LATENTS
-    from next.families.sdxl.objective import SDXLObjective
+    from data.batcher import Batcher
+    from data.images import SizePolicy
+    from data.latent_cache import LatentCache
+    from data.library import ImageLibrary
+    from data.noise import Noiser
+    from data.prompts import PromptTable, TagSwap
+    from families.sdxl.latents import LATENTS
+    from families.sdxl.objective import SDXLObjective
 
     with tempfile.TemporaryDirectory() as raw:
         tmp = Path(raw)

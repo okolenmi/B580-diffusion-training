@@ -1,6 +1,6 @@
 # 71. Device memory: sources, levers, and what is still open
 
-The monitor's data is `ResidencyManager.breakdown()` (reported as the `memory` stream, and printed by `python -m next.run`):
+The monitor's data is `ResidencyManager.breakdown()` (reported as the `memory` stream, and printed by `python -m run`):
 each resident (model, optimizer state, encoders), other live tensors, the step's activation peak, free blocks the
 allocator keeps, and what the driver holds outside the allocator. `device_used` (from the driver) is the number that
 predicts out-of-memory; the allocator's own peak understates it.
@@ -53,7 +53,7 @@ primitive-cache sizing and thrash detection (old `xpu_env`, `cache_thrash`).
   across runs; fewer distinct shapes (bucketing with a multiple above 1) is the only lever. A short test run on a
   mixed-aspect dataset is therefore dominated by first sightings and looks much slower than a long run.
 * The SYCL variables in `engine/xpu_env.py` keep the kernel cache in memory and avoid stalls; the entry points
-  (`next/run.py`, `scripts/xpu_smoke.py`) set them before anything touches the device.
+  (`run.py`, `scripts/xpu_smoke.py`) set them before anything touches the device.
 * "1024" means the **short side** is 1024 px. The long side keeps the aspect ratio, up to `max_aspect` times the base
   (2048 by default) and longer images are split into several crops. A 2:3 photo is therefore 1024x1536, about 1.5 times
   the pixels of a square 1024, and its activations are larger by the same factor. Lower the base to lower memory.

@@ -1,4 +1,4 @@
-"""NextStarters -- the GraphStarters port over ``next/starters``.
+"""NextStarters -- the GraphStarters port over ``starters``.
 
 The form of a starter is the few choices a person makes before the graph exists (what to train on, how long,
 how fast); every other option stays a parameter of a node, edited on the canvas where it has its own help.

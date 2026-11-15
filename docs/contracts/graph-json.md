@@ -1,7 +1,7 @@
 # Contract: graph document
 
 Implements plan 60 section 4, plan 10 section 4, plan 20 section 6. No earlier
-format is read (plan 90 section 0). Python: `next/graph/document.py`.
+format is read (plan 90 section 0). Python: `graph/document.py`.
 
 ```jsonc
 {

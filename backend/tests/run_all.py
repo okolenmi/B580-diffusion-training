@@ -50,7 +50,7 @@ HERE = Path(__file__).resolve().parent
 #: find ComfyUI directory" during import, which kills the file rather than
 #: failing a check -- in rounds 3 and 4. Both resolve a ComfyUI path at
 #: import time, so a regression in the fixture takes them out at once.
-HERMETICITY_PROBES = ("test_config.py", "test_settings.py")
+HERMETICITY_PROBES = ("test_settings.py", "test_installer.py")
 
 #: A COMFY_DIR that cannot exist. See hermeticity_selfcheck().
 HERMETICITY_SENTINEL = "/nonexistent/hermeticity-probe/comfy"

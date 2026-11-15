@@ -1,4 +1,4 @@
-"""Image libraries on disk, through ``next.data`` (the one code that reads and writes them).
+"""Image libraries on disk, through ``data`` (the one code that reads and writes them).
 
 Every call opens the library it needs and closes it again, so request threads and the import thread never
 share a SQLite connection. Thumbnails are made on first request and kept beside the library.

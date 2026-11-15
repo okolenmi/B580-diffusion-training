@@ -1,0 +1,227 @@
+"""Instruments and automatic verdicts for the hardware runs.
+
+    python -m accept quant-probe --models D:/models --file sd_xl_base_1.0.safetensors --precision nf4 int8 --out probe
+    python -m accept run --suites speed nf4 --out accept --models D:/models --datasets D:/datasets --dataset my_set --file sd_xl_base_1.0.safetensors --output D:/out --batch 2 --resolution 512
+    python -m accept judge perf-bundle/matrix speed        # a bundle that came back from ``python -m perf hwcheck``
+    python -m accept list
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+import torch
+
+from engine.devices import resolve_device
+from families.general.quantize.backends import make_backend
+from families.general.quantize.int8 import Int8Quantizer
+from families.general.quantize.nf4 import Nf4Quantizer
+from families.general.quantize.nf4_backends import make_nf4_backend
+from .fixtures import DenoiserInputs
+from perf.hwcheck import TrainArguments
+from .acceptance import Acceptance, choose
+from .loading import load_denoiser
+from .quantization import QuantizationProbe
+from .suites import SuiteBook
+from .verdict import Judge, write_verdict
+
+
+def quantizer_for(args, device):
+    if args.precision_now == "int8":
+        return Int8Quantizer(make_backend(args.backend, device), args.min_params, args.int8_grad)
+    return Nf4Quantizer(make_nf4_backend(args.backend, device), args.min_params, args.double_quant)
+
+
+def quant_probe(args) -> int:
+    device = resolve_device(args.device)
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    for precision in args.precision:
+        args.precision_now = precision
+        print(f"{precision}: loading {args.file} ...", flush=True)
+        denoiser = load_denoiser(args.models, args.file, str(device))
+        inputs = DenoiserInputs(resolution=args.resolution, timesteps=args.timesteps, device=device, dtype=torch.bfloat16)
+        quantizer = quantizer_for(args, device)
+        result = QuantizationProbe(limit_mb=args.limit_mb).run(denoiser.module(), quantizer, lambda _, ready=inputs, model=denoiser: ready.run(model), precision=precision)
+        (out / f"quant-{precision}.md").write_text(result.markdown(), encoding="utf8")
+        (out / f"quant-{precision}.json").write_text(json.dumps(result.to_json(), indent=1), encoding="utf8")
+        print(result.markdown(), flush=True)
+        del denoiser
+        getattr(torch, str(device).split(":")[0]).empty_cache()
+    return 0
+
+
+def numerics(args) -> int:
+    from .numerics import Context, NumericsRunner, all_checks, counts, write
+
+    device = torch.device(resolve_device(args.device))
+    checks = [c for c in all_checks() if not args.only or c.name in args.only]
+    if args.tiny:
+        print("tiny stand-in model: the model checks run on a small random UNet, not on --file", flush=True)
+    ctx = Context(device, args.models, args.file, args.lora, args.resolution, args.tiny, args.seed, args.memory_mb)
+    findings = NumericsRunner(checks, ctx, cleanup=ctx.release).run()
+    header = f"device {device}, {'tiny stand-in model' if args.tiny else args.file}{', adapter ' + args.lora if args.lora else ''}, resolution {args.resolution}"
+    path = write(findings, args.out, header)
+    print(f"\n{counts(findings)}\nreport: {path}")
+    return 1 if counts(findings)["FAIL"] else 0
+
+
+def prompts(args) -> int:
+    from data.store import DatasetStore
+    from .prompts import PromptAudit
+
+    library = DatasetStore(args.datasets).library(args.dataset)
+    try:
+        images = library.snapshot(args.set)
+    finally:
+        library.close()
+    text = PromptAudit(images, args.channel, tag_swap=args.tag_swap, epochs=args.epochs, seed=args.seed).markdown()
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text, encoding="utf8")
+    print(text)
+    return 0
+
+
+def lora_map(args) -> int:
+    from .lora_map import lora_map_report
+
+    checkpoint = None
+    if args.file:
+        from .loading import checkpoint_path
+        checkpoint = checkpoint_path(args.models, args.file)
+    text = lora_map_report(args.lora, checkpoint)
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text, encoding="utf8")
+    print(text)
+    return 0
+
+
+def save_probe(args) -> int:
+    from .save_probe import SaveFidelity
+
+    device = str(resolve_device(args.device))
+    text = SaveFidelity(args.probe, args.models, args.file, device, args.lora, args.comfy, args.comfy_python, args.comfy_dtype, args.comfy_device).run()
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(text, encoding="utf8")
+    print(text)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="python -m accept", allow_abbrev=False)
+    sub = parser.add_subparsers(dest="command", required=True)
+    probe = sub.add_parser("quant-probe", help="dense against quantized copy of a checkpoint's UNet: weight, output and gradient error by region")
+    probe.add_argument("--models", required=True)
+    probe.add_argument("--file", required=True, help="checkpoint relative to MODELS/checkpoints (or MODELS)")
+    probe.add_argument("--precision", nargs="+", default=["nf4", "int8"], choices=("nf4", "int8"))
+    probe.add_argument("--device", default="xpu")
+    probe.add_argument("--backend", default="auto", choices=("auto", "xpu_kernels", "torch"))
+    probe.add_argument("--resolution", type=int, default=512)
+    probe.add_argument("--timesteps", type=int, nargs="+", default=[100, 500, 900])
+    probe.add_argument("--min-params", type=int, default=1 << 20)
+    probe.add_argument("--int8-grad", default="dense", choices=("dense", "int8"))
+    probe.add_argument("--double-quant", action="store_true")
+    probe.add_argument("--limit-mb", type=float, default=2048.0, help="host memory for the recorded block outputs and gradients")
+    probe.add_argument("--out", default="accept-quant-probe")
+    num = sub.add_parser("numerics", help="bit-exactness and rounding checks of the device, the moves a run makes and the adapter path; one report file")
+    num.add_argument("--device", default="xpu")
+    num.add_argument("--models", help="models folder (the model checks load --file from it)")
+    num.add_argument("--file", help="checkpoint relative to MODELS/checkpoints (or MODELS)")
+    num.add_argument("--lora", help="a trained adapter file: its values are inspected and its merge loss measured on the real weights")
+    num.add_argument("--tiny", action="store_true", help="use a small random UNet instead of --file (no checkpoint needed)")
+    num.add_argument("--resolution", type=int, default=256, help="pixels of the model checks' input; the numerics do not depend on it much, the memory does")
+    num.add_argument("--only", nargs="*", help="run only these checks (see 'list')")
+    num.add_argument("--memory-mb", type=int, default=1024, help="size of the device memory pattern test")
+    num.add_argument("--seed", type=int, default=0)
+    num.add_argument("--out", default="numerics")
+    pr = sub.add_parser("prompts", help="what text every image trains with: stored captions by channel, empty ones, and the prompts per epoch")
+    pr.add_argument("--datasets", required=True)
+    pr.add_argument("--dataset", required=True)
+    pr.add_argument("--set", default="all")
+    pr.add_argument("--channel", default="text", choices=("text", "tags", "desc"))
+    pr.add_argument("--epochs", type=int, default=3)
+    pr.add_argument("--tag-swap", action="store_true", help="show the prompts with Tag Swap (the --tag-swap option of the trainer)")
+    pr.add_argument("--seed", type=int, default=0)
+    pr.add_argument("--out", default="prompts.md")
+    lm = sub.add_parser("lora-map", help="where trained adapters changed the network (by part, kind of layer and block), and how two adapters agree; reads files only, runs on the CPU")
+    lm.add_argument("--lora", nargs="+", required=True, help="one or more adapter files; every pair is compared")
+    lm.add_argument("--models", help="with --file: sizes of the updates relative to the checkpoint's weights")
+    lm.add_argument("--file")
+    lm.add_argument("--out", default="lora-map.md")
+    sp = sub.add_parser("save-probe", help="a training run's forward just before a save, against this project's model and against ComfyUI, both loaded from the saved file")
+    sp.add_argument("--probe", required=True, help="the <adapter>.probe.safetensors a run with --save-probe wrote")
+    sp.add_argument("--models", required=True)
+    sp.add_argument("--file", required=True, help="the checkpoint the adapter was trained on")
+    sp.add_argument("--lora", help="the adapter file (default: the probe's name without .probe)")
+    sp.add_argument("--device", default="xpu")
+    sp.add_argument("--comfy", help="the ComfyUI folder: also run ComfyUI's loader and UNet on the same inputs")
+    sp.add_argument("--comfy-python", help="the Python that runs ComfyUI (default: this one)")
+    sp.add_argument("--comfy-dtype", default="auto", choices=("auto", "bf16", "fp16", "fp32"), help="ComfyUI's UNet precision (auto: its own choice)")
+    sp.add_argument("--comfy-device", default="auto", choices=("auto", "cpu"))
+    sp.add_argument("--out", default="save-fidelity.md")
+    pad = sub.add_parser("padding-sheet", help="a picture of what zero and mirror padding put around samples of a folder of images")
+    pad.add_argument("--images", required=True)
+    pad.add_argument("--canvas", default="64x64", help="canvas HxW in the units shown (pixels here, latent size times 8 for a real bucket)")
+    pad.add_argument("--count", type=int, default=4)
+    pad.add_argument("--sigma", type=float, default=0.6)
+    pad.add_argument("--seed", type=int, default=0)
+    pad.add_argument("--out", default="padding-sheet.png")
+    run = sub.add_parser("run", allow_abbrev=False, help="run suites (each scenario in its own process) and write verdict.md; options it does not know go to the trainer")
+    run.add_argument("--suites", nargs="*", help="which suites (see 'list'); default: all")
+    run.add_argument("--out", default="accept-run")
+    run.add_argument("--steps", type=int, default=28)
+    run.add_argument("--warmup", type=int, default=20)
+    TrainArguments.add_to(run)
+    judge = sub.add_parser("judge", help="judge folders that already exist (a hwcheck bundle's matrix/ folder, or an earlier run) without running anything")
+    judge.add_argument("root", help="the folder holding one subfolder per scenario")
+    judge.add_argument("suites", nargs="*")
+    judge.add_argument("--out", default="accept-verdict")
+    judge.add_argument("--warmup", type=int, default=20)
+    sub.add_parser("list", help="the suites and their checks")
+    args, rest = TrainArguments.parse(parser, argv)
+    if rest and args.command != "run":
+        parser.error(f"unrecognized arguments: {' '.join(rest)}")
+    if args.command == "list":
+        for suite in SuiteBook().all().values():
+            print(f"{suite.name}  (TESTING {suite.item}): {suite.title}\n  scenarios: {', '.join(suite.scenario_names())}")
+            print("".join(f"  - {c.name}\n" for c in suite.checks))
+        from .numerics import all_checks
+        print("numerics (python -m accept numerics):\n" + "".join(f"  - {c.name}: {c.purpose}\n" for c in all_checks()))
+        return 0
+    if args.command == "numerics":
+        return numerics(args)
+    if args.command == "lora-map":
+        return lora_map(args)
+    if args.command == "prompts":
+        return prompts(args)
+    if args.command == "save-probe":
+        return save_probe(args)
+    if args.command == "padding-sheet":
+        from PIL import Image
+
+        from .visual import PaddingSheet
+        files = sorted(p for p in Path(args.images).iterdir() if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".webp"))[: args.count]
+        if not files:
+            raise SystemExit(f"no images in {args.images}")
+        height, width = (int(v) for v in args.canvas.lower().split("x"))
+        print(PaddingSheet((height, width), args.sigma, args.seed).sheet([Image.open(f) for f in files]).save(args.out))
+        return 0
+    if args.command == "judge":
+        book = SuiteBook(args.warmup)
+        verdicts = [Judge(args.root).judge(s) for s in choose(args.suites, book)]
+        print(write_verdict(verdicts, args.out))
+        return 0
+    if args.command == "run":
+        book = SuiteBook(args.warmup, str(Path(args.out) / "ceilings.json"))
+        print(Acceptance(choose(args.suites, book), Path(args.out), TrainArguments.from_args(args, rest), steps=args.steps).run())
+        return 0
+    return quant_probe(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

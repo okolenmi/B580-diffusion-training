@@ -150,8 +150,8 @@ check(bootstrap.server_url(8766, "::1") == "http://[::1]:8766/setup",
 print("\n-- what it re-execs --")
 
 argv = bootstrap.next_argv(["--port", "9000"])
-check(argv[0].endswith("run_server.sh") and Path(argv[0]).exists(),
-      f"it re-execs run_server.sh, so .env and argument precedence are "
+check(argv[0].endswith("run_server_linux.sh") and Path(argv[0]).exists(),
+      f"it re-execs run_server_linux.sh, so .env and argument precedence are "
       f"applied once and in one place ({argv[0]})")
 check(argv[1:] == ["--port", "9000"],
       f"and passes the user's own arguments through untouched ({argv[1:]})")
@@ -278,7 +278,7 @@ check("ensurepip" in detail or "by hand" in detail,
 check("venv" not in detail.lower() or "temporary" not in detail.lower(),
       "and it did not quietly install somewhere else instead")
 
-# On Windows the restart goes through run_server.bat: a .sh cannot be started there.
+# On Windows the restart goes through run_server_windows.bat: a .sh cannot be started there.
 import os as _os
 import types as _types
 
@@ -288,8 +288,8 @@ try:
     windows_argv = bootstrap.next_argv(["--port", "9000"])
 finally:
     bootstrap.os = _real_os  # type: ignore[assignment]
-check(Path(windows_argv[0]).name == "run_server.bat" and windows_argv[1:] == ["--port", "9000"],
-      f"on Windows the restart is run_server.bat with the same arguments ({windows_argv})")
-check((HERE.parents[1] / "run_server.bat").is_file(), "run_server.bat exists beside run_server.sh")
+check(Path(windows_argv[0]).name == "run_server_windows.bat" and windows_argv[1:] == ["--port", "9000"],
+      f"on Windows the restart is run_server_windows.bat with the same arguments ({windows_argv})")
+check((HERE.parents[1] / "run_server_windows.bat").is_file(), "run_server_windows.bat exists beside run_server_linux.sh")
 
 finish()

@@ -283,7 +283,7 @@ with tempfile.TemporaryDirectory() as scratch:
     check(LocalComfyEnvironment.default_venv_python(str(checkout)) is None,
           "a checkout with no venv beside it yields no interpreter, not a guess")
 
-    # The sibling layout first: that is what run_server.sh documents and
+    # The sibling layout first: that is what run_server_linux.sh documents and
     # what paths.py resolves.
     sibling = checkout.parent / "venv" / "bin"
     sibling.mkdir(parents=True)

@@ -64,7 +64,7 @@ mkdir -p "$WORK/project"
 # wrong twice: every top-level module the server imports, and nothing that
 # is not importable from the project root.
 cp -r "$REPO/backend" "$REPO"/{accept,data,engine,families,graph,lab,nodes,perf} "$WORK/project/"
-cp "$REPO"/*.py "$REPO/run_server.sh" "$WORK/project/"
+cp "$REPO"/*.py "$REPO/run_server_linux.sh" "$WORK/project/"
 check "the copy has every top-level module the server imports" \
       "$(for m in monitor_bus.py paths.py; do
              [ -f "$WORK/project/$m" ] || { echo 0; break; }
@@ -111,7 +111,7 @@ check "and it changed nothing on disk" \
 
 echo
 echo "== and the install itself (this takes a minute) =="
-# Run to completion: the bootstrap re-execs run_server.sh, which starts the
+# Run to completion: the bootstrap re-execs run_server_linux.sh, which starts the
 # server, so it does not return. Background it, wait for the server to
 # answer, then stop it.
 cd "$WORK/project"

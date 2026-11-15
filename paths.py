@@ -22,7 +22,7 @@ def _load_dotenv():
 
     Real environment variables always win over the .env file (standard
     dotenv convention: this only fills in a variable that isn't already
-    set) -- so `COMFY_DIR=/other/path ./run_server.sh` still overrides
+    set) -- so `COMFY_DIR=/other/path ./run_server_linux.sh` still overrides
     whatever's in .env for that one invocation.
 
     Deliberately not pulling in python-dotenv as a dependency for what's

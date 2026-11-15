@@ -159,7 +159,7 @@ print(json.dumps({"ok": True, "packages": out}))
 """
 
     #: Where a venv is looked for, relative to a ComfyUI checkout. The
-    #: sibling layout first, because that is what `run_server.sh` documents
+    #: sibling layout first, because that is what `run_server_linux.sh` documents
     #: and what `paths.py` resolves; the nested one second, because people
     #: put it there too. Derived rather than configured, because on a
     #: first-run machine there is nothing configured to derive from.

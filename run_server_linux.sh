@@ -9,7 +9,7 @@
 #      script, the server, and every training subprocess it launches.
 #
 #   2. Environment variables, which always take precedence over .env:
-#        COMFY_DIR=/path/to/ComfyUI VENV_PYTHON=/path/to/venv/bin/python ./run_server.sh
+#        COMFY_DIR=/path/to/ComfyUI VENV_PYTHON=/path/to/venv/bin/python ./run_server_linux.sh
 #
 # If neither is set, both fall back to auto-detection: works out of the box
 # if ComfyUI and a venv/ folder are sibling directories of this project.

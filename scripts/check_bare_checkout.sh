@@ -47,7 +47,7 @@ check() {
 
 echo "== a bare checkout, from HEAD, with nothing of yours in it =="
 git -C "$REPO" archive HEAD | tar -x -C "$WORK"
-check "the archive extracted" "$([ -f "$WORK/run_server.sh" ] && echo 1 || echo 0)"
+check "the archive extracted" "$([ -f "$WORK/run_server_linux.sh" ] && echo 1 || echo 0)"
 
 # Anything untracked is exactly what a fresh clone would not have. If any of
 # it is present the test is not testing what it claims.

@@ -46,7 +46,7 @@ trap cleanup EXIT
 echo "== an unconfigured project, in a venv with only the server's packages =="
 mkdir -p "$WORK/project"
 cp -r "$REPO/backend" "$REPO"/{accept,data,engine,families,graph,lab,nodes,perf} "$WORK/project/"
-cp "$REPO"/*.py "$REPO/run_server.sh" "$WORK/project/"
+cp "$REPO"/*.py "$REPO/run_server_linux.sh" "$WORK/project/"
 
 "$PYTHON" -m venv "$WORK/server"
 "$WORK/server/bin/pip" install --quiet --disable-pip-version-check \

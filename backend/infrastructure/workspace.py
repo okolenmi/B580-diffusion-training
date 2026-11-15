@@ -6,7 +6,7 @@ process's project root and adds the run-artifact conventions.
 Bridging note (deliberate, not laziness): production paths are
 delegated to the repo's ``paths`` module, so the server and the
 tools that read its folders cannot drift. Importing ``paths`` performs its
-documented .env fill-on-import (the same thing ``run_server.sh``
+documented .env fill-on-import (the same thing ``run_server_linux.sh``
 does for the shell); this happens once at composition time, never as
 an accidental import side effect of a backend module.
 

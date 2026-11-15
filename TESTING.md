@@ -174,7 +174,7 @@ On a real run: the main loss line should fill the middle half of the chart (line
 ## 94. After the swap: does the flattened tree start and train? (about 15 minutes)
 The trainer's folders moved to the repository root (`graph/`, `engine/`, `nodes/`, ... ; the old code is in `archive/`), so every entry point changed its import path. The sandbox runs all checks, but not Python 3.14, the card or a real ComfyUI.
 1. `python run_tests.py` on your machine (3.14, torch XPU): the two failures I see here (`test_event_contract`, `test_graph_task_gateway` and friends) come from Python 3.13 and the missing card; on your side the whole run should be green except what needs a card. Send the last table if anything is red.
-2. `./run_server.sh`, open `/graph`, press *Quick workflow*, run 20 steps on a small dataset: the run must start, draw the loss, and end with a LoRA file. This goes through the server's child process, the memory admission and the device probe, which were moved.
+2. `./run_server_linux.sh`, open `/graph`, press *Quick workflow*, run 20 steps on a small dataset: the run must start, draw the loss, and end with a LoRA file. This goes through the server's child process, the memory admission and the device probe, which were moved.
 3. The command line: `python -m run sdxl-lora ... --steps 20` ends with a file too.
 4. Only if you still use it: the ComfyUI comparison (`python -m accept save-probe ... --comfy <folder>`) runs against a real ComfyUI; it must not pick up our `nodes` folder instead of ComfyUI's.
 Settings keeps `comfy_dir` and the venv path; the old Config page and `convert-cfg.toml` are gone (in `archive/config-path/`).

@@ -19,7 +19,7 @@ Run the one command at the top of `TESTING.md` ("Everything that can run unatten
 finished scenarios are kept. Report `accept/verdict.md` (the table as it is) and the `run.log` tail of every FAIL row.
 
 ## Mission 2: a real run through the backend (TESTING 74, 82; about 1 hour)
-1. Start the server as `run_server.sh` does (`python -m backend.cli`, port printed on start). Check `GET /api/v1/health` (or `/api/v1/graphs/executions`).
+1. Start the server as `run_server_linux.sh` does (`python -m backend.cli`, port printed on start). Check `GET /api/v1/health` (or `/api/v1/graphs/executions`).
 2. Get a graph: `python -m run sdxl-lora --models M --file F --dataset D --output O --dump scratch/g.json` (use `--help` if an option differs), or
    `POST /api/v1/starters/sdxl-lora`. Set steps to about 150 and resolution 512, batch 2.
 3. `POST /api/v1/graphs/validate`, then `POST /api/v1/graphs/run` with `{"graph": <document>, "mode": "parallel"}`. Poll `GET /api/v1/graphs/executions/{id}` every

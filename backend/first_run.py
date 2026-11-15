@@ -105,7 +105,7 @@ SERVER_PACKAGES: tuple[str, ...] = _server_packages()
 _IMPORT_NAMES = {"python-multipart": "multipart"}
 
 #: Exit code distinguishing "could not bootstrap" from the server's own, so
-#: run_server.sh can say something better than a traceback.
+#: run_server_linux.sh can say something better than a traceback.
 EXIT_BOOTSTRAP_FAILED = 78  # EX_CONFIG, the closest portable choice
 
 
@@ -261,7 +261,7 @@ def server_url(port: int, host: str) -> str:
 
     `localhost` rather than the bind address: `0.0.0.0` is not something a
     browser can be sent to, and a user who passed `--host 0.0.0.0` (which
-    run_server.sh does by default) still wants a link that works on this
+    run_server_linux.sh does by default) still wants a link that works on this
     machine.
     """
     shown = "localhost" if host in ("0.0.0.0", "::", "") else host
@@ -281,7 +281,7 @@ def browser_suppressed() -> bool:
 
     An environment variable rather than a flag because the caller is
     usually a shell script or a CI job, not a person: `--no-browser` on
-    `run_server.sh` would have to survive the re-exec to be useful, and
+    `run_server_linux.sh` would have to survive the re-exec to be useful, and
     the environment does that for free.
     """
     return bool(os.environ.get(NO_BROWSER_ENV))
@@ -348,7 +348,7 @@ def start_browser_opener(url: str) -> None:
 
 
 def next_argv(argv: list[str]) -> list[str]:
-    """The `run_server.sh` invocation to re-exec with.
+    """The `run_server_linux.sh` invocation to re-exec with.
 
     Re-execing the *script* rather than `python -m backend.cli` directly, so
     the `.env` it loads, the interpreter precedence it implements and the
@@ -366,13 +366,13 @@ def next_argv(argv: list[str]) -> list[str]:
         Open this to finish setting up:  http://localhost:8799/setup
         ERROR: [Errno 98] bind on address ('0.0.0.0', 8766): in use
 
-    Forwarding the original list reproduces exactly what run_server.sh
+    Forwarding the original list reproduces exactly what run_server_linux.sh
     would have done without a bootstrap in the way, which is the property
-    that makes the bootstrap invisible. `run_server.sh` puts its own
+    that makes the bootstrap invisible. `run_server_linux.sh` puts its own
     `--host 0.0.0.0` *before* `"$@"`, so a user-supplied host still wins
     by argparse's last-value rule.
     """
-    script = "run_server.bat" if os.name == "nt" else "run_server.sh"
+    script = "run_server_windows.bat" if os.name == "nt" else "run_server_linux.sh"
     return [str(Path(__file__).resolve().parents[1] / script), *argv]
 
 
@@ -443,9 +443,9 @@ def bootstrap(python: str, host: str, port: int, argv: list[str]) -> None:
         os.execve(command[0], command, env)
     except OSError as exc:
         raise BootstrapError(
-            f"could not restart run_server.sh ({exc}). The packages are "
+            f"could not restart run_server_linux.sh ({exc}). The packages are "
             f"installed and working -- start the server yourself with:\n"
-            f"    VENV_PYTHON={interpreter} ./run_server.sh"
+            f"    VENV_PYTHON={interpreter} ./run_server_linux.sh"
         ) from exc
 
 
@@ -488,7 +488,7 @@ def main(argv: list[str] | None = None) -> int:
 
     missing = missing_server_packages()
     if not missing:
-        # The normal path, and deliberately silent: run_server.sh calls this
+        # The normal path, and deliberately silent: run_server_linux.sh calls this
         # speculatively, and a message on every start would be noise about
         # a problem that does not exist.
         return 0
@@ -502,7 +502,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.check:
         # Exit 1, not 78: `--check` is a question with a yes/no answer, and
         # 78 would report a configuration error to whatever called it. It is
-        # consumed here rather than passed through, so `run_server.sh --check`
+        # consumed here rather than passed through, so `run_server_linux.sh --check`
         # exits instead of handing the flag to a server that cannot parse it.
         return 1
 
@@ -513,7 +513,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  Could not install them: {exc}")
         print()
         print("  Nothing was changed. Once they are available, start the")
-        print("  server again with ./run_server.sh")
+        print("  server again with ./run_server_linux.sh")
         return EXIT_BOOTSTRAP_FAILED
     except KeyboardInterrupt:
         print("\n  Cancelled. Nothing was changed.")

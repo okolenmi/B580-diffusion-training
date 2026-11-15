@@ -4,7 +4,7 @@
 
 `archive/old-documentation/design/11-first-run-and-installer.md` was written before this
 project had a settings page, and it proposed starting with a shell gate:
-`run_server.sh` checks dependencies before launching the server and
+`run_server_linux.sh` checks dependencies before launching the server and
 explains what is missing instead of surfacing a `ModuleNotFoundError`.
 
 That was the right instinct and the wrong mechanism for what this now is.
@@ -46,7 +46,7 @@ Three consequences worth stating:
   device probe imports torch in a subprocess, and is skipped entirely when
   the package check has already answered the question.
 * **The shell gate is *not* the fix, but there now is a preflight.**
-  `run_server.sh` still starts the server whatever is missing — there is no
+  `run_server_linux.sh` still starts the server whatever is missing — there is no
   gate that refuses to boot. What it gained is
   `backend/first_run.py`, which installs only the *four server packages*
   into a temporary venv and re-execs. The boundary from this record still
@@ -90,12 +90,12 @@ the server can already do — and the first thing missing is usually the
 thing stopping the server from starting. So the version that ships cannot
 help the person who needs it most.
 
-What replaces it: a stdlib-only preflight, launched by `run_server.sh` only
+What replaces it: a stdlib-only preflight, launched by `run_server_linux.sh` only
 when the server's own imports fail, which prints a URL, opens a browser and
 installs four small packages into a temporary venv. Once the server runs,
 this wizard takes over and never mentions installation again.
 
-`run_server.sh` stays unchanged in the shipped version, so this record's
+`run_server_linux.sh` stays unchanged in the shipped version, so this record's
 stated cost — no preflight — is real until that lands.
 
 ## Consequences
@@ -114,7 +114,7 @@ stated cost — no preflight — is real until that lands.
   "does not exist yet" rather than offering a button.
 * **Two model roots is Phase F and is untouched.** Independent of the
   wizard, and worth doing on its own merit; it is not a wizard question.
-* **`run_server.sh` calls one module before launching**, and a user who
+* **`run_server_linux.sh` calls one module before launching**, and a user who
   wants no preflight still has one: `DISTILLATION_NO_BROWSER=1` stops it
   opening a tab, which matters because it otherwise reaches for the user's
   browser unattended. Its presence is otherwise silent — one subprocess

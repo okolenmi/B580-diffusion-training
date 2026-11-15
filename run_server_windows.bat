@@ -1,13 +1,13 @@
 @echo off
-rem Launch the training web server (the Windows counterpart of run_server.sh).
+rem Launch the training web server (the Windows counterpart of run_server_linux.sh).
 rem
 rem Settings come from .env next to this file (COMFY_DIR, VENV_PYTHON) or from real environment
-rem variables, which win. The interpreter is chosen like run_server.sh does:
+rem variables, which win. The interpreter is chosen like run_server_linux.sh does:
 rem   1. VENV_PYTHON, if set and it exists
 rem   2. venv\Scripts\python.exe in this folder (what the setup page creates)
 rem   3. ..\venv\Scripts\python.exe (ComfyUI / venv / this project as sibling folders)
 rem   4. "python" from PATH
-rem Arguments are passed on: run_server.bat --port 8800
+rem Arguments are passed on: run_server_windows.bat --port 8800
 
 setlocal EnableExtensions
 set "HERE=%~dp0"

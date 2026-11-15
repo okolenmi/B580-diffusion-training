@@ -218,15 +218,6 @@ class PromptTable:
             self._announce(changed)
         return changed
 
-    def update_base(self, changes: Mapping[str, str]) -> None:
-        """Replace base captions (a caption edit or an auto-captioner finishing) and re-derive the affected prompts."""
-        self._base.update(changes)
-        self._distinct = self._distinct_of(self._base)
-        epoch = max(self.epoch, 0)
-        for image_id in changes:
-            self._active[image_id] = self._compute(image_id, epoch)
-        self._announce(len(changes))
-
     def _announce(self, changed: int) -> None:
         self.version += 1
         if self.listener:

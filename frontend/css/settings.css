@@ -92,37 +92,6 @@
     background: var(--accent-soft);
 }
 
-/* ---- 3. Link rows ---------------------------------------------------------- */
-
-.settings-link {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 12px 6px;
-    border-bottom: 1px solid var(--border);
-    text-decoration: none;
-    color: var(--text);
-    border-radius: var(--radius);
-    transition: background var(--dur-fast) ease;
-}
-.settings-link:last-of-type { border-bottom: none; }
-.settings-link:hover { background: var(--surface-alt); }
-
-.settings-link-body {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    flex: 1;
-}
-.settings-link-title { font-weight: 700; font-size: 14px; }
-.settings-link-sub { font-size: 12.5px; }
-
-.settings-link-arrow {
-    color: var(--text-dim);
-    font-size: 16px;
-}
-.settings-link:hover .settings-link-arrow { color: var(--accent); }
-
 /* ---- 4. Notes -------------------------------------------------------------- */
 
 .settings-note {

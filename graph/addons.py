@@ -158,9 +158,6 @@ def slot_sockets(host_cls: Any) -> dict[str, Port]:
     return {s.socket: s.port() for s in getattr(host_cls, "ADDON_SLOTS", ())}
 
 
-def addon_port_name(addon_id: str, param: str) -> str:
-    return f"{addon_id}.{param}"
-
 
 def split_port(name: str) -> tuple[str, str] | None:
     """``a1.start`` -> (``a1``, ``start``); None for a node's own port."""

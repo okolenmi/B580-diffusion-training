@@ -197,20 +197,6 @@ def cache_label(folder: str | Path) -> str:
         return ""
 
 
-def list_caches(root: str | Path) -> list[CacheInfo]:
-    """What a cache folder holds, for the Datasets page: which VAEs have latents, and how big they are."""
-    found = []
-    for child in sorted(Path(root).glob("*/" + INDEX)) if Path(root).is_dir() else []:
-        db = sqlite3.connect(child)
-        try:
-            meta = dict(db.execute("select key, value from meta"))
-            count = db.execute("select count(*) from entries").fetchone()[0]
-        finally:
-            db.close()
-        size = sum(p.stat().st_size for p in child.parent.glob("shard_*.safetensors"))
-        found.append(CacheInfo(meta["vae_id"], meta.get("label", ""), json.loads(meta["spec"]), count, size))
-    return found
-
 
 class _Encoding:
     """One ``build``: images are decoded ahead on a thread, grouped by shape into batches for the encoder, and written

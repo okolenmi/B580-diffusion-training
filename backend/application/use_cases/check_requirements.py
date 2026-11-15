@@ -272,7 +272,3 @@ class CheckRequirements:
         )
 
 
-
-def full_install_approx_mb() -> int:
-    """The size of a from-scratch install, for the venv choice screen."""
-    return total_approx_mb()

@@ -33,7 +33,6 @@ exactly when someone needs it most.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from ..errors import InstallerNotAllowedError
 from ..ports.settings_store import SettingsChanges, SettingsStore, SettingsView
@@ -96,17 +95,3 @@ class ApplyInstallation:
         )
 
 
-def default_checkpoints_dir(comfy_dir: str | Path) -> Path:
-    """Where a checkpoint goes when the user has not chosen otherwise.
-
-    ComfyUI's own `models/checkpoints`, because that is what
-    `paths.get_checkpoints_dir()` resolves and choosing anything else
-    would mean the wizard's default disagreed with the resolution policy
-    -- which is the kind of disagreement that surfaces later as "I set it
-    to the default and it went somewhere else".
-    """
-    return Path(comfy_dir) / "models" / "checkpoints"
-
-
-def default_loras_dir(comfy_dir: str | Path) -> Path:
-    return Path(comfy_dir) / "models" / "loras"

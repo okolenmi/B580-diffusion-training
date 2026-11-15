@@ -183,12 +183,6 @@ class Optimizer(DeviceResident):
             decays += list(decay.unbind(0)) if isinstance(decay, Tensor) else [decay] * len(members)
         _apply(targets, deltas, decays, self.foreach)
 
-    def decay_states(self, factor: float) -> None:
-        for stack in self.stacks:
-            state = self.store.checkout(stack.state)
-            self.algorithm.decay_state(state, factor)
-            self.store.commit(stack.state, state)
-
     def reset_states(self) -> None:
         for stack in self.stacks:
             state = self.store.checkout(stack.state)

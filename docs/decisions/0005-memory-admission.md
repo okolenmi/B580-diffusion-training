@@ -156,11 +156,10 @@ per relief attempt, and never when already under budget, so it is not the
 per-step reclaim that `text_encoder.py`'s `offload()` docstring measures as a
 real cost.
 
-Left open, and recorded in `archive/old-documentation/known-issues/pending-testing.md`: the lease
-API accounts by declared footprint (which *does* drop on offload) while the
-handle accounts by `reserved` (which does not). The two answer different
-questions on purpose, but reconciling them is still needed before per-step
-offloading becomes routine.
+The lease and eviction policy that once sat beside the handle was removed
+as unused: `GraphMemory` now only enforces the grant and budget and does the
+physical check. The question it left open (declared footprint, which drops on
+offload, against `reserved`, which does not) is gone with it.
 
 ## Consequences
 

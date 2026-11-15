@@ -4,7 +4,7 @@ Status: **approved and implemented; revised the same day to 724.** New
 graphs/configs without stored values default to constant LR +
 `kohya_label` (724 = the kohya 722 set + `label_emb`) + cond path off.
 Saved runs keep stored values. `kohya_plus` (726) stays opt-in. See
-`CHANGELOG.md`.
+`archive/old-documentation/CHANGELOG.md`.
 
 ## Revision (2026-10-11, after the arm-6 isolation run)
 

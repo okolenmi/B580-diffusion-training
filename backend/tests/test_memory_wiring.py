@@ -1691,62 +1691,6 @@ def test_memory_telemetry_writes_frames_on_a_schedule() -> None:
         raise AssertionError("a zero interval was accepted")
 
 
-def test_memory_events_cross_into_the_event_file() -> None:
-    print("-- memory events: a decision becomes a frame with MB and cost --")
-    from backend.infrastructure.graph_task_worker import wire_memory_events
-    from backend.infrastructure.admission.graph_memory import GraphMemory
-
-    class _Device:
-        def memory_stats(self):
-            return {
-                "reserved_mb": 5000.0,
-                "allocated_mb": 4000.0,
-                "peak_allocated_mb": 6000.0,
-                "peak_reserved_mb": 7200.0,
-            }
-
-    class _SilentDevice:
-        def memory_stats(self):
-            return None
-
-    class _Writer:
-        def __init__(self) -> None:
-            self.frames: list[dict] = []
-
-        def memory(self, **record) -> None:
-            self.frames.append(record)
-
-    memory = GraphMemory(grant_mb=6300.0, budget_mb=6000.0)
-    writer = _Writer()
-    wire_memory_events(memory, writer, _Device(), "enforced")
-    check(memory.on_memory_event is not None,
-          "the worker's listener is wired onto the memory")
-    memory.report_memory_event("eviction", 1234.0, 56.7)
-    check(len(writer.frames) == 1,
-          f"one frame per decision (got {writer.frames})")
-    frame = writer.frames[0]
-    check(
-        frame["event"] == "eviction"
-        and frame["mb"] == 1234.0
-        and frame["cost_ms"] == 56.7,
-        f"the decision's name, MB and cost (got {frame})",
-    )
-    check(frame["peak_mb"] == 7200.0,
-          f"with the snapshot alongside (got {frame})")
-    check(frame["backstop"] == "enforced",
-          f"and the backstop case (got {frame})")
-
-    # A device that cannot answer writes no frame: there are no device
-    # numbers to report, and the decision's log line is the policy's
-    # own (MEM-06).
-    silent_writer = _Writer()
-    memory2 = GraphMemory(grant_mb=6300.0, budget_mb=6000.0)
-    wire_memory_events(memory2, silent_writer, _SilentDevice(), "enforced")
-    memory2.report_memory_event("lease_granted", 500.0, 0.0)
-    check(silent_writer.frames == [],
-          f"no frame without device numbers (got {silent_writer.frames})")
-
-
 def test_bad_budget_numbers_never_reach_the_ledger() -> None:
     print("-- 422 at the edge: a bad budget claims nothing, writes no row --")
     root = Path(tempfile.mkdtemp(prefix="backend-mem-badnum-"))
@@ -1948,7 +1892,6 @@ def main() -> None:
     test_adaptive_flag_travels_in_argv()
     test_allocator_backstop_cases_and_their_warnings()
     test_memory_telemetry_writes_frames_on_a_schedule()
-    test_memory_events_cross_into_the_event_file()
     finish()
 
 

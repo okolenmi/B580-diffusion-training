@@ -68,12 +68,6 @@ class AssetExistsError(ApplicationError):
     status_code = 409
 
 
-class RunAlreadyActiveError(ApplicationError):
-    """Another run is created or running; single-run invariant holds."""
-
-    code = "run_already_active"
-    status_code = 409
-
 
 class MemoryUnavailableError(ApplicationError):
     """The device cannot admit this start; the breakdown says who holds it.
@@ -89,18 +83,6 @@ class MemoryUnavailableError(ApplicationError):
     status_code = 409
 
 
-class RunNotRunningError(ApplicationError):
-    """The action needs a running run, but this one is not running."""
-
-    code = "run_not_running"
-    status_code = 409
-
-
-class NoActiveRunError(ApplicationError):
-    """No run is currently created or running."""
-
-    code = "no_active_run"
-    status_code = 404
 
 
 class TrainingLaunchError(ApplicationError):
@@ -269,15 +251,3 @@ class InstallerNotAllowedError(ApplicationError):
     code = "installer_not_allowed"
     status_code = 409
 
-
-class InstallerBusyError(ApplicationError):
-    """An install is already running in this server process.
-
-    Two concurrent installs into one interpreter would race on the same
-    site-packages and produce a half-installed environment that satisfies
-    neither. 409 for the same reason as `installer_not_allowed`: the
-    request is well-formed and the state does not allow it now.
-    """
-
-    code = "installer_busy"
-    status_code = 409

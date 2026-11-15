@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import re
 import subprocess
-import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -60,8 +59,8 @@ _EXT = re.compile(r"\.(py|md|toml|sh|json|jsonl|safetensors|csv|png|txt|yaml|yml
 _ROOTS = frozenset({
     "nodes", "backend", "docs", "scripts", "manager",
     "archive", "datasets", "paths.py", "run_tests.py",
-    "run_server.sh", "monitor_bus.py", "config.example.toml",
-    "convert-cfg.toml", "requirements.txt", "requirements-dev.txt",
+    "run_server.sh", "monitor_bus.py",
+    "requirements.txt", "requirements-dev.txt",
     "pyproject.toml", "README.md",
     # retired: referencing these means pointing at a move
     "core", "server", "bad-LoRA-investigation",

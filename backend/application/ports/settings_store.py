@@ -21,7 +21,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 SETTINGS_KEYS: tuple[str, ...] = (
-    "default_config",
     "comfy_dir",
     "venv_python",
     "checkpoints_dir",
@@ -50,7 +49,6 @@ class SettingsView:
 class SettingsChanges:
     """Partial update. ``None`` = leave untouched; ``""`` = clear."""
 
-    default_config: str | None = None
     comfy_dir: str | None = None
     venv_python: str | None = None
     checkpoints_dir: str | None = None

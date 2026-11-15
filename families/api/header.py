@@ -72,10 +72,6 @@ class HeaderIndex:
             out.append(key)
         return out
 
-    def has_prefix(self, prefix: str) -> bool:
-        start = bisect.bisect_left(self._sorted, prefix)
-        return start < len(self._sorted) and self._sorted[start].startswith(prefix)
-
     def count(self, prefix: str) -> int:
         return len(self.keys_with(prefix))
 

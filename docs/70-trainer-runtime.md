@@ -28,9 +28,9 @@ component map.
 * The LoRA timestep gate lives in a **module-level global** (`_current_gate` in
   `lora.py`, set per step by `PrepareDiffusionInputsPhase`; the code itself
   flags the limitation).
-* Memory: `nodes/memory/` (coordinator, manager, device_reservations,
-  graph_memory, control_handle), `VRAMBudgetControllerNode`, backend admission
-  and ledger (ADR 0005).
+* Memory: `engine/runtime/memory.py` (residency, budget, levers),
+  `VRAMBudgetControllerNode`, backend admission (`GraphMemory`) and ledger
+  (ADR 0005).
 
 ## 2. Target shape
 

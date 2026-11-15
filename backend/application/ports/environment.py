@@ -754,21 +754,3 @@ class CachedDeviceProbe(DeviceProbe):
         self.report()
         return True
 
-
-@dataclass(slots=True)
-class InterpreterInfo:
-    """Which interpreter this is, and whether it is the one to use.
-
-    `is_expected` is the floor check from `backend/python_floor.py`,
-    reported rather than enforced: the installer's job is to *tell* the
-    user, and the entry points already refuse to start. Having the
-    installer able to say "your interpreter is too old, and here is what it
-    is" is the difference between a wizard and a traceback.
-    """
-
-    executable: str
-    version: str
-    prefix: str
-    is_virtualenv: bool
-    is_expected: bool
-    floor: str

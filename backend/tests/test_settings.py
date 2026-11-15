@@ -55,17 +55,19 @@ def main() -> None:
 
     # -- persist + resolve -------------------------------------------------
     ckpt = root / "my-checkpoints"
-    view = store.update(SettingsChanges(checkpoints_dir=str(ckpt), default_config="d.toml"))
+    loras = root / "my-loras"
+    view = store.update(SettingsChanges(checkpoints_dir=str(ckpt), loras_dir=str(loras)))
     check(view.stored["checkpoints_dir"] == str(ckpt), "override persisted")
     check(view.resolved["checkpoints_dir"] == str(ckpt), "override wins resolution")
     check(ckpt.is_dir(), "managed dir created on save")
-    check(view.stored["default_config"] == "d.toml", "default_config persisted")
+    check(view.stored["loras_dir"] == str(loras), "second key persisted")
     check(store.get("checkpoints_dir") == str(ckpt), "raw get returns stored value")
 
     # absent key = untouched
-    view = store.update(SettingsChanges(default_config="other.toml"))
+    loras2 = root / "other-loras"
+    view = store.update(SettingsChanges(loras_dir=str(loras2)))
     check(view.stored["checkpoints_dir"] == str(ckpt), "absent key untouched by update")
-    check(view.stored["default_config"] == "other.toml", "provided key updated")
+    check(view.stored["loras_dir"] == str(loras2), "provided key updated")
 
     # empty string = clear
     view = store.update(SettingsChanges(checkpoints_dir=""))
@@ -76,13 +78,13 @@ def main() -> None:
     # -- atomic validation --------------------------------------------------
     try:
         store.update(SettingsChanges(venv_python="/nonexistent/python-xyz",
-                                     default_config="should-not-persist.toml"))
+                                     loras_dir=str(root / "should-not-persist")))
         check(False, "invalid venv_python rejected")
     except SettingsInvalidError as exc:
         check(True, "invalid venv_python rejected")
         check(isinstance(exc.details, dict) and "venv_python" in exc.details,
               "error carries per-key details")
-    check(store.get("default_config") == "other.toml",
+    check(store.get("loras_dir") == str(loras2),
           "rejected update persisted nothing (atomic)")
 
     try:
@@ -196,11 +198,12 @@ def main() -> None:
     check(body["stored"]["checkpoints_dir"] == str(ckpt),
           "API sees the persisted override (fresh read, no cache)")
 
+    loras3 = root / "api-loras"
     status, _, body = asgi_request(
         app, "/api/v1/settings", method="POST",
-        json_body={"default_config": "from-api.toml"},
+        json_body={"loras_dir": str(loras3)},
     )
-    check(status == 200 and body["stored"]["default_config"] == "from-api.toml",
+    check(status == 200 and body["stored"]["loras_dir"] == str(loras3),
           "POST settings partial update 200")
     check(body["stored"]["checkpoints_dir"] == str(ckpt),
           "POST leaves absent keys untouched")
@@ -215,7 +218,7 @@ def main() -> None:
           "envelope details carry the per-key message")
 
     status, _, body = asgi_request(app, "/api/v1/settings")
-    check(body["stored"]["default_config"] == "from-api.toml",
+    check(body["stored"]["loras_dir"] == str(loras3),
           "failed POST changed nothing")
 
     status, _, body = asgi_request(

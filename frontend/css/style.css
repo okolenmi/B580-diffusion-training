@@ -114,12 +114,6 @@ body {
     position: relative;
 }
 
-#loss-chart {
-    width: 100%;
-    height: 100%;
-    display: block;
-}
-
 /* Controls: ONE skin. The element rules sit in :where() (specificity 0), so a page can
    override anything with a single class, and the skin reads variables that a container sets
    (`.ds-bulk { --ctl-pad: ... }`): a page never restates the skin, only its size and layout. */
@@ -222,8 +216,6 @@ input[type="checkbox"]:checked::after {
     font-size: 0.8rem;
 }
 
-.btn-block { width: 100%; display: flex; }
-
 .btn:disabled {
     opacity: 0.45;
     cursor: not-allowed;
@@ -318,7 +310,6 @@ input[type="checkbox"]:checked::after {
     margin-bottom: 16px;
     white-space: pre-wrap;
 }
-.toolbar-hint { font-size: 12.5px; }
 
 @media (max-width: 1000px) {
     .content-area { padding: 1.5rem; }

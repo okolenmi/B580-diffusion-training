@@ -4,9 +4,8 @@ Path *policy* lives in ``path_tiers``; this class binds it to the
 process's project root and adds the run-artifact conventions.
 
 Bridging note (deliberate, not laziness): production paths are
-delegated to the repo's ``paths`` module -- the *child* trainer
-derives its progress file from ``paths.get_progress_path``, so
-parent and child cannot drift. Importing ``paths`` performs its
+delegated to the repo's ``paths`` module, so the server and the
+tools that read its folders cannot drift. Importing ``paths`` performs its
 documented .env fill-on-import (the same thing ``run_server.sh``
 does for the shell); this happens once at composition time, never as
 an accidental import side effect of a backend module.
@@ -154,13 +153,5 @@ class WorkspaceLayout:
         if self._runs_dir is None:
             return path_tiers.import_paths(self._root).get_log_path(run_id)  # mkdirs itself
         path = self.run_dir(run_id) / "log.txt"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return path
-
-    def progress_path(self, run_id: int) -> Path:
-        """Must equal what the child derives (``paths.get_progress_path``)."""
-        if self._runs_dir is None:
-            return path_tiers.import_paths(self._root).get_progress_path(run_id)  # mkdirs itself
-        path = self.run_dir(run_id) / "log.progress.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
         return path

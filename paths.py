@@ -5,9 +5,8 @@ All paths are resolved relative to COMFY_DIR which is the working directory
 for training runs.
 """
 
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import os
-import sys
 
 
 def _load_dotenv():
@@ -120,11 +119,6 @@ def get_datasets_dir() -> Path:
     return get_project_root() / "datasets"
 
 
-def get_dataset_db_path() -> Path:
-    """Get the path to the dataset SQLite database."""
-    return get_datasets_dir() / "datasets.db"
-
-
 def resolve_path(path: str | Path, base: Path | None = None) -> Path:
     """Resolve a path to absolute form.
     
@@ -147,37 +141,10 @@ def get_log_path(run_id: int) -> Path:
     return run_dir / "log.txt"
 
 
-def get_progress_path(run_id: int) -> Path:
-    """Get the progress JSONL file path for a run.
-    
-    Uses the naming convention: log.progress.jsonl
-    """
-    run_dir = get_runs_dir() / f"run_{run_id}"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    return run_dir / "log.progress.jsonl"
-
-
-def get_run_dir(run_id: int) -> Path:
-    """Get the run directory."""
-    run_dir = get_runs_dir() / f"run_{run_id}"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    return run_dir
-
-
 # Explicit overrides, set via set_checkpoints_dir()/set_loras_dir() (e.g. from a
 # persisted server setting -- see server/config.py's Settings.checkpoints_dir).
 _checkpoints_dir_override = None
 _loras_dir_override = None
-
-
-def set_checkpoints_dir(path: str | Path | None):
-    global _checkpoints_dir_override
-    _checkpoints_dir_override = Path(path).resolve() if path else None
-
-
-def set_loras_dir(path: str | Path | None):
-    global _loras_dir_override
-    _loras_dir_override = Path(path).resolve() if path else None
 
 
 def get_checkpoints_dir() -> Path:
@@ -216,101 +183,3 @@ def get_loras_dir() -> Path:
         return get_comfy_dir() / "models" / "loras"
     except RuntimeError:
         return get_project_root() / "loras"
-
-
-def _model_base_dir(kind: str) -> Path:
-    if kind == "checkpoint":
-        return get_checkpoints_dir()
-    if kind == "lora":
-        return get_loras_dir()
-    raise ValueError(f"kind must be 'checkpoint' or 'lora', got {kind!r}")
-
-
-def resolve_model_path(path_str: str | Path, kind: str) -> Path:
-    """Resolve a checkpoint or LoRA path that may be given as either an
-    absolute path or a path relative to checkpoints_dir/loras_dir (kind).
-    This is what lets config fields like paths.student or
-    tuning.lora_continue_from just be a filename ("my_lora.safetensors")
-    instead of a full path, while still allowing an absolute path for
-    anything stored elsewhere.
-    """
-    return resolve_path(path_str, base=_model_base_dir(kind))
-
-
-def resolve_dataset_path(name_or_path: str | Path) -> Path:
-    """Resolve a dataset reference that may be given as either a bare
-    dataset name (looked up under get_datasets_dir(), matching what
-    ManagedDatasetLibrary.list_datasets() returns) or an absolute path
-    elsewhere. Same convention as resolve_model_path() for
-    checkpoints/loras -- kept separate since datasets live in their own
-    directory, not checkpoints_dir/loras_dir.
-    """
-    return resolve_path(name_or_path, base=get_datasets_dir())
-
-
-def _resolve_safe_relative(relative_str: str, base_dir: Path) -> Path:
-    """Resolve relative_str against base_dir, refusing anything that could
-    read or write outside it: absolute paths, '..' segments, empty
-    segments, backslash tricks. Distinct from resolve_path()/
-    resolve_model_path() above, which stay permissive on purpose -- those
-    exist for a trusted local TOML config an operator hand-edits.
-    This one exists for the graph editor, which is explicitly meant to be
-    reachable from another device over the network; treat every path it
-    hands over as untrusted input, not a filename.
-    """
-    if not relative_str or relative_str != relative_str.strip():
-        raise ValueError("Path must not be empty or have leading/trailing whitespace.")
-    normalized = relative_str.replace("\\", "/")
-    parsed = PurePosixPath(normalized)
-    if parsed.is_absolute() or ".." in parsed.parts or "" in parsed.parts:
-        raise ValueError(f"Invalid relative path: {relative_str!r}")
-    base_resolved = base_dir.resolve()
-    resolved = (base_resolved / Path(*parsed.parts)).resolve()
-    if resolved != base_resolved and not resolved.is_relative_to(base_resolved):
-        raise ValueError(f"Path escapes the configured directory: {relative_str!r}")
-    return resolved
-
-
-def resolve_safe_model_path(relative_str: str, kind: str) -> Path:
-    """Sandboxed counterpart to resolve_model_path() -- see
-    _resolve_safe_relative()'s docstring for why the two aren't merged."""
-    return _resolve_safe_relative(relative_str, _model_base_dir(kind))
-
-
-def resolve_safe_dataset_path(relative_str: str) -> Path:
-    """Sandboxed counterpart to resolve_dataset_path()."""
-    return _resolve_safe_relative(relative_str, get_datasets_dir())
-
-
-def get_resume_dir(kind: str) -> Path:
-    """Dedicated subfolder for auto-managed resume files (the periodic
-    mid-training checkpoint/optimizer-state saves) -- kept separate from
-    checkpoints_dir/loras_dir's top level so they don't clutter the file
-    picker or get confused with checkpoints/LoRAs a user actually chose to
-    keep. Created on first use.
-    """
-    d = _model_base_dir(kind) / "resume"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def list_model_files(kind: str) -> list[str]:
-    """List available .safetensors files under checkpoints_dir/loras_dir
-    (kind), as paths relative to that directory, for the file-picker
-    dropdown. Excludes the resume/ subfolder -- those are auto-managed
-    working files, not something you'd manually pick from a list.
-    Returns an empty list (not an error) if the directory doesn't exist yet.
-    """
-    base = _model_base_dir(kind)
-    if not base.is_dir():
-        return []
-    results = []
-    for p in sorted(base.rglob("*.safetensors")):
-        try:
-            rel = p.relative_to(base)
-        except ValueError:
-            continue
-        if rel.parts and rel.parts[0] == "resume":
-            continue
-        results.append(str(rel))
-    return results

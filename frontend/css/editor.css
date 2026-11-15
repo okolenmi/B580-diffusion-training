@@ -1,16 +1,9 @@
 /* ---------------------------------------------------------------------------
-   editor.css -- graph editor page (M7). Design tokens (--bg, --surface,
-   --border, --accent, ...) come from style.css; this file only adds the
-   three-column editor layout, the canvas/node visuals and the panels.
+   editor.css -- layout of the graph page and its side panels. Design tokens (--bg, --surface, --border, --accent, ...)
+   come from style.css; the canvas and the nodes are styled by graph.css and board.css.
 
-   Layout: [palette+library | toolbar/canvas/executions | issues/inspector]
-   Both rails are collapsible (toolbar toggles, persisted in
-   localStorage) so the canvas can take the full viewport; the
-   executions history is a <details> drawer collapsed by default.
-   The canvas is an INFINITE plane: the viewport never scrolls (no
-   scrollbars -- wheel / background-drag pan it), nodes are absolutely
-   positioned DOM translated as one layer, edges are one SVG layer, and
-   a dashed circle marks the origin so the center stays visible.
+   Layout: [palette+library | toolbar/canvas/executions | issues/inspector]. Both rails collapse (toolbar toggles,
+   kept in localStorage) so the canvas can take the full viewport; the executions list is a <details> drawer.
    --------------------------------------------------------------------------- */
 
 body.editor-body {
@@ -171,13 +164,6 @@ body.editor-body {
 }
 .ed-palette-item:hover { background: var(--surface); color: var(--text); }
 
-.ed-load-error {
-    color: var(--red);
-    font-size: 0.72rem;
-    padding: 0.2rem 0.3rem;
-    word-break: break-all;
-}
-
 /* ---- canvas ---- */
 
 .ed-canvas {
@@ -189,202 +175,6 @@ body.editor-body {
     background-color: var(--bg);
     background-image: radial-gradient(circle, var(--border) 1px, transparent 1px);
     background-size: 24px 24px; /* background-position tracks the pan */
-}
-.ed-canvas.panning { cursor: grabbing; }
-.ed-canvas.glide,
-.ed-canvas.glide .ed-canvas-inner {
-    transition: background-position 0.25s ease, transform 0.25s ease;
-}
-.ed-canvas-inner {
-    position: relative;
-    width: 100%;
-    height: 100%;
-    will-change: transform;
-}
-
-/* Origin marker: the visible "center" of the infinite plane (0, 0). */
-.ed-origin {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 76px;
-    height: 76px;
-    transform: translate(-50%, -50%);
-    border: 1px dashed var(--text-dim);
-    border-radius: 50%;
-    opacity: 0.6;
-    pointer-events: none;
-}
-.ed-origin::after {
-    content: "";
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: 5px;
-    height: 5px;
-    transform: translate(-50%, -50%);
-    background: var(--accent);
-    border-radius: 50%;
-}
-.ed-origin::before {
-    content: "center";
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 50%;
-    transform: translateX(-50%);
-    font-family: var(--font-mono);
-    font-size: 9px;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-    white-space: nowrap;
-}
-.ed-edges {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    pointer-events: none;
-    overflow: visible;
-}
-.ed-edges path.edge {
-    fill: none;
-    stroke: var(--text-dim);
-    stroke-width: 2;
-    pointer-events: stroke;
-    cursor: pointer;
-}
-.ed-edges path.edge:hover { stroke: var(--accent); }
-.ed-edges path.edge.selected { stroke: var(--accent); stroke-width: 3; }
-.ed-edges path.edge-temp {
-    fill: none;
-    stroke: var(--accent);
-    stroke-width: 2;
-    stroke-dasharray: 6 4;
-}
-
-.gnode {
-    position: absolute;
-    width: 230px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
-    user-select: none;
-    cursor: default; /* only the head grabs; the plane behind grabs too */
-}
-.gnode.selected {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 1px var(--accent), 0 4px 14px rgba(0, 0, 0, 0.4);
-}
-.gnode.unknown { border-style: dashed; }
-
-.gnode-head {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.35rem 0.6rem;
-    background: var(--surface-alt);
-    border-bottom: 1px solid var(--border);
-    border-radius: var(--radius) var(--radius) 0 0;
-    cursor: grab;
-    font-size: 0.8rem;
-    font-weight: 600;
-}
-.gnode-head:active { cursor: grabbing; }
-.gnode-title {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.gnode-badge {
-    font-size: 0.62rem;
-    font-weight: 600;
-    padding: 0 0.3rem;
-    border-radius: 3px;
-    color: var(--text-dim);
-}
-.gnode-badge.ok { color: var(--green); }
-.gnode-badge.err { color: var(--red); }
-.gnode-badge.run { color: var(--accent); }
-
-.gnode-body {
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 0.1rem 0.3rem;
-    padding: 0.4rem 0;
-    font-size: 0.7rem;
-}
-.gnode-col { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.gnode-col.out { align-items: flex-end; max-width: 88px; }
-.gnode-unknown { color: var(--text-dim); font-style: italic; padding: 0 6px; }
-
-.gport-row {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 1px 6px;
-    color: var(--text-dim);
-}
-.gport-row.gated { display: none; }
-.gport-line {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    min-width: 0;
-}
-.gnode-col.out .gport-row { align-items: flex-end; }
-.gnode-col.out .gport-line { justify-content: flex-end; }
-.gport-label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-}
-
-.gport {
-    flex: none;
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: var(--surface-alt);
-    border: 2px solid var(--text-dim);
-    cursor: crosshair;
-}
-.gport.out { border-color: var(--accent); }
-.gport.connected { background: var(--accent); border-color: var(--accent); }
-.gport.req-unmet { border-color: var(--red); }
-.gport:hover { box-shadow: 0 0 6px var(--accent-glow); }
-.gport.src { background: var(--accent); border-color: var(--accent); }
-.ed-canvas-inner.connecting .gport { opacity: 0.35; }
-.ed-canvas-inner.connecting .gport.ok {
-    opacity: 1;
-    border-color: var(--green);
-    box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
-}
-
-/* a wired input shows where its value comes from instead of a widget */
-.gwire {
-    color: var(--accent);
-    font-family: monospace;
-    font-size: 0.62rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    min-width: 0;
-}
-
-/* editable widgets inside node bodies -- same builders as the inspector
-   (editor/widgets.js), just sized for the 230px card */
-.gnode { --ctl-pad: 2px 4px; --ctl-font: 0.68rem; }
-.gnode .param-label {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    cursor: pointer;
-    font-size: 0.66rem;
 }
 .prow { display: flex; gap: 4px; min-width: 0; }
 .prow .cfg-input { flex: 1; min-width: 0; }
@@ -401,18 +191,6 @@ body.editor-body {
     line-height: 1.4;
 }
 .pupload:hover { border-color: var(--accent); color: var(--accent); }
-
-/* live diagnostics: server-sent lines under their input row */
-.gdiag {
-    background: var(--surface-alt);
-    border-left: 2px solid var(--red);
-    border-radius: 2px;
-    padding: 2px 4px;
-    font-size: 0.62rem;
-    color: var(--text-dim);
-    word-break: break-word;
-}
-.gdiag-line + .gdiag-line { margin-top: 1px; }
 
 /* ---- executions ---- */
 
@@ -481,58 +259,12 @@ body.editor-body {
 /* ---- inspector ---- */
 
 .ed-inspector { font-size: 0.78rem; }
-.insp-title { font-weight: 600; font-size: 0.9rem; margin-bottom: 0.15rem; }
-.insp-class {
-    color: var(--text-dim);
-    font-size: 0.72rem;
-    font-family: monospace;
-    word-break: break-all;
-    margin-bottom: 0.5rem;
-}
-.insp-doc {
-    color: var(--text-dim);
-    font-size: 0.72rem;
-    margin-bottom: 0.6rem;
-    white-space: pre-wrap;
-}
-.insp-actions { display: flex; gap: 0.5rem; margin-top: 0.7rem; }
-
-.param-row {
-    display: grid;
-    grid-template-columns: 108px minmax(0, 1fr);
-    gap: 0.4rem;
-    align-items: center;
-    margin-bottom: 0.4rem;
-}
-.param-row.gated { display: none; }
 .param-label {
     color: var(--text-dim);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.param-label .req { color: var(--red); }
-.param-row .cfg-input,
-.param-row select { width: 100%; }
-.param-wired {
-    grid-column: 1 / -1;
-    color: var(--accent);
-    font-size: 0.7rem;
-    font-family: monospace;
-}
-.diag-box {
-    margin-top: 0.5rem;
-    padding: 0.4rem;
-    background: var(--surface-alt);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    font-size: 0.72rem;
-    white-space: pre-wrap;
-}
-
-/* ---- console: removed ----
-   The page-local log (#ed-log) is gone -- every editor note goes to the
-   floating system console (#console-output, shell.js), like all views. */
 
 /* ---- collapsible rails --------------------------------------------------
    The toolbar toggles add/remove body classes; the grid tracks collapse to
@@ -564,11 +296,9 @@ body.editor-body.ed-right-off .ed-right { border-left-width: 0; }
 
 @media (prefers-reduced-motion: reduce) {
     body.editor-body { transition: none; }
-    .ed-canvas.glide,
-    .ed-canvas.glide .ed-canvas-inner { transition: none; }
 }
 
-/* ---- graph settings (editor/settings.js) ---- */
+/* ---- graph settings ---- */
 .gs-list { display: flex; flex-direction: column; gap: 10px; padding: 8px 4px 4px; }
 .gs-row { display: flex; flex-direction: column; gap: 4px; }
 .gs-label { font-size: 12px; color: var(--text-dim); font-weight: 600; }

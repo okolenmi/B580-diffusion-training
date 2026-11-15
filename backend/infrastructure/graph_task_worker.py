@@ -396,37 +396,6 @@ class MemoryTelemetry:
         return False
 
 
-def wire_memory_events(memory, writer, device, backstop) -> None:
-    """MEM-05 #4: route lease/eviction decisions into the event file.
-
-    The lease policy (MEM-06) reports every decision through
-    ``GraphMemory.report_memory_event``; this is the worker's side of
-    that bridge -- the decision crosses the process boundary as a
-    memory record carrying the MB and the measured cost in ms, with
-    the device snapshot alongside so the frame sits in the timeline
-    like any other. A device that cannot answer (CPU) writes no
-    frame: there are no device numbers to report, and the decision's
-    log line is the policy's own.
-    """
-
-    def _write(event: str, mb: float, cost_ms: float) -> None:
-        stats = device.memory_stats()
-        if stats is None:
-            return
-        writer.memory(
-            reserved_mb=stats["reserved_mb"],
-            allocated_mb=stats["allocated_mb"],
-            peak_mb=max(stats["peak_allocated_mb"], stats["peak_reserved_mb"], _engine_high_water_mb()),
-            budget_mb=memory.budget_mb,
-            backstop=backstop,
-            event=event,
-            mb=mb,
-            cost_ms=cost_ms,
-        )
-
-    memory.on_memory_event = _write
-
-
 def main(argv: list[str] | None = None) -> int:
     # The floor first, before the signal handlers: a child that cannot run
     # should say why on stderr, where the supervisor's log will keep it.
@@ -528,12 +497,9 @@ def main(argv: list[str] | None = None) -> int:
             budget_mb=memory.budget_mb,
             backstop=backstop,
         )
-        # MEM-05 #4: the fixed-interval producer, and the bridge that
-        # carries lease/eviction decisions into the same file. Both
-        # wrap the whole run -- discovery included, which is the
-        # child's longest stretch of device-quiet time and would
-        # otherwise be the one part of the process no frame covers.
-        wire_memory_events(memory, writer, device_ctx, backstop)
+        # The fixed-interval producer wraps the whole run -- discovery
+        # included, which is the child's longest stretch of device-quiet
+        # time and would otherwise be the one part of the process no frame covers.
         with MemoryTelemetry(device_ctx, writer, memory, backstop, cancel):
             outcome = run_execution(
                 graph, writer, cancel, build_runtime(writer, memory=memory)

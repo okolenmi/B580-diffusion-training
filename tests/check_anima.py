@@ -20,7 +20,7 @@ import tempfile
 from safetensors.torch import save_file
 
 from families.anima import adapters as anima_adapters
-from families.anima.conditioning import AnimaConditioning, AnimaConditioningKit, AnimaTextEncoder, TextEncoding
+from families.anima.conditioning import AnimaConditioningKit, AnimaTextEncoder
 from families.anima.dit import AnimaDiT, DiTConfig, RotaryEmbedding3D, rotate_split_half
 from families.anima.denoiser import load_denoiser
 from families.anima.latents import LATENTS
@@ -31,8 +31,8 @@ from data.ids import spec_fields
 from families.api.adapters import TrainableSelection, descriptors_from_shapes, plan_adapter
 
 from families.api.parts import ModelPart, PartInfo, PartKind, PartSource
-from families.general.adapters.inject import descriptors_from_model, inject
-from families.general.vae.codec import LatentSpec, VAECodec
+from families.general.adapters.inject import descriptors_from_model
+from families.general.vae.codec import VAECodec
 from families.general.vae.wan import WanImageVAE, to_image_state
 from families.sdxl.latents import LATENTS as SDXL_LATENTS
 from .support import check, raises, run

@@ -79,9 +79,6 @@ class GraphDoc:
     def edges_to(self, uid: str) -> list[Edge]:
         return [e for e in self.edges if e.to_node == uid]
 
-    def event_edges_from(self, uid: str) -> list[Edge]:
-        return [e for e in self.event_edges if e.from_node == uid]
-
     def for_run(self) -> GraphDoc:
         """The document without presentation: layouts and views never reach a run."""
         nodes = tuple(NodeSpec(n.uid, n.class_name, n.params, n.title, {}, n.addons) for n in self.nodes)

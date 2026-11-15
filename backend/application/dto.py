@@ -48,12 +48,6 @@ class ReconcileResult:
     still_running: int = 0
 
 
-@dataclass(frozen=True, slots=True)
-class RawConfig:
-    """A config file's exact text (raw editor round-trip)."""
-
-    content: str
-
 # --------------------------------------------------------------------------
 # Graphs (M4)
 # --------------------------------------------------------------------------

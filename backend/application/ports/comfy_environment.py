@@ -38,7 +38,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -340,16 +339,3 @@ print(json.dumps({"ok": True, "packages": out}))
                 f"{(result.stderr or '').strip()[-200:]}"
             )
         return (), f"{interpreter} printed no package list"
-
-    def _read_venv_in_process(self) -> tuple[tuple[tuple[str, str], ...], str | None]:
-        """For tests: read *this* interpreter instead of a subprocess."""
-        import json
-
-        result = subprocess.run(
-            [sys.executable, "-I", "-c", self._INVENTORY_CHILD],
-            capture_output=True, text=True, timeout=self.timeout,
-        )
-        payload = json.loads(result.stdout.splitlines()[-1])
-        return (
-            tuple((str(n), str(v)) for n, v in payload["packages"]), None,
-        ) if payload.get("ok") else ((), payload.get("reason"))

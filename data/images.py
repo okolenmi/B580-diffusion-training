@@ -61,9 +61,6 @@ def fit_boxes(width: int, height: int, policy: SizePolicy) -> tuple[tuple[int, i
     return (new_w, new_h), boxes
 
 
-def crop_count(width: int, height: int, policy: SizePolicy) -> int:
-    return len(fit_boxes(width, height, policy)[1]) if policy.mode == "fit" else 1
-
 
 def load_crops(path: str | Path, policy: SizePolicy):
     """The crops of one image as uint8 arrays (H, W, 3), in crop order."""

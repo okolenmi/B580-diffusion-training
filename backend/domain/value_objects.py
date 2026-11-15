@@ -52,26 +52,6 @@ class RunStatus(str, Enum):
         return not RUN_TRANSITIONS[self]
 
 
-class TrainingMode(str, Enum):
-    """``tuning.method`` -- what a run actually trains.
-
-    The four values are the ones ``nodes.config_model`` declares (four
-    ``Literal`` unions, one per tuning strategy). ``Run.mode`` used to
-    be a bare ``str``, so a typo or a fifth strategy reached the database
-    as a run that could never be read back as anything meaningful; a
-    ``str``-valued enum keeps every existing comparison and JSON
-    round-trip working while making the vocabulary a type
-    (docs 08 S-24).
-
-    Not a ``training_mode`` naming: it *is* the tuning method, and the
-    config inspector is what produces it.
-    """
-
-    LORA = "lora"
-    CYCLIC = "cyclic"
-    DISTILLATION = "distillation"
-    FULL = "full"
-
 
 RUN_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
     # FAILED is reachable from CREATED: a launch can fail before the

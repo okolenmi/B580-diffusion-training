@@ -63,8 +63,8 @@ The three questions to ask before any change:
 | `backend/` | its own layers (archive/old-documentation/design/backend/01-architecture.md, the ten rules); `graph`, `families/api` | torch at import time; a concrete family | infrastructure may import `nodes/` (the catalog) |
 | `frontend/` | itself | anything on the Python side by name | talks to the server over `/api/v1` only |
 
-**Pinned by (target):** one import-boundary check (a new `scripts/check_imports.py`, wired into
-`scripts/full_gate.sh` beside the existing `check_quality.py` and `check_docs.py`) that parses imports with `ast` and fails on any edge
+**Pinned by (target):** one import-boundary check (`scripts/check_imports.py`, wired into
+`scripts/full_gate.sh` beside `check_quality.py`) that parses imports with `ast` and fails on any edge
 this table forbids. It must exist **before** the first family file is written;
 the rule has no value if it is only a document.
 
@@ -380,23 +380,21 @@ incident narrative. They go stale and they bury the code. The rules:
 | the docstring | the contract: what a caller must know, no history |
 | `docs/decisions/NNNN-*.md` | a decision with a cost and a test that pins it |
 | `docs/experiment-results.md` | measured numbers, incidents, open or resolved findings; code **cites** the entry, it does not copy it |
-| `CHANGELOG.md` | what changed for a user |
 | git history | how it used to be |
 
 Hard rules:
 
 1. **No measured numbers in code comments** (VRAM, speed, thresholds). They go
    to `docs/experiment-results.md` with the date and hardware, and the comment points
-   there. `scripts/check_docs.py` already checks numbers asserted in docs against
-   the code; extend it, do not duplicate the habit.
+   there. `scripts/check_comments.py` flags numbers and history in comments.
 2. **No history in comments** ("previously", "used to", "after the fix").
 3. A comment that restates the next line is deleted.
 4. If a long explanation is needed to make the code understandable, the design
    is the problem; say so in a decision record and simplify.
 5. Do not delete or rename a `docs/experiment-results.md` entry that a source comment
    cites (the known-issues README says this; keep it).
-6. Docs are checked by `scripts/check_docs.py` in `full_gate.sh`: a new fact
-   about the code that is a number or a name should be registered there.
+6. Docs are checked by `scripts/check_doc_links.py` and `scripts/check_doc_refs.py`
+   in `full_gate.sh`: links, citations and repo paths they name must resolve.
 
 ## 13. Testing
 
@@ -467,7 +465,7 @@ catalog format, setting keys, REST routes, DB schemas. They are written in
 - [ ] Events declared if it needs backward flow; payloads are frozen.
 - [ ] Declaration test + logic test + graph test; CPU only.
 - [ ] Docstring is a contract; comments are why-only; no measurements.
-- [ ] CHANGELOG line if a user sees it; `docs` registered if it asserts a number.
+- [ ] `docs` registered if it asserts a number.
 
 ### 16.2 Review (what a reviewer asks)
 

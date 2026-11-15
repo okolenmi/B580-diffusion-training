@@ -60,7 +60,6 @@ class SettingsIn(BaseModel):
     """Partial update: absent key = untouched, empty string = clear
     the override and fall back to auto-detection."""
 
-    default_config: str | None = None
     comfy_dir: str | None = None
     venv_python: str | None = None
     checkpoints_dir: str | None = None
@@ -69,7 +68,6 @@ class SettingsIn(BaseModel):
 
     def to_changes(self) -> SettingsChanges:
         return SettingsChanges(
-            default_config=self.default_config,
             comfy_dir=self.comfy_dir,
             venv_python=self.venv_python,
             checkpoints_dir=self.checkpoints_dir,

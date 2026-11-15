@@ -66,3 +66,11 @@ export function h(tag, attrs = {}, ...children) {
   for (const child of children.flat(3)) if (child != null) node.append(child);
   return node;
 }
+
+/* Replace what the root holds with these children, skipping nullish ones. Replacing, not appending: the install screen
+   redraws every second while pip runs. `Node.append` also
+   renders a null argument as the text "null", and several pieces of the screens are conditional, so the skipping has to
+   happen here rather than being remembered at each call site. */
+export function mount(root, ...children) {
+  root.replaceChildren(...children.flat().filter((c) => c !== null && c !== undefined && c !== false));
+}

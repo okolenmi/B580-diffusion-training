@@ -29,7 +29,7 @@
    --------------------------------------------------------------------------- */
 
 import { api, ApiError } from "../api.js";
-import { el, showMessage } from "../lib/dom.js";
+import { el, mount, showMessage } from "../lib/dom.js";
 import { errText } from "../lib/errors.js";
 import { log, logError } from "../lib/log.js";
 
@@ -51,18 +51,6 @@ function h(tag, attrs = {}, ...children) {
     node.append(child instanceof Node ? child : document.createTextNode(String(child)));
   }
   return node;
-}
-
-
-/* Append children, skipping nullish ones. `Node.append` renders a null
-   argument as the text "null", and several pieces of both screens are
-   conditional -- so the skipping has to happen here rather than being
-   remembered at each call site. */
-function mount(root, ...children) {
-  for (const child of children.flat()) {
-    if (child === null || child === undefined || child === false) continue;
-    root.append(child);
-  }
 }
 
 
@@ -699,6 +687,8 @@ function renderInstallStatus(root, job, freshLines = 0) {
           ? h("button", { class: "btn btn-primary", type: "button", onclick: startInstall }, "Try again")
           : null),
   );
+  const logBox = root.querySelector(".setup-log");
+  if (logBox) logBox.scrollTop = logBox.scrollHeight;
 }
 
 /* ---- step 3: paths ------------------------------------------------------ */

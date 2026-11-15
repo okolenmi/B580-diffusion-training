@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { ApiError } from "../js/api.js";
 import { errText } from "../js/lib/errors.js";
 
-const { el, showMessage } = await import("../js/lib/dom.js");
+const { el, mount, showMessage } = await import("../js/lib/dom.js");
 
 /* ---- errText ----------------------------------------------------------- */
 
@@ -83,4 +83,18 @@ test("el returns the node", () => {
 test("el says which id was missing, instead of failing later at the use site", () => {
   globalThis.document = { getElementById: () => null };
   assert.throws(() => el("nope"), /no element with id "nope"/);
+});
+/* ---- mount ------------------------------------------------------------- */
+
+test("mount replaces the root's children, so a redraw never stacks a second copy", () => {
+  const root = { children: ["old"], replaceChildren(...c) { this.children = c; } };
+  mount(root, "a", "b");
+  mount(root, "a", "b");
+  assert.deepEqual(root.children, ["a", "b"]);
+});
+
+test("mount skips nullish and false children and flattens arrays", () => {
+  const root = { children: [], replaceChildren(...c) { this.children = c; } };
+  mount(root, null, "a", undefined, false, ["b", null]);
+  assert.deepEqual(root.children, ["a", "b"]);
 });

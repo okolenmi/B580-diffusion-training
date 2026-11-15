@@ -94,7 +94,8 @@ cd "$SCRIPT_DIR"
 #
 # `python -m backend.first_run --check` reports what is missing and exits
 # without installing. Set DISTILLATION_NO_BROWSER=1 to stop it opening a
-# browser; the install link is printed either way.
+# browser; the install link is printed either way. The browser opens only
+# once the server answers (a detached helper waits for it), not before the restart.
 "$PYTHON" -m backend.first_run "$@" || exit $?
 
 exec "$PYTHON" -m backend.cli --host 0.0.0.0 "$@"

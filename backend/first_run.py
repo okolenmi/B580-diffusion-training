@@ -64,6 +64,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 import webbrowser
 from pathlib import Path
 
@@ -307,6 +309,44 @@ def open_browser(url: str) -> bool:
         return False
 
 
+#: How long the detached opener waits for the server before giving up (the printed link still works).
+OPEN_WAIT_SECONDS = 180.0
+
+
+def wait_until_serving(url: str, timeout: float = OPEN_WAIT_SECONDS, interval: float = 0.5,
+                       sleep=time.sleep, clock=time.monotonic) -> bool:
+    """Poll ``url`` until the server answers (any HTTP status counts: it is accepting requests), or ``timeout`` passes.
+
+    The server needs seconds between the restart and its first accepted connection (imports, the catalog), and a
+    browser sent to the port earlier shows "unable to connect" until the person reloads."""
+    deadline = clock() + timeout
+    while True:
+        try:
+            urllib.request.urlopen(url, timeout=3).close()
+            return True
+        except urllib.error.HTTPError:
+            return True
+        except (urllib.error.URLError, OSError):
+            pass
+        if clock() >= deadline:
+            return False
+        sleep(interval)
+
+
+def open_when_serving(url: str) -> bool:
+    """Open the browser once the server answers. Runs in a detached process, because the restart replaces the one that asked."""
+    return wait_until_serving(url) and open_browser(url)
+
+
+def start_browser_opener(url: str) -> None:
+    """Detach a helper that opens ``url`` when the server is up; the restart that follows does not take it down."""
+    subprocess.Popen(
+        [sys.executable, "-m", "backend.first_run", "--open-when-serving", url],
+        cwd=Path(__file__).resolve().parents[1], start_new_session=True,
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+
+
 def next_argv(argv: list[str]) -> list[str]:
     """The `run_server.sh` invocation to re-exec with.
 
@@ -373,10 +413,13 @@ def bootstrap(python: str, host: str, port: int, argv: list[str]) -> None:
     print(f"    Open this to finish setting up:  {url}")
     if browser_suppressed():
         print(f"    (no browser opened: {NO_BROWSER_ENV} is set)")
-    elif not open_browser(url):
-        # Not an error. Printed either way, because an auto-open that
-        # silently did nothing is indistinguishable from one that worked.
-        print("    (could not open a browser automatically -- use the link above)")
+    else:
+        # The server is not listening yet: it is restarted below and needs a few seconds. The browser opens when it answers.
+        try:
+            start_browser_opener(url)
+            print("    (the browser opens by itself once the server is ready)")
+        except OSError:
+            print("    (could not open a browser automatically -- use the link above)")
     print()
 
     # Hand the interpreter forward, so the server -- and every training
@@ -413,6 +456,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8766)
+    parser.add_argument("--open-when-serving", metavar="URL", help=argparse.SUPPRESS)
     parser.add_argument(
         "--check", action="store_true",
         help="report which packages are missing and exit; install nothing",
@@ -433,6 +477,9 @@ def main(argv: list[str] | None = None) -> int:
     # what is forwarded on re-exec is this original `argv` rather than the
     # unrecognised remainder -- see `next_argv`.
     args, _unrecognised = parser.parse_known_args(argv)
+
+    if args.open_when_serving:
+        return 0 if open_when_serving(args.open_when_serving) else 1
 
     missing = missing_server_packages()
     if not missing:

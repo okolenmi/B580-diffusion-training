@@ -222,7 +222,7 @@ function deviceChoice() {
       h("p", {}, devices.reason
         || "The graphics cards could not be listed."),
       h("p", { class: "text-dim" },
-        "Screen 1 already reported whether a device is usable."));
+        "Cards are checked again once the packages are installed."));
   }
   if (!devices.devices.length) {
     return h("div", { class: "setup-conflict is-refused" },
@@ -239,7 +239,8 @@ function deviceChoice() {
       d.total_memory_mb
         ? h("span", { class: "text-dim" }, ` — ${d.total_memory_mb.toLocaleString()} MB VRAM`)
         : null,
-      h("span", { class: "text-dim" }, " — the only one, so the choice is made."));
+      h("span", { class: "text-dim" }, " — the only one, so the choice is made."),
+      d.note ? h("div", { class: "text-dim" }, d.note[0].toUpperCase() + d.note.slice(1) + ".") : null);
   }
   return h("fieldset", { class: "setup-options" },
     h("legend", {}, `Which graphics card? (${devices.devices.length} found)`),
@@ -250,7 +251,7 @@ function deviceChoice() {
       h("span", { class: "setup-option-body" },
         h("span", { class: "setup-option-title" }, d.name || `Device ${d.index}`),
         h("span", { class: "setup-option-meta" },
-          d.total_memory_mb ? `${d.total_memory_mb.toLocaleString()} MB VRAM` : "size unknown")),
+          d.total_memory_mb ? `${d.total_memory_mb.toLocaleString()} MB VRAM` : (d.note || "size unknown"))),
     )));
 }
 

@@ -162,6 +162,8 @@ class InstallerDeviceOut(BaseModel):
     name: str | None
     total_memory_mb: float | None
     reason: str | None
+    #: Set when the row did not come from torch (see `SystemCards`).
+    note: str | None = None
 
 
 class InstallerDevicesOut(BaseModel):

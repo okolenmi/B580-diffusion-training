@@ -138,6 +138,9 @@ def get_devices(
     screen 2 is *shown*, not on every readiness render, and not before the
     user has been told what the choice is for.
 
+    Before torch is installed the subprocess cannot import it, so the rows are the system's own list of display adapters, each with a
+    `note` saying torch checks it after the install (`SystemCards`).
+
     `enumerated` distinguishes "looked and found none" from "could not
     look". Both send an empty list, and a wizard that renders both as "no
     graphics card" would be asserting a fact it does not have.
@@ -181,6 +184,7 @@ def get_devices(
                 name=row.name,
                 total_memory_mb=row.total_memory_mb,
                 reason=row.reason,
+                note=row.detail,
             )
             for index, row in enumerate(rows)
         ],

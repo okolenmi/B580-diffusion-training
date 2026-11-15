@@ -36,6 +36,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TypeGuard, TypeVar
 
+from .system_cards import SystemCards
 from ..limits import DEVICE_REFRESH_MIN_SECONDS, READINESS_CACHE_SECONDS
 
 #: A cache entry: (taken_at, ...payload). Any shape the two caches
@@ -266,6 +267,8 @@ class TorchDeviceProbe(DeviceProbe):
     backend: str = "xpu"
     timeout: float = 60.0
     _in_process: bool = field(default=False, repr=False)
+    #: Names the cards by what the system lists when torch is not installed yet.
+    system_cards: SystemCards = field(default_factory=SystemCards, repr=False)
 
     #: Runs in the child. Prints one JSON line; anything else is a probe
     #: failure rather than an answer.
@@ -337,7 +340,7 @@ import json
 try:
     import torch
 except Exception as exc:
-    print(json.dumps({"ok": False, "reason": "torch is not importable in "
+    print(json.dumps({"ok": False, "torch_missing": isinstance(exc, ImportError), "reason": "torch is not importable in "
                          "this interpreter (%s: %s)" % (type(exc).__name__, exc)}))
     raise SystemExit(0)
 backend = __BACKEND__
@@ -409,7 +412,7 @@ print(json.dumps({"ok": True, "devices": devices, "count": count}))
                 )
             return (), "the device list produced no answer"
         if not payload.get("ok"):
-            return (), payload.get("reason") or "no devices"
+            return self._without_torch(payload)
 
         return tuple(
             DeviceReport(
@@ -421,6 +424,19 @@ print(json.dumps({"ok": True, "devices": devices, "count": count}))
             )
             for row in payload.get("devices") or []
         ), None
+
+    def _without_torch(self, payload: dict) -> tuple[tuple[DeviceReport, ...], str | None]:
+        """Torch is not installed yet (the setup page asks before it is): list the cards by name from the system instead.
+
+        The rows say so in ``detail``, because "present" here means the system sees an adapter, not that torch can use it."""
+        reason = payload.get("reason") or "no devices"
+        if not payload.get("torch_missing"):
+            return (), reason
+        found = self.system_cards.list()
+        if not found:
+            return (), reason
+        note = "seen by the system; torch checks it after the install"
+        return tuple(DeviceReport(present=True, backend=self.backend, name=card.name, detail=note) for card in found), None
 
     def _list_here(self) -> tuple[tuple[DeviceReport, ...], str | None]:
         """Same question, same interpreter, stdout captured. For tests."""
@@ -450,7 +466,7 @@ print(json.dumps({"ok": True, "devices": devices, "count": count}))
         if payload is None:
             return (), f"the device list produced no answer: {output.strip()[-200:]}"
         if not payload.get("ok"):
-            return (), payload.get("reason") or "no devices"
+            return self._without_torch(payload)
         return tuple(
             DeviceReport(
                 present=bool(row.get("ok")),

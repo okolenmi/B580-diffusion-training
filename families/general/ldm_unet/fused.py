@@ -18,9 +18,13 @@ class FusedGeglu:
     def enable(device: torch.device) -> str:
         """Route every GEGLU through the fused kernel. Returns "" when it is on, otherwise why it stays off."""
         try:
-            module = importlib.import_module("xpu_kernels.triton.geglu")
+            importlib.import_module("xpu_kernels")
         except ImportError as error:
             return f"xpu-kernels is not installed ({error})"
+        try:
+            module = importlib.import_module("xpu_kernels.triton.geglu")
+        except ImportError as error:
+            return f"the installed xpu-kernels has no fused GEGLU, or Triton is missing ({error}); the fused GEGLU is newer than the 0.3.0 release"
         if not hasattr(module, "geglu"):
             return "the installed xpu-kernels has no fused GEGLU"
         probe = torch.zeros(2, 8, dtype=torch.bfloat16, device=device)

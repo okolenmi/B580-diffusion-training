@@ -1,6 +1,6 @@
 # 72. Quantized frozen weights and the owner's kernels
 
-Status: **int8 frozen base weights built, hardware numbers in; NF4 built (CPU-tested, not run on the card).** Kernels: `xpu-kernels` on PyPI (0.3 or newer; source
+Status: **int8 frozen base weights built, hardware numbers in; NF4 built (CPU-tested, not run on the card).** Kernels: `xpu-kernels` on PyPI (0.3 or newer; the fused GEGLU and the 5-12x faster weight dequantizer are in the repository only, not in 0.3.0; source
 `github.com/okolenmi/oko-xpu-kernels`): ConvRot INT8 linear, `dL/dx` backward, fused weight dequantizer, fused NF4 dequantizer, fused
 rms+rope and rms+adaLN (Anima, phase 8). Measured on the B580 with the trainer's own UNet by the kernels' `debug/probe_sdxl_trainer_step.py`.
 

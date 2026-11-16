@@ -1,6 +1,6 @@
 # 73. Making attention capturable (brief for a separate project)
 
-Status: **open for a fused kernel; a pure-torch stopgap (route D) is built.** Written to be handed to the `xpu-kernels` project or an upstream report.
+Status: **route A is written in `xpu-kernels` (`xpu_kernels.triton.attention`, unreleased, arithmetic checked on the CPU) and waits for the card (`TESTING.md` 96); a pure-torch stopgap (route D) is built.** Written to be handed to the `xpu-kernels` project or an upstream report.
 
 ## Problem
 - The trainer's replayed step (`engine/step/graphed.py`) captures forward, loss and backward in one `torch.xpu.XPUGraph`. The default SDPA kernel

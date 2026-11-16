@@ -188,5 +188,16 @@ Start from a clone with no `venv`, no `backend.db` and no `assets` folder, then 
 3. Step 4: *Download* for each set. The files land in `assets/clip_tokenizer` (`vocab.json`, `merges.txt`), `assets/qwen_tokenizer` (`vocab.json`, `merges.txt`, `tokenizer_config.json`) and `assets/t5_tokenizer` (`tokenizer.json`). The sources are Hugging Face `openai/clip-vit-large-patch14`, `Qwen/Qwen2.5-0.5B` and `google/t5-v1_1-xxl` (the last falls back to `google-t5/t5-small`); they were written from memory and could not be fetched from the sandbox, so a failed download or an Anima prompt that tokenizes differently from ComfyUI is the thing to report (`python -m tests.reference.equivalence_tokens` compares them).
 4. Step 5 with ComfyUI's `models` folder (not `models/checkpoints`): *Finish setup* must succeed without a ComfyUI folder anywhere. Then `/graph` lists your checkpoints and a 20-step run starts in the environment you chose (Settings shows `venv_python`).
 
+## 96. xpu-kernels: the repository's unreleased changes and the new Triton attention (about 30 minutes)
+
+In the `oko-xpu-kernels` checkout (its latest commit), with your venv active; install it with `pip install -e .` after `./build.sh` if the `.so` is stale.
+
+1. `python -m xpu_kernels` and `python debug/verify_published_wheel.sh`'s gate part: the gates must be open, including `geglu` and `geglu_backward`. The SYCL weight dequantizer was rewritten since 0.3.0 (probe: 0.454 to 0.039 ms), so run `python debug/verify_prepare_fused.py` and `debug/verify_linear_dx.py` too: the results must be identical to before.
+2. `python debug/verify_attention_capture.py`: report all four parts. Part 1 shows whether the kernel even compiles for the B580; part 3 whether the capture works (the line `CAPTURE FAILED` is a result, not a bug to hide); part 4 is the time against flash and math. The trainer's target: capture works, replay identical, at least 2x faster than math.
+3. Only if part 3 captures: `python debug/bench_attention.py` (several minutes) and send the `best for ...` lines. A kernel that captures but is slower than math is recorded as dead, as the Triton dequantizer was.
+4. Then a 50-step run with the int8 base and `buckets.max_shapes=4`, before and after, to see whether the new dequantizer moves the step (about 82 ms per step was spent there).
+
+The trainer does not call the attention yet; that comes after step 2 and 3 say it is worth it.
+
 ## Reading a bundle automatically
 `python -m accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m perf hwcheck` without running anything.

@@ -99,7 +99,7 @@ check(inventory.version_of("definitely-not-installed-xyzzy") is None,
       "an absent package is None, not a fault")
 
 # And the manifest's import names must come from the same map, or the
-# readiness screen and the training code could disagree about what
+# setup page and the training code could disagree about what
 # "installed" means for the same package.
 manifest_names = {r.distribution: r.import_name for r in REQUIREMENTS}
 check(all(

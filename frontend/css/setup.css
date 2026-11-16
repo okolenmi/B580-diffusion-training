@@ -53,87 +53,27 @@
     max-width: 68ch;
 }
 
-/* ---- 2. Verdict ---------------------------------------------------------- */
-
-.setup-verdict {
-    border: 1px solid var(--border);
-    border-left-width: 3px;
-    border-radius: var(--radius);
-    padding: 12px 16px;
-    margin: 14px 0 20px;
-    font-size: 14px;
-    background: var(--surface);
-}
-.setup-verdict.is-ok {
-    border-left-color: var(--green);
-}
-.setup-verdict.is-warn {
-    border-left-color: var(--amber, #f59e0b);
-}
-
-/* ---- 3. Tiers ------------------------------------------------------------ */
-
-.setup-tier {
-    margin: 22px 0 0;
-}
-.setup-tier-title {
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.09em;
-    text-transform: uppercase;
-    color: var(--text-dim);
-    margin: 0 0 8px;
-}
-
-/* ---- 4. Package row ------------------------------------------------------ */
+/* ---- 2. Package row ------------------------------------------------------ */
 
 .setup-pkg {
-    display: grid;
-    grid-template-columns: 20px minmax(0, 1fr);
-    grid-template-areas:
-        "state name"
-        "state why"
-        "state size";
+    display: flex;
+    flex-wrap: wrap;
     align-items: baseline;
-    column-gap: 10px;
-    padding: 9px 12px;
+    gap: 2px 10px;
+    padding: 8px 12px;
     border: 1px solid var(--border);
     border-radius: var(--radius);
     background: var(--surface);
-    margin-bottom: 6px;
 }
-
-.setup-pkg-state {
-    grid-area: state;
-    text-align: center;
-    font-size: 13px;
-    line-height: 1.5;
-}
+.setup-pkg-state { width: 18px; text-align: center; font-size: 13px; }
 .setup-pkg.is-ok .setup-pkg-state { color: var(--green); }
-.setup-pkg.is-missing { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
-.setup-pkg.is-missing .setup-pkg-state { color: var(--red); }
-/* Degraded, not broken: amber rather than red, and dimmed. */
-.setup-pkg.is-optional-missing { opacity: 0.72; }
-.setup-pkg.is-optional-missing .setup-pkg-state { color: var(--text-dim); }
-
-.setup-pkg-name {
-    grid-area: name;
-    font-family: var(--font-mono);
-    font-size: 13px;
-}
+.setup-pkg.is-missing .setup-pkg-state { color: var(--text-dim); }
+.setup-pkg-name { font-family: var(--font-mono); font-size: 13px; }
 .setup-pkg-version { font-size: 11px; }
-.setup-pkg-why {
-    grid-area: why;
-    font-size: 12px;
-    line-height: 1.45;
-}
-.setup-pkg-size {
-    grid-area: size;
-    font-size: 11px;
-    font-family: var(--font-mono);
-}
+.setup-pkg-why { flex: 1 1 100%; padding-left: 28px; font-size: 12px; line-height: 1.45; }
+.setup-pkg .btn { margin-left: auto; }
 
-/* ---- 5. Device ----------------------------------------------------------- */
+/* ---- 3. Device ----------------------------------------------------------- */
 
 .setup-device {
     display: flex;
@@ -165,7 +105,7 @@
     word-break: break-word;
 }
 
-/* ---- 6. Fields ----------------------------------------------------------- */
+/* ---- 4. Fields ----------------------------------------------------------- */
 
 .setup-field {
     display: block;
@@ -184,7 +124,7 @@
 }
 .setup-input { --ctl-pad: 9px 12px; --ctl-family: var(--font-mono); --ctl-font: 13px; --ctl-bg: var(--surface); --ctl-radius: var(--radius); }
 
-/* ---- 7. Actions ---------------------------------------------------------- */
+/* ---- 5. Actions ---------------------------------------------------------- */
 
 .setup-actions {
     display: flex;
@@ -209,7 +149,7 @@
     font-weight: 500;
 }
 
-/* ---- 8. States ----------------------------------------------------------- */
+/* ---- 6. States ----------------------------------------------------------- */
 
 .setup-error {
     margin: 14px 0 0;
@@ -230,16 +170,7 @@
 .setup-link:hover { text-decoration: underline; }
 
 .setup-root { min-height: 240px; }
-/* ---- 9. Screen 2: the install target and the GPU choice ----------------- */
-
-.setup-subtitle {
-    margin: 26px 0 10px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
+/* ---- 7. Environment choice ---------------------------------------------- */
 
 /* A fieldset of radios. The border is removed because the legend carries
    the question; what is left is the spacing between the options, which is
@@ -301,59 +232,12 @@
     color: var(--text-dim);
 }
 
-/* CUDA and anything else unsupported: below a rule, under its own
-   heading, never a radio. A disabled radio next to a live one is an
-   invitation, and the failure it invites is 3 GB of unusable torch
-   discovered hours later (ADR 0004). */
-.setup-future { margin-top: 22px; }
-.setup-future hr {
-    border: 0;
-    border-top: 1px solid var(--border);
-    margin: 0 0 14px;
-}
-.setup-future h3 {
-    margin: 0 0 8px;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
+/* ---- 8. The install log ------------------------------------------- */
 
-.setup-conflict {
-    margin: 20px 0 0;
-    padding: 13px 15px;
-    border-radius: var(--radius);
-    border: 1px solid var(--border);
-    background: var(--surface-alt);
-}
-.setup-conflict.is-safe {
-    border-color: color-mix(in srgb, var(--green) 40%, var(--border));
-}
-.setup-conflict.is-refused {
-    border-color: color-mix(in srgb, var(--red) 45%, var(--border));
-    background: color-mix(in srgb, var(--red) 8%, var(--surface-alt));
-}
-.setup-conflict h3 { margin: 0 0 5px; font-size: 13px; }
-.setup-conflict p { margin: 0 0 6px; font-size: 12px; line-height: 1.55; }
-.setup-conflict p:last-child { margin-bottom: 0; }
-
-.setup-conflict-list {
-    margin: 9px 0 0;
-    padding-left: 17px;
-    font-size: 12px;
-    line-height: 1.55;
-    color: var(--text-dim);
-}
-.setup-conflict-list li { margin-bottom: 4px; }
-
-/* ---- 10. The install progress ------------------------------------------- */
-
-.setup-log,
-.setup-cmd {
+.setup-log {
     margin: 12px 0 0;
     padding: 10px 12px;
-    max-height: 220px;
+    height: 340px;
     overflow: auto;
     font-family: var(--font-mono);
     font-size: 11px;
@@ -365,15 +249,21 @@
     background: var(--surface);
     color: var(--text-dim);
 }
-/* The command is the safety argument made readable: it is what makes
-   "nothing already installed can change" checkable rather than asserted. */
-.setup-cmd {
-    color: var(--accent);
-    border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+
+/* ---- 9. Step list ---------------------------------------------------------- */
+
+.setup-steps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 18px;
+    margin: 0 0 18px;
+    padding: 0;
+    list-style: none;
+    counter-reset: step;
+    font-size: 12px;
+    color: var(--text-dim);
 }
-/* A line that arrived since the last poll gets a left rule, so a long
-   install shows progress without the log jumping under the reader. */
-.setup-log.is-new {
-    border-left: 2px solid var(--accent);
-    padding-left: 14px;
-}
+.setup-steps li::before { counter-increment: step; content: counter(step) ". "; }
+.setup-steps li.is-current { color: var(--text); font-weight: 600; }
+.setup-steps li.is-done { color: var(--green); }
+.setup-packages { margin: 14px 0 8px; display: flex; flex-direction: column; gap: 4px; }

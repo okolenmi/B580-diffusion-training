@@ -120,3 +120,20 @@ stated cost — no preflight — is real until that lands.
   browser unattended. Its presence is otherwise silent — one subprocess
   that exits 0 and prints nothing when the packages are there, which is
   every start after the first.
+
+## Redesign (2026-11)
+
+The first wizard asked for a ComfyUI directory it did not need, offered to "reuse ComfyUI's virtualenv" without asking for the
+virtualenv, and installed into an environment before looking at what was in it. It was replaced; what holds now:
+
+* **Order**: graphics card, environment, install, prompt files, models folder. Each step needs only what the earlier ones produced.
+* **The environment is a folder**, new (`./venv`) or existing (any virtualenv folder). The server reads it through its own
+  interpreter (`POST /installer/environment`), lists what is missing, and pins every installed package for the install. The request
+  to `/install` names only the target; the server decides the package list, so nothing the client sends reaches pip.
+* **torch comes from the Intel XPU index in its own stage**, before the rest, so the rest never replaces it with a PyPI build. An
+  environment whose torch lacks `+xpu` is refused rather than piled onto.
+* **ComfyUI is optional.** "Configured" means the checkpoint and LoRA folders resolve (from `models_dir`, an explicit setting, or a
+  ComfyUI checkout beside the project). The `never_install` tiers, the conflict check against ComfyUI's requirements and the readiness
+  report are gone.
+* **Prompt vocabulary files** are downloaded into `./assets` instead of being found inside ComfyUI.
+* The routes that run a chosen interpreter (`/environment`, `/environment/verify`) are POST, inside the Origin guard.

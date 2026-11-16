@@ -60,7 +60,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.application.ports.environment import IMPORT_NAMES  # noqa: E402
 from backend.application.ports.requirements_manifest import (  # noqa: E402
-    COMFY_ADDITIONS,
     FULL_INSTALL,
     REQUIREMENTS,
     TRAINING,
@@ -91,7 +90,7 @@ LOCAL = frozenset({
 #: the trainer itself must not acquire -- diffusers, transformers, and
 #: (for A2) kohya sd-scripts. Those are oracles for checking this project,
 #: not inputs to it; declaring them in requirements.txt would put them in
-#: COMFY_ADDITIONS and pip-install an oracle into the trainer's own
+#: the manifest and pip-install an oracle into the trainer's own
 #: environment, which is the wrong dependency direction. The trainer
 #: reaches its training deps only through the manifest below.
 #: The trainer tree: what the backend is built on top of.
@@ -114,12 +113,8 @@ EXCLUDED_PREFIXES = (
 #: version of that package makes -- but the code reaching for it directly is
 #: still a fact, and recording it is cheaper than rediscovering it later.
 #:
-#: These are deliberately *not* in the manifest. Adding them to the required
-#: tier would put them in `COMFY_ADDITIONS`, which is the list the installer
-#: pip-installs into ComfyUI's virtualenv -- a venv this project does not
-#: own. Trading a guaranteed transitive dependency for a new install into
-#: someone else's environment is the wrong trade, so the import stays and
-#: the reasoning lives here instead.
+#: These are deliberately *not* in the manifest: each is a guaranteed transitive dependency, and declaring it would add a second
+#: place to keep its version right.
 TRANSITIVE_BUT_DIRECT: dict[str, str] = {
     "pydantic": "fastapi requires it, in every version since 0.100",
     "starlette": "fastapi requires it; we import it directly in the ASGI "
@@ -229,17 +224,6 @@ report("regex" in training,
 report("tqdm" in training,
        "and so is tqdm, which manager/builder.py imports at top level",
        f"training tier: {training}")
-
-not_flagged = [r.distribution for r in by_tier(TRAINING) if not r.never_install]
-report(not not_flagged,
-       "every training row is never_install, so the installer will not pip "
-       "them into a virtualenv this project does not own",
-       f"rows without the flag: {not_flagged}")
-
-leaked = sorted(set(training) & set(COMFY_ADDITIONS))
-report(not leaked,
-       "and none of them reached COMFY_ADDITIONS",
-       f"leaked into what gets installed into comfyi's venv: {leaked}")
 
 print("\n-- requirements.txt and the required tier are the same list --")
 

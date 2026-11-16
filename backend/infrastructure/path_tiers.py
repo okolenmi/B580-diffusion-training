@@ -98,18 +98,19 @@ def _comfy_or_store(project_root: Path, get_setting: GetSetting) -> Path:
 
 def venv_python(project_root: Path, get_setting: GetSetting) -> str:
     import_paths(project_root)  # load repo .env before reading env
-    # A *configured* interpreter is used as-is, never silently
-    # substituted: a stale/bogus value fails loudly at spawn instead of
-    # the trainer quietly running under a different Python than asked.
+    # A *configured* interpreter is used as-is, never silently substituted: a stale value fails loudly at spawn instead of the
+    # trainer quietly running under a different Python than asked. Convention (the project's own venv, then one beside it) only
+    # fills in when nothing was chosen.
     env = os.environ.get("VENV_PYTHON", "")
     if env:
         return env
-    sibling = project_root.parent / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    if sibling.exists():
-        return str(sibling)
     override = get_setting("venv_python", "")
     if override:
         return override
+    relative = "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    for folder in (project_root / "venv", project_root.parent / "venv"):
+        if (folder / relative).exists():
+            return str(folder / relative)
     return "python"
 
 

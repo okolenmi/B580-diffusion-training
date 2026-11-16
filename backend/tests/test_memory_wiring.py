@@ -436,73 +436,29 @@ def test_health_reports_the_live_ledger_snapshot() -> None:
     )
 
 
-def test_the_probe_is_admitted_and_degrades_when_refused() -> None:
-    print("-- the probe: admitted around report(), not checked when refused --")
-    # Success path: the probe's claim is taken and released around the
-    # report, so readiness costs exactly nothing.
+def test_the_probe_is_admitted_and_refused_with_the_breakdown() -> None:
+    print("-- the device list: admitted around the probe, 409 when the card is held --")
     probe = FakeDeviceProbe()
     services = build_services(device_probe=probe)
     ledger = services.memory_ledger()
     check(ledger is not None, "fixture: the provider builds a ledger")
     assert ledger is not None
     before = ledger.held_mb()
-    report = services.installer.check.execute()
-    check(
-        report.device_checked is True and report.device_present,
-        "an admitted probe is asked and answers",
-    )
-    check(
-        report.device_total_memory_mb == 12216.0,
-        f"the readiness report carries the total ({report.device_total_memory_mb})",
-    )
-    check(
-        ledger.held_mb() == before,
-        f"the probe's claim is released when it returns "
-        f"(held {ledger.held_mb()} before {before})",
-    )
-    check(
-        probe.calls == 2,
-        f"one report to size the ledger, one for readiness ({probe.calls})",
-    )
+    status, _, body = asgi_request(create_app(services), "/api/v1/installer/devices")
+    check(status == 200 and body["devices"], f"an admitted probe is asked and answers ({status})")
+    check(ledger.held_mb() == before, f"the probe's claim is released when it returns (held {ledger.held_mb()}, before {before})")
 
-    # Refusal path: the probe is NOT asked, and the degraded report
-    # carries the breakdown rather than asserting anything about the
-    # device (rule 2: no unchecked claim; rule 6: the refusal carries
-    # the whole detail).
     probe2 = FakeDeviceProbe()
-    services2 = build_services(
-        project_root=Path(tempfile.mkdtemp(prefix="backend-mem-probe-")),
-        device_probe=probe2,
-    )
+    services2 = build_services(project_root=Path(tempfile.mkdtemp(prefix="backend-mem-probe-")), device_probe=probe2)
     ledger2 = services2.memory_ledger()
     assert ledger2 is not None
-    blocker = ledger2.reserve(
-        "probe-blocker", ledger2.capacity_mb, exploratory=False
-    )
+    blocker = ledger2.reserve("probe-blocker", ledger2.capacity_mb, exploratory=False)
     check(isinstance(blocker, Grant), "fixture: the card is fully held")
-    degraded = services2.installer.check.execute()
-    check(
-        degraded.device_checked is False and degraded.device_present is False,
-        "a refused probe is not asked (device_checked False)",
-    )
-    check(
-        degraded.device_reason is None,
-        "a memory refusal is not stated as a fact about the device",
-    )
-    detail = degraded.device_detail or ""
-    check(
-        "probe not run" in detail and "probe-blocker" in detail,
-        f"the degraded report carries the breakdown ({detail!r})",
-    )
-    check(
-        probe2.calls == 1,
-        f"the probe itself ran only for sizing, not while refused "
-        f"({probe2.calls})",
-    )
-    check(
-        ledger2.held_mb() == ledger2.capacity_mb,
-        "the refused probe held nothing",
-    )
+    calls = probe2.calls
+    status, _, body = asgi_request(create_app(services2), "/api/v1/installer/devices")
+    check(status == 409 and body["error"]["code"] == "memory_unavailable", f"a refused probe is a 409 memory_unavailable ({status})")
+    check(probe2.calls == calls, "the probe was not asked while refused")
+    check(ledger2.held_mb() == ledger2.capacity_mb, "the refused probe held nothing")
 
 
 # -- the cross-process property, with real processes ------------------------
@@ -1871,7 +1827,7 @@ def main() -> None:
     test_release_is_idempotent_on_every_path()
     test_without_a_ledger_every_start_refuses_explicitly()
     test_health_reports_the_live_ledger_snapshot()
-    test_the_probe_is_admitted_and_degrades_when_refused()
+    test_the_probe_is_admitted_and_refused_with_the_breakdown()
     test_admission_reads_the_remembered_peak_and_keys_the_row()
     test_child_reported_peaks_land_in_the_store()
     test_reconcile_drain_files_peaks()

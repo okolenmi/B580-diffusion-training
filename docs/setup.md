@@ -6,29 +6,47 @@
 (`backend/presentation/event_schema.py` tells `X | None` annotations apart with an identity that only holds from 3.14).
 The floor is stated once, in `backend/python_floor.py`; `python -m backend.cli` and the graph child check it first.
 
+## First run: the setup page
+
+`./run_server_linux.sh` (or `run_server_windows.bat`) installs the five server packages into a temporary environment, starts the
+server and opens `/setup`. Setup has five steps; nothing is installed until you press *Install*.
+
+1. **Graphics card**: the Intel GPU the system lists (PyTorch may not exist yet).
+2. **Environment**: *a new virtualenv* (created at `./venv`) or *an existing virtualenv* (its folder, the one that holds `bin/python`;
+   ComfyUI's works). For an existing one the packages found there are listed first and everything already installed is pinned, so
+   pip adds what is missing and cannot move what is there. An environment whose torch is not the Intel XPU build is refused.
+3. **Install**: pip output streams into a scrollable log. PyTorch comes from the Intel XPU index (`download.pytorch.org/whl/xpu`),
+   everything else from PyPI. Afterwards the card is checked through that environment's own PyTorch.
+4. **Prompt files**: the CLIP, Qwen and T5 vocabulary files, downloaded into `./assets/<set>_tokenizer`. Optional; the buttons stay
+   available if you skip it. Where the network is blocked, put the files into those folders by hand (`TESTING.md` lists the names).
+5. **Models folder**: default `./models`. A ComfyUI `models` folder works as it is: checkpoints are read from `<folder>/checkpoints`
+   and LoRAs are saved to `<folder>/loras`. Missing folders are created.
+
+Finishing stores `models_dir` and the environment's interpreter (`venv_python`) in the settings. ComfyUI is not needed anywhere.
+After that the page is closed (`installer_not_allowed`); change both from Settings.
+
+Without the page: set `VENV_PYTHON` (in `.env` or the environment) to an interpreter that has the packages in
+`backend/application/ports/requirements_manifest.py`, and `models_dir` in Settings.
+
 ## Folder layout
 
-Zero-config layout: this project, a ComfyUI checkout and a virtual environment are siblings.
+Nothing is required next to the project. The interpreter used for runs is, in order: `VENV_PYTHON`, the `venv_python` setting,
+`./venv`, a `venv` folder beside the project. Copy `.env.example` to `.env` (gitignored) to set variables for every start.
 
 ```
 some-parent-dir/
-├── ComfyUI/
-├── venv/                      # torch (XPU or CUDA) and ComfyUI's own packages
-└── B580-diffusion-training/   # this repo
+└── B580-diffusion-training/   # this repo: ./venv (optional), ./models (default), ./assets, ./datasets
 ```
-
-Another layout: copy `.env.example` to `.env` (gitignored) and set `COMFY_DIR` and `VENV_PYTHON`, or export them for one
-run (environment variables win over `.env`). `VENV_PYTHON` is the interpreter that has torch; the server and every run it
-starts use it. The browser wizard at `/setup` can also create the environment on a first run.
 
 ## This project's own packages
 
 ```bash
-pip install -r requirements.txt        # the server only (five lines); torch comes from the venv
+pip install -r requirements.txt        # the server only (five lines)
 ```
 
-The trainer itself needs `torch`, `numpy`, `pillow`, `safetensors`, `tqdm`, `regex` and `tokenizers` (Anima) in the venv;
-the manifest the wizard checks is `backend/application/ports/requirements_manifest.py`.
+The trainer itself needs `torch` (Intel XPU build), `numpy`, `pillow`, `safetensors`, `tqdm`, `regex` and `tokenizers` (Anima) in the
+environment; `transformers` is optional (auto-captioning). The manifest the setup page checks is
+`backend/application/ports/requirements_manifest.py`.
 
 ## Running
 
@@ -58,12 +76,11 @@ that has torch. It filters by name part (`python run_tests.py memory`). Checks t
 | `BACKEND_LOG_LEVEL` | log level of the backend's own loggers (default `INFO`) |
 | `BACKEND_ACCESS_LOG` | `1` prints one uvicorn line per request (off by default) |
 
-A `comfy_dir` / `venv_python` set in Settings is stored in the database; it sits below the environment for those two keys
-and above it for `checkpoints_dir` and `loras_dir` (`backend/infrastructure/path_tiers.py` owns that order).
+`venv_python` and the model folders set in Settings are stored in the database (`backend/infrastructure/path_tiers.py` owns the order).
 
 ## Where model files live
 
-The app reads and writes inside ComfyUI's layout (`models/checkpoints`, `models/loras`) and the repository's `datasets/`.
+The app reads and writes `<models folder>/checkpoints` and `<models folder>/loras` (the layout ComfyUI uses) and the repository's `datasets/`.
 `POST /api/v1/settings {"models_dir": "/srv/models"}` moves checkpoints and loras to `<dir>/checkpoints` and
 `<dir>/loras`; an explicit `checkpoints_dir` or `loras_dir` still wins, and `""` clears it.
 

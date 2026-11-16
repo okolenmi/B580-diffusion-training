@@ -51,11 +51,11 @@ from .application.services import (
 from .application.use_cases import (
     ApplyInstallation,
     BrowseAssets,
-    CheckComfyConflicts,
     GetInstall,
     InstallJob,
     StartInstall,
-    CheckRequirements,
+    InspectEnvironment,
+    TokenizerSetup,
     DeleteGraph,
     DeleteGraphExecutions,
     DescribeRequirements,
@@ -121,7 +121,8 @@ from .application.ports.environment import (
     MetadataPackageInventory,
     TorchDeviceProbe,
 )
-from .application.ports.comfy_environment import LocalComfyEnvironment
+from .application.ports.tokenizer_files import HubTokenizerFiles
+from .application.ports.venv_inspection import LocalVenvInspector
 from .application.ports.package_installer import PipInstaller
 from .infrastructure.settings_store import SqliteSettingsStore
 from .infrastructure.workspace import WorkspaceLayout
@@ -172,7 +173,7 @@ def build_container(settings: Settings) -> Container:
         settings.project_root, settings_kv=settings_store.get
     )
 
-    # Shared by readiness and by the wizard's GPU choice: one probe, one
+    # Shared by memory sizing and by the wizard's GPU list: one probe, one
     # answer, one 1.8s import.
 
     # Shared between the installer services so a job can be polled.
@@ -300,43 +301,23 @@ def build_container(settings: Settings) -> Container:
     describe_modules = DescribeGraphModules(catalog=node_catalog)
 
     image_libraries = FsImageLibraries(layout)
+    inspect_environment = InspectEnvironment(LocalVenvInspector(), settings.project_root)
     services = ApplicationServices(
         installer=InstallerServices(
-            # One probe object, used by both `check` and the devices route.
-            # Two instances would each pay the 1.8s torch import; and a
-            # wizard that reported the card from one probe and offered a
-            # choice from another could show two different machines.
-            check=CheckRequirements(
-                inventory=MetadataPackageInventory(),
-                device=device_probe,
-                memory_ledger=memory_ledger,
-            ),
             device_probe=device_probe,
-            apply=ApplyInstallation(settings=settings_store),
+            apply=ApplyInstallation(settings=settings_store, project_root=settings.project_root),
             manifest=DescribeRequirements(),
-            # No interpreter is fixed here. `venv_python` is a setting the
-            # wizard sets, so the route resolves it and passes it per call --
-            # a port that captured it at wiring time would report on
-            # whichever venv happened to be configured when the server
-            # started.
-            conflicts=CheckComfyConflicts(environment=LocalComfyEnvironment()),
-            # One job dict, shared: `install` writes it and `install_status`
-            # reads it. The base interpreter is the one running the server,
-            # which is the only interpreter known to work here.
+            inspect=inspect_environment,
+            # One job dict, shared: `install` writes it and `install_status` reads it. New environments are made with the interpreter
+            # running the server, the only one known to work here.
             install=StartInstall(
                 installer=PipInstaller(),
-                project_root=settings.project_root,
+                inspect=inspect_environment,
                 base_python=sys.executable,
                 jobs=install_jobs,
-                # Asked at install time rather than captured here: the wizard
-                # exists to *find* this interpreter, and `execute` installs
-                # into the one the server detects rather than the one a
-                # request names. Same reason `conflicts` above takes the port
-                # instead of a snapshot taken at wiring time.
-                detect_comfy_python=lambda: LocalComfyEnvironment
-                .default_venv_python(str(settings_store.get("comfy_dir", ""))),
             ),
             install_status=GetInstall(jobs=install_jobs),
+            tokenizers=TokenizerSetup(HubTokenizerFiles(settings.project_root)),
         ),
         settings=SettingsServices(
             read=GetSettings(settings=settings_store),

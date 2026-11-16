@@ -95,7 +95,7 @@ think the button is broken.
 READINESS_CACHE_SECONDS = 30.0
 """How long a device probe's answer is reused before it is asked again.
 
-This exists because `GET /installer/readiness` answers a question that costs
+This exists because `GET /installer/devices` answers a question that costs
 a torch import -- measured at 2.2 s on this machine -- and because a plain
 GET is deliberately *not* behind the Origin check (ADR 0001: only
 state-changing methods are). So any web page the user has open can trigger

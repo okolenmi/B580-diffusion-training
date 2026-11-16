@@ -203,6 +203,10 @@ class SqliteSettingsStore(SettingsStore):
                 continue
             try:
                 Path(value).mkdir(parents=True, exist_ok=True)
+                if key == "models_dir":
+                    # The layout ComfyUI uses, so the same folder can serve both tools.
+                    for sub in ("checkpoints", "loras"):
+                        (Path(value) / sub).mkdir(exist_ok=True)
             except OSError as exc:
                 logger.warning(
                     "%s is stored as '%s' but the directory could not be "

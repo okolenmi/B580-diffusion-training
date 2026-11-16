@@ -56,10 +56,8 @@ from backend.application.services import (
     MonitorServices,
     SettingsServices,
 )
-from backend.application.ports.comfy_environment import (
-    ComfyEnvironment,
-    ComfyEnvironmentInfo,
-)
+from backend.application.ports.tokenizer_files import TokenizerFiles, set_by_key
+from backend.application.ports.venv_inspection import VenvDevice, VenvInspector, VenvInventory
 from backend.application.ports.package_installer import (
     InstallError,
     PackageInstaller,
@@ -71,8 +69,8 @@ from backend.application.use_cases.install_packages import (
 from backend.application.use_cases import (
     ApplyInstallation,
     BrowseAssets,
-    CheckComfyConflicts,
-    CheckRequirements,
+    InspectEnvironment,
+    TokenizerSetup,
     DeleteGraph,
     DeleteGraphExecutions,
     DescribeRequirements,
@@ -478,8 +476,7 @@ def gdef(nodes=(), edges=(), settings: dict | None = None, **rest) -> GraphDefin
 class RefusingPackageInstaller(PackageInstaller):
     """An installer that refuses, for suites that are not about installing.
 
-    Same reasoning as `UnreadableComfyEnvironment`, and the stakes are
-    higher: a default that *worked* would mean any test that reached the
+    A default that *worked* would mean any test that reached the
     install endpoint for an unrelated reason would run real pip against a
     real interpreter. This one refuses, so a test that means to install has
     to say so by passing its own.
@@ -499,31 +496,37 @@ class RefusingPackageInstaller(PackageInstaller):
         )
 
 
-class UnreadableComfyEnvironment(ComfyEnvironment):
-    """A ComfyUI environment that cannot be read, which refuses.
+class FakeVenvInspector(VenvInspector):
+    """Environments held in memory: ``{folder: VenvInventory}``. Anything not listed has no interpreter.
 
-    The default for every suite that calls `build_services` without caring
-    about the conflict check, and it is deliberately *not* a real read.
-
-    The alternative -- wiring `LocalComfyEnvironment` -- would make any test
-    that touched the endpoint a statement about the developer's own
-    ComfyUI: green on this machine, red or (worse) a different answer on
-    anyone else's. The same trap `path_tiers` has, for the same reason.
-
-    It refuses rather than reporting an empty environment, because "safe
-    with nothing pinned" is a *pass*. A default that can pass is a default
-    that lets a test assert the check works without having checked
-    anything.
+    The real inspector runs the environment's Python, which would make a test a statement about the machine it runs on.
     """
 
-    def read(self, comfy_dir: str, venv_python: str | None = None) -> ComfyEnvironmentInfo:
-        return ComfyEnvironmentInfo(
-            comfy_dir=comfy_dir,
-            requirements_error=(
-                "no ComfyUI environment is wired in this test; pass a "
-                "stub port if the test is about the conflict check"
-            ),
-        )
+    def __init__(self, environments: dict[str, VenvInventory] | None = None, device: VenvDevice | None = None) -> None:
+        self.environments = environments or {}
+        self.device_result = device or VenvDevice(True, "Fake Arc", 12288, "2.9.0+xpu")
+
+    def inspect(self, venv_dir: str) -> VenvInventory:
+        return self.environments.get(venv_dir, VenvInventory(None, error=f"no Python found in {venv_dir}"))
+
+    def device(self, venv_dir: str) -> VenvDevice:
+        return self.device_result
+
+
+class FakeTokenizerFiles(TokenizerFiles):
+    """Tokenizer files held in memory; ``download`` marks a set complete without touching the network."""
+
+    def __init__(self) -> None:
+        self.have: set[str] = set()
+        self.downloads: list[str] = []
+
+    def present(self, key: str) -> tuple[str, ...]:
+        return tuple(set_by_key(key).files) if key in self.have else ()
+
+    def download(self, key: str) -> tuple[str, ...]:
+        self.downloads.append(key)
+        self.have.add(key)
+        return tuple(set_by_key(key).files)
 
 
 class FakeDeviceProbe(DeviceProbe):
@@ -565,6 +568,8 @@ def build_services(
     graph_supervisor: GraphExecutionSupervisor | None = None,
     monitor_bus: MonitorBusPort | None = None,
     device_probe: DeviceProbe | None = None,
+    venv_inspector: VenvInspector | None = None,
+    tokenizer_files: TokenizerFiles | None = None,
 ) -> ApplicationServices:
     """Wire the use cases against fakes (the composition root's twin).
 
@@ -674,6 +679,7 @@ def build_services(
     # same services object the route reads.
     install_jobs: dict = {}
     refusing_installer = RefusingPackageInstaller()
+    inspect_environment = InspectEnvironment(venv_inspector or FakeVenvInspector(), project_root)
     template_db = SqliteDatabase(project_root / "test-templates.db")
     template_db.initialize()
     template_library = SqliteTemplateLibrary(template_db)
@@ -694,37 +700,19 @@ def build_services(
     describe_modules = DescribeGraphModules(catalog=contract_catalog)
     return ApplicationServices(
         installer=InstallerServices(
-            check=CheckRequirements(
-                inventory=MetadataPackageInventory(),
-                device=shared_probe,
-                memory_ledger=memory_ledger,
-            ),
-            # The same object `check` uses, so a test cannot be handed two
-            # views of the machine. FakeDeviceProbe falls back to the single
-            # current device and reports enumerate_all False, which is the
-            # honest answer for a stub.
             device_probe=shared_probe,
-            apply=ApplyInstallation(settings=settings_store),
+            apply=ApplyInstallation(settings=settings_store, project_root=project_root),
             manifest=DescribeRequirements(),
-            # No interpreter: these tests never ask for a conflict check, and
-            # wiring the real one would put a subprocess in every suite that
-            # happens to call build_services. The field is required rather
-            # than defaulted so that a new installer capability cannot be
-            # added without deciding what the tests should see of it -- which
-            # is how the four suites that construct InstallerServices by hand
-            # found out.
-            conflicts=CheckComfyConflicts(environment=UnreadableComfyEnvironment()),
-            # Both share `install_jobs`, so polling works. The installer
-            # refuses by default: a default that ran real pip would make any
-            # test that reached this endpoint for another reason capable of
-            # modifying a real environment.
+            inspect=inspect_environment,
+            # Refusing by default: a default that ran real pip would let any test that reaches the endpoint modify a real environment.
             install=StartInstall(
                 installer=refusing_installer,
-                project_root=project_root,
+                inspect=inspect_environment,
                 base_python=sys.executable,
                 jobs=install_jobs,
             ),
             install_status=GetInstall(jobs=install_jobs),
+            tokenizers=TokenizerSetup(tokenizer_files or FakeTokenizerFiles()),
         ),
         settings=SettingsServices(
             read=GetSettings(settings=settings_store),

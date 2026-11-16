@@ -26,12 +26,8 @@ from .ports.environment import DeviceProbe
 from .ports.event_bus import EventBus
 from .use_cases.apply_installation import ApplyInstallation
 from .use_cases.browse_assets import BrowseAssets
-from .use_cases.check_comfy_conflicts import CheckComfyConflicts
 from .use_cases.install_packages import GetInstall, StartInstall
-from .use_cases.check_requirements import (
-    CheckRequirements,
-    DescribeRequirements,
-)
+from .use_cases.inspect_environment import DescribeRequirements, InspectEnvironment, TokenizerSetup
 from .use_cases.delete_graph import DeleteGraph
 from .use_cases.graph_modules import DescribeGraphModules, ResolveTemplate
 from .use_cases.run_template import RunTemplate
@@ -78,33 +74,23 @@ class SettingsServices:
 
 @dataclass(frozen=True, slots=True)
 class InstallerServices:
-    """First-run: what this machine can do, and writing the paths once.
+    """First-run setup: what the machine has, the environment to train in, and the model folder.
 
-    A separate group from Settings because it is a *different capability*,
-    not a different route over the same one: `check` runs a device probe
-    that imports torch in a subprocess, and `apply` is refused once the
-    installation is configured. Neither belongs behind the settings keys.
+    Separate from Settings because it is a different capability: ``install`` runs pip and ``apply`` is refused once the
+    installation is configured.
     """
 
-    check: CheckRequirements
     apply: ApplyInstallation
     manifest: DescribeRequirements
-    #: Reads ComfyUI's own declarations and its venv, and refuses if they
-    #: disagree. Separate from `check` because it is asked only when the
-    #: user picks "reuse ComfyUI's venv", and it answers about a different
-    #: interpreter than the one running the server.
-    conflicts: CheckComfyConflicts
-    #: The probe itself, not a use case. Screen 2 needs the *list*, and the
-    #: list is a device question rather than an install question -- so it is
-    #: asked here rather than folded into `check`, which answers a yes/no
-    #: for readiness and must stay cheap.
+    #: Which of the project's packages an environment has; never writes.
+    inspect: InspectEnvironment
+    #: The graphics cards the system lists, for the first step. Not tied to any environment: torch may not exist yet.
     device_probe: DeviceProbe
-    #: The only writing use case in the installer. `install_status` reads
-    #: the *same* job dict -- two objects with two dicts would be an
-    #: install that cannot be polled, so they are wired together on purpose
-    #: and the sharing is visible here rather than happening by accident.
+    #: ``install_status`` reads the same job dict ``install`` writes, so a job can be polled.
     install: StartInstall
     install_status: GetInstall
+    #: Vocabulary files for the prompt tokenizers, downloaded into the project's ``assets`` folder.
+    tokenizers: TokenizerSetup
 
 
 @dataclass(frozen=True, slots=True)

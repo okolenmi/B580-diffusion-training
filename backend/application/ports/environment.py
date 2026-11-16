@@ -209,7 +209,7 @@ class DeviceProbe(ABC):
 
         Separate from `report()` because they are asked for different
         reasons and at different costs. `report()` answers "can a run start
-        here", which is one boolean and is asked on every readiness render.
+        here", which is one boolean and is asked on every render.
         This answers "which card should the torch wheel be built for", which
         is only meaningful on a machine with more than one, and which has to
         enumerate before it can answer.
@@ -574,7 +574,7 @@ print(json.dumps({"ok": True, "devices": devices, "count": count}))
 class CachedDeviceProbe(DeviceProbe):
     """Single-flight and cached, so one torch import answers many requests.
 
-    **The problem this exists for, measured.** `GET /installer/readiness`
+    **The problem this exists for, measured.** `GET /installer/devices`
     costs a torch import (1.7 s on this machine) and a plain GET is
     deliberately *not* behind the Origin check -- ADR 0001 guards only
     state-changing methods, because a read cannot be the attack. So any web

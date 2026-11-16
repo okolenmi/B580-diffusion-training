@@ -20,13 +20,7 @@ from ..domain.graph import GRAPH_FORMAT, GraphDefinition
 from ..domain.memory_settings import AUTO
 from ..application.ports.settings_store import SettingsChanges, SettingsView
 from ..application.use_cases.apply_installation import InstallationState
-from ..application.use_cases.check_comfy_conflicts import (
-    CONFLICT,
-    SAFE,
-    UNKNOWN,
-    ConflictReport,
-)
-from ..application.use_cases.check_requirements import ReadinessReport
+from ..application.use_cases.inspect_environment import EnvironmentReport
 from ..domain.value_objects import GraphStatus
 
 
@@ -85,273 +79,131 @@ def settings_out(view: SettingsView) -> SettingsViewOut:
 # --------------------------------------------------------------------------
 
 
-class InstallerPackageOut(BaseModel):
-    """One manifest row and whether this machine has it.
-
-    `why` is on the row rather than in the wizard, so the sentence a user
-    reads about a missing package is written next to the requirement it
-    describes and cannot drift from it.
-    """
-
-    name: str
-    tier: str
-    why: str
-    installed: bool
-    installed_version: str | None
-    blocking: bool
-    approx_mb: int | None
-    never_install: bool
-
-
-class InstallerReadinessOut(BaseModel):
-    ready: bool
-    packages: list[InstallerPackageOut]
-    missing: list[str]
-    #: False when the package check already answered the question and the
-    #: device was never asked. A client must not render "no device" for a
-    #: machine nobody asked.
-    device_checked: bool
-    device_present: bool
-    device_name: str | None
-    device_total_memory_mb: float | None
-    device_reason: str | None
-    device_detail: str | None
-    #: What a full install would fetch, counting only installable absences.
-    approx_download_mb: int
-
-
 class InstallerStateOut(BaseModel):
     configured: bool
-    resolved_comfy_dir: str | None
     resolved_checkpoints_dir: str | None
     resolved_loras_dir: str | None
+    resolved_models_dir: str | None
+    #: Where the model folder goes when the user accepts the default.
+    default_models_dir: str
     missing: list[str]
-
-
-class ConflictFindingOut(BaseModel):
-    """One package in ComfyUI's venv, and which of the three states it is in.
-
-    `outcome` is sent as the string rather than collapsed into a boolean,
-    because the three states get three different treatments and a boolean
-    would make the client re-derive the distinction from two fields.
-    """
-
-    name: str
-    installed_version: str | None
-    declared_specifier: str | None
-    outcome: str
-    description: str
-
-
-class AdditionFindingOut(BaseModel):
-    """One of our four packages, against ComfyUI's declarations."""
-
-    name: str
-    declared_specifier: str | None
-    blocked: bool
-    description: str
 
 
 class InstallerDeviceOut(BaseModel):
-    """One card. `index` is torch's device index, which is what a user
-    passes to `torch.xpu.set_device` and therefore what the choice has to
-    refer to -- not the position in this list."""
+    """One card. ``index`` is torch's device index, not the position in the list."""
 
     index: int
     present: bool
     name: str | None
     total_memory_mb: float | None
     reason: str | None
-    #: Set when the row did not come from torch (see `SystemCards`).
+    #: Set when the row did not come from torch (see ``SystemCards``).
     note: str | None = None
 
 
 class InstallerDevicesOut(BaseModel):
-    """Every card, and whether anybody looked.
-
-    `enumerated` is the same distinction as `ReadinessReport.device_checked`:
-    an empty list from a probe that ran and found nothing is not the same
-    answer as one from a probe that failed, and a wizard offering a GPU
-    choice needs to be able to tell them apart.
-    """
+    """Every card, and whether anybody looked: an empty list from a probe that ran differs from one that failed."""
 
     enumerated: bool
     backend: str
     devices: list[InstallerDeviceOut]
-    #: Why there are none, when there are none. None when there are some.
+    reason: str | None
+
+
+class PackageStateOut(BaseModel):
+    name: str
+    tier: str
+    why: str
+    approx_mb: int | None
+    installed_version: str | None
+
+
+class InstallerEnvironmentOut(BaseModel):
+    """What an environment holds, and what installing into it would do."""
+
+    kind: str
+    venv_dir: str
+    interpreter: str | None
+    python_version: str | None
+    error: str | None
+    packages: list[PackageStateOut]
+    to_install: list[str]
+    download_mb: int
+    installed_count: int
+    problems: list[str]
+    usable: bool
+
+
+class InstallerVerifyOut(BaseModel):
+    present: bool
+    name: str | None
+    total_memory_mb: int | None
+    torch_version: str | None
     reason: str | None
 
 
 class InstallerInstallIn(BaseModel):
-    """What to install, and where.
+    """Where to install. What gets installed is decided by the server from the environment itself."""
 
-    `constraints` is sent by the client rather than recomputed server-side
-    because the server must never be handed a weaker pin set than the one it
-    would build -- but the conflict check is a 0.16s subprocess in another
-    interpreter and re-running it here would double that and make the two
-    answers differ. So the pins are computed once, by the endpoint that can
-    be trusted to compute them, and this request says which target they
-    belong to.
-    """
-
-    target: str
-    packages: list[str]
-    constraints: list[str] = Field(default_factory=list)
-    #: Only for `target="comfy"`. Which interpreter to install into.
-    comfy_venv_python: str | None = None
+    target: Literal["new", "existing"]
+    #: The virtualenv folder; required for ``existing``.
+    venv_dir: str | None = None
 
 
 class InstallerInstallOut(BaseModel):
-    """The job, immediately. Never the result.
-
-    The response exists so the client has an id to poll, which is why it
-    carries the command and the pins: a user agreeing to an install that
-    writes into a virtualenv they did not create should be able to read
-    what will run before it runs.
-    """
+    """The job. ``log`` is the tail of pip's output and ``target_python`` is set once it succeeded."""
 
     id: str
     state: str
     target_label: str
     packages: list[str]
-    constraints: list[str]
-    command: list[str]
     log: list[str]
     error: str | None
     target_python: str | None
     terminal: bool
 
 
-class InstallerConflictsOut(BaseModel):
-    """May the four server packages go into ComfyUI's venv?
-
-    `checked` is separate from `safe` on purpose. "We could not check" and
-    "we checked and it is fine" must never render the same, and a client
-    that only received `safe` would have to guess which one it was.
-    """
-
-    comfy_dir: str
-    checked: bool
-    safe: bool
-    refusal_reason: str | None
-    requirements_path: str | None
-    venv_python: str | None
-    requirements_error: str | None
-    venv_error: str | None
-    counts: dict[str, int]
-    #: Every finding, ordered: conflicts first, because a refusal must lead
-    #: with the reason for it.
-    findings: list[ConflictFindingOut]
-    additions: list[AdditionFindingOut]
-    #: The exact pins an install would use. Sent so the wizard can show what
-    #: "nothing already installed can change" concretely means -- 185 lines
-    #: on this machine -- rather than asking for that on trust.
-    constraints: list[str]
-
-
-def conflicts_out(report: ConflictReport) -> InstallerConflictsOut:
-    order = {CONFLICT: 0, UNKNOWN: 1, SAFE: 2}
-    return InstallerConflictsOut(
-        comfy_dir=report.comfy_dir,
-        checked=report.checked,
-        safe=report.safe,
-        refusal_reason=report.refusal_reason(),
-        requirements_path=report.requirements_path,
-        venv_python=report.venv_python,
-        requirements_error=report.requirements_error,
-        venv_error=report.venv_error,
-        counts={
-            "total": len(report.findings),
-            "safe": len([f for f in report.findings if f.outcome == SAFE]),
-            "conflict": len(report.conflicts),
-            "unknown": len(report.unknowns),
-        },
-        findings=[
-            ConflictFindingOut(
-                name=f.name,
-                installed_version=f.installed_version,
-                declared_specifier=f.declared_specifier,
-                outcome=f.outcome,
-                description=f.describe(),
-            )
-            for f in sorted(report.findings, key=lambda f: (order[f.outcome], f.name))
-        ],
-        additions=[
-            AdditionFindingOut(
-                name=a.name,
-                declared_specifier=a.declared_specifier,
-                blocked=a.blocked,
-                description=a.describe(),
-            )
-            for a in report.additions
-        ],
-        constraints=list(report.constraints),
-    )
-
-
 class InstallerApplyIn(BaseModel):
-    """The paths the wizard collected. All optional -- an absent key is
-    left alone, so a user who accepts every default sends none of them."""
+    """What the wizard collected; an absent key is left alone."""
 
-    comfy_dir: str | None = None
-    checkpoints_dir: str | None = None
-    loras_dir: str | None = None
     models_dir: str | None = None
+    venv_python: str | None = None
 
     def to_changes(self) -> SettingsChanges:
-        return SettingsChanges(
-            comfy_dir=self.comfy_dir,
-            checkpoints_dir=self.checkpoints_dir,
-            loras_dir=self.loras_dir,
-            models_dir=self.models_dir,
-        )
+        return SettingsChanges(models_dir=self.models_dir, venv_python=self.venv_python)
 
 
 class InstallerApplyOut(BaseModel):
-    """The fresh settings view plus the new state, in one response.
-
-    Both, because "did that finish the wizard" is the question the client
-    asks next and answering it from the server's own post-write read is
-    what stops the wizard guessing.
-    """
+    """The fresh settings view plus the new state, so the client learns whether setup is finished from the server's own read."""
 
     settings: dict[str, Any]
     state: dict[str, Any]
 
 
-def readiness_out(report: ReadinessReport) -> InstallerReadinessOut:
-    return InstallerReadinessOut(
-        ready=report.ready,
-        packages=[
-            InstallerPackageOut(
-                name=row.name,
-                tier=row.requirement.tier,
-                why=row.requirement.why,
-                installed=row.satisfied,
-                installed_version=row.installed_version,
-                blocking=row.blocking,
-                approx_mb=row.requirement.approx_mb,
-                never_install=row.requirement.never_install,
-            )
-            for row in report.packages
-        ],
-        missing=[row.name for row in report.missing],
-        device_checked=report.device_checked,
-        device_present=report.device_present,
-        device_name=report.device_name,
-        device_total_memory_mb=report.device_total_memory_mb,
-        device_reason=report.device_reason,
-        device_detail=report.device_detail,
-        approx_download_mb=report.approx_download_mb,
+def environment_out(report: EnvironmentReport) -> InstallerEnvironmentOut:
+    return InstallerEnvironmentOut(
+        kind=report.kind,
+        venv_dir=report.venv_dir,
+        interpreter=report.interpreter,
+        python_version=report.python_version,
+        error=report.error,
+        packages=[PackageStateOut(name=p.name, tier=p.tier, why=p.why, approx_mb=p.approx_mb, installed_version=p.installed_version)
+                  for p in report.packages],
+        to_install=list(report.to_install),
+        download_mb=report.download_mb,
+        installed_count=report.installed_count,
+        problems=list(report.problems),
+        usable=report.usable,
     )
 
 
 def state_out(state: InstallationState) -> InstallerStateOut:
     return InstallerStateOut(
         configured=state.configured,
-        resolved_comfy_dir=state.resolved_comfy_dir,
         resolved_checkpoints_dir=state.resolved_checkpoints_dir,
         resolved_loras_dir=state.resolved_loras_dir,
+        resolved_models_dir=state.resolved_models_dir,
+        default_models_dir=state.default_models_dir,
         missing=list(state.missing),
     )
 

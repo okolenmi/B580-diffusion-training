@@ -1,286 +1,167 @@
-"""The installer surface: what it reports, and when it refuses.
+"""The installer: what an environment holds, what installing does to it, and when setup refuses.
 
-Round-3 follow-on to `archive/old-documentation/design/11-first-run-and-installer.md`. The
-document's §1 asks for a machine-readable requirements list and its §5
-asks for the wizard's checks; this file is the backend half of both, and
-it is deliberately the *hardest* half to get wrong, because every claim it
-makes is about a machine that is not the one running the test.
-
-Three properties, and each is checked against a stub that can only be
-satisfied by doing the thing:
-
-**The readiness report is true about the machine it ran on.** The
-inventory is stubbed with a machine that has the server's packages and not
-the training stack, and the device probe is a spy that fails the test if it
-is asked at all. The second half matters: a probe that imports torch costs
-1.7 s on this hardware, and calling it to be told "no" anyway is a cost
-with no information in it.
-
-**A wizard write is refused once configured.** Not because writing is
-dangerous in itself -- `POST /settings` exists and does the same thing --
-but because a wizard left open in a tab on a working machine should not be
-able to re-point the model directories out from under a run. The refusal
-is 409, not 403: the request was well-formed and the state does not allow
-it now.
-
-**The manifest is data, and the two lists it names are different.** torch
-is in the full install and must never be in the ComfyUI additions, because
-installing torch into a venv another application pins is exactly the
-failure the constraints-file design exists to make unreachable.
+Claims here are about machines that are not the one running the test, so the environment inspector and the pip runner are fakes
+that can only be satisfied by doing the thing. Covers: inspecting a new/existing environment (missing packages, pins, the XPU torch
+check), the install stages (torch from its own index first, everything installed pinned), the pip command line, the apply gate,
+tokenizer files, and the HTTP surface.
 """
 
 from __future__ import annotations
 
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backend.application.ports.environment import (
-    DeviceReport,
-    InstalledPackage,
-)
-from backend.application.ports.requirements_manifest import REQUIREMENTS
+from backend.application.ports.package_installer import InstallError, InstallRequest, PackageInstaller, PipInstaller
+from backend.application.ports.requirements_manifest import REQUIREMENTS, TORCH_INDEX_URL
 from backend.application.ports.settings_store import SettingsChanges
-from backend.application.use_cases import (
-    ApplyInstallation,
-    CheckRequirements,
-    DescribeRequirements,
-)
-from backend.bootstrap import build_container
-from backend.config import Settings
+from backend.application.ports.tokenizer_files import check_content
+from backend.application.ports.venv_inspection import VenvInventory, find_interpreter
 from backend.presentation.app import create_app
-from backend.tests.support import (
-    FakeDeviceProbe,
-    asgi_request,
-    check,
-    finish,
-)
+from backend.tests.support import FakeTokenizerFiles, FakeVenvInspector, asgi_request, build_services, check, finish
 
-ROOT = Path(tempfile.mkdtemp(prefix="backend-installer-"))
+NAMES = [r.distribution for r in REQUIREMENTS]
+SERVER = [r.distribution for r in REQUIREMENTS if r.tier == "required"]
 
 
-class StubInventory:
-    """Reports exactly the versions it is handed, and imports nothing.
-
-    A stub rather than the real inventory on purpose: this file's claims
-    are about a *hypothetical* machine, and reading the real one's metadata
-    would quietly make every assertion below a statement about the machine
-    running the tests instead.
-    """
-
-    def __init__(self, versions: dict[str, str]) -> None:
-        self._versions = versions
-
-    def installed(self):
-        return tuple(
-            InstalledPackage(distribution=name, import_name=name, version=version)
-            for name, version in sorted(self._versions.items())
-        )
-
-    def version_of(self, distribution: str) -> str | None:
-        return self._versions.get(distribution)
-
-    def import_name_for(self, distribution: str) -> str:
-        from backend.application.ports.environment import IMPORT_NAMES
-
-        return IMPORT_NAMES.get(distribution, distribution)
-
-    def distribution_for(self, import_name: str) -> str:
-        for dist, mod in __import__(
-            "backend.application.ports.environment", fromlist=["IMPORT_NAMES"]
-        ).IMPORT_NAMES.items():
-            if mod == import_name:
-                return dist
-        return import_name
+def inventory(**versions: str) -> VenvInventory:
+    return VenvInventory("/env/bin/python", "3.13.1", tuple(versions.items()))
 
 
-class NeverProbe:
-    """A device probe that fails the test if it is asked anything."""
+class RecordingInstaller(PackageInstaller):
+    def __init__(self, fail: Exception | None = None) -> None:
+        self.requests: list[InstallRequest] = []
+        self.fail = fail
 
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def report(self) -> DeviceReport:
-        self.calls += 1
-        raise AssertionError(
-            "the device was probed on a machine already known not to be ready"
-        )
+    def install(self, request, on_line=None):
+        self.requests.append(request)
+        if on_line:
+            on_line("fake pip line")
+        if self.fail:
+            raise self.fail
 
 
-#: Versions for the stub inventory. Arbitrary but plausible, and pinned here
-#: so a fixture cannot quietly acquire a package with no version.
-#:
-#: The *contents* of the two inventories below are derived from the manifest
-#: rather than written out. They were hand-written, and a manifest that
-#: gained two training packages left them stale -- so `FULL` no longer
-#: described a machine that could train, and three checks below failed for
-#: that reason alone. Deriving them makes the fixture incapable of drifting
-#: from the thing it is a fixture for, and a new manifest row with no
-#: version here raises a KeyError instead of silently passing.
-VERSIONS = {
-    "fastapi": "0.139.0",
-    "uvicorn": "0.49.0",
-    "python-multipart": "0.0.32",
-    "tomli_w": "1.2.0",
-    # In this list because requirements.txt lists it and the manifest agrees
-    # -- and it was *missed* in both when the conflict check added it. That
-    # omission was silent in a nasty way: a package the server needs but the
-    # manifest does not know about is invisible to the wizard, so the install
-    # would have run pip without it.
-    "packaging": "26.3",
-    "torch": "2.12.1+xpu",
-    "numpy": "2.5.0rc1",
-    "safetensors": "0.8.0",
-    "pillow": "12.2.0",
-    # Both sub-megabyte and both hard imports of live modules; see
-    # backend/tests/test_declared_dependencies.py, which is what found them.
-    "tqdm": "4.70.1",
-    "regex": "2026.9.29",
-    "tokenizers": "0.23.0",
-}
+def services_with(environments, installer=None, **kw):
+    root = Path(tempfile.mkdtemp(prefix="backend-installer-"))
+    services = build_services(project_root=root, venv_inspector=FakeVenvInspector(environments), **kw)
+    if installer is not None:
+        services.installer.install.installer = installer
+    return services, root
 
-REQUIRED_NAMES = sorted(r.distribution for r in REQUIREMENTS
-                        if r.tier == "required")
-TRAINING_NAMES = sorted(r.distribution for r in REQUIREMENTS
-                        if r.tier == "training")
 
-#: A machine that can serve the API and cannot train. The realistic shape
-#: of "someone installed requirements.txt and stopped".
-SERVER_ONLY = {name: VERSIONS[name] for name in REQUIRED_NAMES}
+def wait(services, job_id, seconds=10):
+    end = time.time() + seconds
+    while time.time() < end:
+        snap = services.installer.install_status.execute(job_id)
+        if snap["terminal"]:
+            return snap
+        time.sleep(0.02)
+    raise AssertionError("install job did not finish")
 
-#: The same machine with the training stack, and a card.
-FULL = {name: VERSIONS[name] for name in REQUIRED_NAMES + TRAINING_NAMES}
-
-PRESENT_CARD = DeviceReport(
-    present=True, backend="xpu",
-    name="Intel(R) Arc(TM) B580 Graphics", total_memory_mb=12216,
-)
 
 # ==========================================================================
-# Section A: the readiness report is true about the machine it ran on
-# ==========================================================================
-print("-- readiness: a machine that can serve but not train --")
+print("-- inspecting an environment: packages first, then problems --")
 
-never = NeverProbe()
-report = CheckRequirements(StubInventory(SERVER_ONLY), never).execute()
+existing = {"/env": inventory(fastapi="0.139.0", numpy="2.1.0", torch="2.9.0+xpu", sympy="1.13")}
+services, root = services_with(existing)
+report = services.installer.inspect.for_target("existing", "/env")
+check(report.usable and report.error is None, "an environment with XPU torch is usable")
+check("torch" not in report.to_install and "numpy" not in report.to_install, "what is installed is not installed again")
+check("uvicorn" in report.to_install and "tokenizers" in report.to_install, "what is missing is listed")
+check("numpy==2.1.0" in report.constraints and "sympy==1.13" in report.constraints,
+      "every installed package is pinned, including ones the project does not know")
+check(report.download_mb > 0 and report.installed_count == 4, "the download size counts only what is missing")
 
-check(not report.ready,
-      "a machine with no training stack is not ready, whatever else is true")
-check({row.name for row in report.blocking_missing} == set(TRAINING_NAMES),
-      f"and every missing training package is named, which is the manifest's "
-      f"training tier rather than a list written here "
-      f"(got {[r.name for r in report.blocking_missing]})")
-check(never.calls == 0,
-      f"the device was never asked, because the answer was already no "
-      f"(asked {never.calls}x)")
-check(not report.device_checked,
-      "and the report says the device was not checked, rather than "
-      "reporting a card it never looked for")
-check(report.device_reason is None,
-      f"'not checked' is not 'no card': device_reason stays None "
-      f"(got {report.device_reason!r}) -- a UI rendering this as the cause "
-      f"would tell a user with a B580 that their graphics card is missing")
+bad = services_with({"/cpu": inventory(torch="2.9.0")})[0].installer.inspect.for_target("existing", "/cpu")
+check(not bad.usable and "XPU" in bad.problems[0], "torch without the +xpu build is a problem, not a silent pass")
 
-check(all(row.satisfied for row in report.packages
-          if row.name in SERVER_ONLY),
-      "and the four server packages it does have are reported satisfied")
+none = services.installer.inspect.for_target("existing", "/nowhere")
+check(none.error and "no Python" in none.error and not none.usable, "a folder without an interpreter is an error")
+empty = services.installer.inspect.for_target("existing", "  ")
+check(empty.error and "choose" in empty.error, "an existing environment needs a folder")
 
-ready = CheckRequirements(StubInventory(FULL), FakeDeviceProbe()).execute()
-check(ready.ready,
-      f"the same machine with the whole declared training stack is ready "
-      f"(missing {[r.name for r in ready.missing]})")
-check(ready.device_checked and ready.device_present,
-      "and now the device *is* asked, and reported present")
-check(ready.device_name == "Intel(R) Arc(TM) B580 Graphics"
-      and ready.device_total_memory_mb == 12216,
-      f"with the card's own name and size, not a guess "
-      f"(got {ready.device_name!r}, {ready.device_total_memory_mb} MB)")
-
-no_card = CheckRequirements(
-    StubInventory(FULL),
-    FakeDeviceProbe(DeviceReport(present=False, reason="torch reports no xpu device")),
-).execute()
-check(not no_card.ready,
-      "everything installed and no card is still not ready -- the packages "
-      "answer 'can it serve', never 'can it train'")
-check(no_card.device_reason == "torch reports no xpu device",
-      f"and the reason is carried through verbatim ({no_card.device_reason!r})")
-
-# A missing *server* package is blocking by definition.
-missing_server = dict(FULL)
-del missing_server["uvicorn"]
-rows = {r.name: r for r in CheckRequirements(
-    StubInventory(missing_server), FakeDeviceProbe()).execute().packages}
-check(rows["uvicorn"].blocking and not rows["uvicorn"].satisfied,
-      "a missing server package is blocking: the server cannot start")
+fresh = services.installer.inspect.for_target("new", None)
+check(fresh.kind == "new" and fresh.to_install == tuple(NAMES) and fresh.constraints == (),
+      "a new environment is missing everything and protects nothing")
+try:
+    services.installer.inspect.for_target("comfy", None)
+    check(False, "an unknown target is refused")
+except ValueError:
+    check(True, "an unknown target is refused")
 
 # ==========================================================================
-# Section B: the manifest is data, and the two lists differ
-# ==========================================================================
-print("\n-- the manifest, and the split that makes an install safe --")
+print("\n-- installing: torch from its own index first, the rest pinned --")
 
-manifest = DescribeRequirements().execute()
-names = {r["name"] for r in manifest["requirements"]}
-# Every package requirements.txt names, not a hand-copied four: the copy is
-# what let `packaging` be missed in both places at once.
-_req = sorted(
-    line.strip()
-    for line in (Path(__file__).resolve().parents[2] / "requirements.txt")
-    .read_text(encoding="utf-8").splitlines()
-    if line.strip() and not line.startswith(("#", "-"))
-)
-check(set(_req) <= names,
-      f"every package requirements.txt names is in the manifest "
-      f"(file {_req}, missing {sorted(set(_req) - names)})")
-check({"torch", "numpy", "safetensors", "pillow"} <= names,
-      "and so are the four the trainer imports, which appear in no "
-      "requirements file at all -- the gap this surface exists to show")
+recorder = RecordingInstaller()
+services, root = services_with({"/env": inventory(fastapi="0.139.0", numpy="2.1.0")}, recorder)
+job = services.installer.install.execute("existing", "/env")
+snap = wait(services, job.id)
+check(snap["state"] == "succeeded" and snap["target_python"] == "/env/bin/python", f"the job succeeds ({snap['error']})")
+check(len(recorder.requests) == 2, "two stages: torch, then everything else")
+first, second = recorder.requests
+check(first.packages == ("torch",) and first.index_url == TORCH_INDEX_URL, "the first stage is torch from the XPU index")
+check(second.index_url is None and "torch" not in second.packages, "the second stage uses the default index")
+check("numpy==2.1.0" in first.constraints and first.constraints == second.constraints, "both stages are pinned to what was already there")
+check("fake pip line" in snap["log"], "pip output reaches the job log")
 
-tiers = {r["name"]: r["tier"] for r in manifest["requirements"]}
-check(tiers["fastapi"] == "required" and tiers["torch"] == "training",
-      f"the server's own packages are 'required' and the training stack is "
-      f"'training' (got {tiers['fastapi']!r}, {tiers['torch']!r})")
-check(all(r["why"] for r in manifest["requirements"]),
-      "every row carries a reason, so a missing package can be explained "
-      "in the user's terms rather than by name alone")
+recorder = RecordingInstaller()
+services, root = services_with({"/env": inventory(**{n: "1.0+xpu" if n == "torch" else "1.0" for n in NAMES})}, recorder)
+try:
+    services.installer.install.execute("existing", "/env")
+    check(False, "nothing to install is refused")
+except InstallError as exc:
+    check("nothing to install" in str(exc) and not recorder.requests, "an environment that is complete is refused before pip runs")
 
-check("torch" in manifest["full_install"],
-      "torch is in the full install list (a new venv needs it)")
-check("torch" not in manifest["comfy_additions"],
-      f"and NOT in the additions list -- installing torch into a venv "
-      f"another application pins is the failure the constraints file "
-      f"exists to prevent (got {manifest['comfy_additions']})")
-check(set(manifest["comfy_additions"]) < set(manifest["full_install"]),
-      "the additions list is a strict subset of the full one")
-check(manifest["full_install_approx_mb"] > 2000,
-      f"the full install is sized in MB, because the venv choice is a disk "
-      f"decision (got {manifest['full_install_approx_mb']})")
+recorder = RecordingInstaller()
+services, root = services_with({"/cpu": inventory(torch="2.9.0")}, recorder)
+try:
+    services.installer.install.execute("existing", "/cpu")
+    check(False, "a wrong torch is refused")
+except InstallError as exc:
+    check("XPU" in str(exc) and not recorder.requests, "a CPU/CUDA torch is refused rather than piled onto")
 
-never_install = {r["name"] for r in manifest["requirements"]
-                 if r["never_install"]}
-check("torch" in never_install,
-      f"and torch is marked never-install-into-a-foreign-venv "
-      f"(marked: {sorted(never_install)})")
+services, root = services_with({"/env": inventory()}, RecordingInstaller(fail=RuntimeError("boom")))
+snap = wait(services, services.installer.install.execute("existing", "/env").id)
+check(snap["state"] == "failed" and "boom" in snap["error"], "any escape from the worker still ends the job as failed")
+
+services, root = services_with({"/env": inventory()}, RecordingInstaller(fail=InstallError("pip exited 1")))
+snap = wait(services, services.installer.install.execute("existing", "/env").id)
+check(snap["state"] == "failed" and snap["error"] == "pip exited 1", "a pip failure is reported as the job's error")
 
 # ==========================================================================
-# Section C: first-run state, and the write that is refused after it
+print("\n-- the pip command line --")
+
+request = InstallRequest("/env/bin/python", ("torch",), ("numpy==2.1.0",), TORCH_INDEX_URL)
+command = PipInstaller.build_command(request, Path("/tmp/c.txt"))
+check("--user" not in command and "--break-system-packages" not in command, "never --user or --break-system-packages")
+check(command[command.index("--") + 1:] == ["torch"] and command.index("--") > command.index("--constraint"), "packages come after `--`")
+check(command[command.index("--index-url") + 1] == TORCH_INDEX_URL, "the accelerator index is passed as the only index")
+uv = PipInstaller.build_command(request, None, uv="/usr/bin/uv")
+check(uv[:3] == ["/usr/bin/uv", "pip", "install"] and "--python" in uv, "uv is used when the environment has no pip")
+try:
+    PipInstaller().install(InstallRequest("/nonexistent/python", ("fastapi",)))
+    check(False, "a missing interpreter is refused")
+except InstallError as exc:
+    check("does not exist" in str(exc), "a missing interpreter is refused with a sentence")
+
+here = Path(tempfile.mkdtemp(prefix="backend-venvdir-"))
+check(find_interpreter(str(here)) is None, "a folder with no bin/python is not an environment")
+check(find_interpreter(str(here / "notes.txt")) is None, "a missing path is not an interpreter")
+(here / "notes.txt").write_text("x")
+check(find_interpreter(str(here / "notes.txt")) is None, "a file that is not python is not an interpreter")
+
 # ==========================================================================
-print("\n-- first run: state, one apply, and the refusal after --")
+print("\n-- setup state and the gate --")
 
 
-class UnresolvableStore:
-    """A settings store whose paths resolve to nothing, on purpose.
+class FreshMachine:
+    """A settings store on a machine with no ComfyUI beside it: a path resolves only once something was stored for it.
 
-    The real store resolves `comfy_dir` by asking the repo's own `paths`
-    module, which on a configured machine succeeds -- so a test for the
-    *unconfigured* state cannot be written against it without depending on
-    where the repository happens to live and what `.env` says. This states
-    the state directly: every path setting resolves to nothing.
-
-    Writes pass through to the real store, which is what makes the "apply
-    then refuse" sequence below a test of the gate rather than of a mock.
+    The suite's own services find a temporary ComfyUI tree, so the unconfigured state cannot be tested through them. Writes pass
+    through to the real store, which keeps the apply-then-refuse sequence a test of the gate and not of a mock.
     """
 
     def __init__(self, inner) -> None:
@@ -293,445 +174,81 @@ class UnresolvableStore:
         from backend.application.ports.settings_store import SettingsView
 
         real = self._inner.read()
-        return SettingsView(
-            stored=dict(real.stored),
-            resolved={key: None for key in real.resolved},
-        )
+        chosen = bool(real.stored.get("models_dir"))
+        return SettingsView(stored=dict(real.stored), resolved={
+            key: (value if chosen or real.stored.get(key) else None) for key, value in real.resolved.items()})
 
     def update(self, changes):
         return self._inner.update(changes)
 
 
-def _store(project_root: Path):
-    from backend.infrastructure.persistence.sqlite import SqliteDatabase
-    from backend.infrastructure.settings_store import SqliteSettingsStore
+from backend.application.use_cases import ApplyInstallation  # noqa: E402
+from backend.infrastructure.persistence.sqlite import SqliteDatabase  # noqa: E402
+from backend.infrastructure.settings_store import SqliteSettingsStore  # noqa: E402
 
-    db = SqliteDatabase(project_root / "backend.db")
-    db.initialize()
-    return SqliteSettingsStore(db, project_root)
+root = Path(tempfile.mkdtemp(prefix="backend-installer-fresh-"))
+database = SqliteDatabase(root / "backend.db")
+database.initialize()
+apply = ApplyInstallation(FreshMachine(SqliteSettingsStore(database, root)), root)
+state = apply.execute()
+check(not state.configured and set(state.missing) == {"checkpoints_dir", "loras_dir"},
+      f"a fresh machine needs only the model folders, never ComfyUI ({state.missing})")
+check(state.default_models_dir == str(root / "models"), "the default models folder is ./models in the project")
 
-
-def _comfy_tree(root: Path) -> Path:
-    comfy = root / "ComfyUI"
-    (comfy / "models" / "checkpoints").mkdir(parents=True)
-    (comfy / "models" / "loras").mkdir(parents=True)
-    return comfy
-
-
-# -- the unconfigured state, and applying to it ---------------------------
-fresh_root = Path(tempfile.mkdtemp(prefix="backend-installer-fresh-"))
-fresh_comfy = _comfy_tree(fresh_root)
-fresh_store = _store(fresh_root)
-unconfigured = ApplyInstallation(UnresolvableStore(fresh_store))
-
-state = unconfigured.execute()
-check(not state.configured,
-      f"a machine that resolves no path is unconfigured, which is the state "
-      f"the wizard exists for (got configured={state.configured})")
-check(set(state.missing) == {"comfy_dir", "checkpoints_dir", "loras_dir"},
-      f"and all three are named, so the wizard can show what is left to do "
-      f"rather than a yes/no (got {list(state.missing)})")
-
-view = unconfigured.apply(SettingsChanges(
-    comfy_dir=str(fresh_comfy),
-    checkpoints_dir=str(fresh_comfy / "models" / "checkpoints"),
-    loras_dir=str(fresh_comfy / "models" / "loras"),
-))
-check(view.stored["comfy_dir"] == str(fresh_comfy),
-      f"the apply persists the paths it was given (stored comfy="
-      f"{view.stored['comfy_dir']!r})")
-
-# The gate is a predicate, not a one-shot flag: it refuses again.
-#
-# Over the *unresolvable* wrapper, because that is the only store that can
-# be configured while still reporting nothing resolved -- and without that,
-# the second write is rejected by the settings store's own validation
-# (the directory does not exist) before the gate is ever consulted. Which
-# error comes back is the whole point of the check: `settings_invalid`
-# would mean the user is told their path is wrong when what actually
-# happened is that the wizard is closed.
-unconfigured_now_resolving = ApplyInstallation(fresh_store)
+models = root / "chosen" / "models"
+apply.apply(SettingsChanges(models_dir=str(models)))
+state = apply.execute()
+check(state.configured and state.resolved_checkpoints_dir == str(models / "checkpoints"), "choosing a models folder finishes setup")
+check((models / "checkpoints").is_dir() and (models / "loras").is_dir(), "the ComfyUI-compatible layout is created inside it")
 try:
-    unconfigured_now_resolving.apply(
-        SettingsChanges(comfy_dir=str(fresh_comfy / "other"))
-    )
-    code = None
-except Exception as exc:  # noqa: BLE001 -- the code is what is asserted
-    code = getattr(exc, "code", None)
-check(code == "installer_not_allowed",
-      f"a second wizard write on the same, now-configured store is refused "
-      f"by the gate rather than by path validation (got {code!r})")
+    apply.apply(SettingsChanges(models_dir=str(root / "other")))
+    check(False, "a configured installation refuses the wizard")
+except Exception as exc:  # noqa: BLE001
+    check(getattr(exc, "code", "") == "installer_not_allowed", "a configured installation refuses the wizard (installer_not_allowed)")
 
-# -- the HTTP surface -------------------------------------------------------
-root = Path(tempfile.mkdtemp(prefix="backend-installer-api-"))
-comfy = _comfy_tree(root)
-container = build_container(
-    Settings(project_root=root, db_path=root / "backend.db")
-)
-app = create_app(container.services)
+# ==========================================================================
+print("\n-- tokenizer files --")
+
+check(check_content("vocab.json", b"<html>error</html>") is not None, "an error page is not a vocabulary")
+check(check_content("merges.txt", b"a b\n" * 20000) is None, "a long merges file passes")
+check(check_content("tokenizer.json", b'{"model": {}}') is None and check_content("tokenizer.json", b"{}") is not None,
+      "a tokenizer definition needs a model")
+
+# ==========================================================================
+print("\n-- the HTTP surface --")
+
+files = FakeTokenizerFiles()
+services, root = services_with({"/env": inventory(torch="2.9.0+xpu")}, RecordingInstaller(), tokenizer_files=files)
+http_db = SqliteDatabase(root / "backend-http.db")
+http_db.initialize()
+fresh_store = FreshMachine(SqliteSettingsStore(http_db, root))
+services.installer.apply._settings = fresh_store
+app = create_app(services)
 
 status, _, body = asgi_request(app, "/api/v1/installer/state")
-check(status == 200, f"GET installer/state 200 (got {status})")
-check(body["configured"] is True,
-      f"a machine whose ComfyUI auto-detects reports configured, so the "
-      f"wizard is not offered (got {body})")
-
+check(status == 200 and body["configured"] is False and body["default_models_dir"].endswith("models"), "GET state on a fresh machine")
 status, _, body = asgi_request(app, "/api/v1/installer/manifest")
-check(status == 200 and len(body["requirements"]) == len(REQUIREMENTS),
-      f"GET installer/manifest 200 with one row per manifest entry "
-      f"(got {status}, {len(body.get('requirements', []))} rows, "
-      f"{len(REQUIREMENTS)} expected)")
-
-status, _, body = asgi_request(app, "/api/v1/installer/readiness")
-check(status == 200 and "ready" in body,
-      f"GET installer/readiness 200 with a verdict (got {status})")
-check(isinstance(body.get("device_checked"), bool),
-      "and device_checked is always present as a boolean -- a client must "
-      "not have to tell 'absent' from 'not asked' by omission")
-check(isinstance(body.get("packages"), list)
-      and all({"name", "tier", "why", "installed", "blocking"} <= set(row)
-              for row in body["packages"]),
-      "and every package row carries the fields a wizard renders without "
-      "a second request")
-
-status, _, body = asgi_request(app, "/api/v1/installer/apply", method="POST",
-                              json_body={"checkpoints_dir": str(comfy)})
-check(status == 409,
-      f"POST installer/apply on a configured machine is 409, not 200 "
-      f"(got {status})")
-check(body.get("error", {}).get("code") == "installer_not_allowed",
-      f"with the documented code, so a client can tell a refused wizard "
-      f"from a rejected path (got {body.get('error', {}).get('code')!r})")
-
-# The refusal must not have written anything.
-status, _, after = asgi_request(app, "/api/v1/settings")
-check(after["stored"]["checkpoints_dir"] != str(comfy),
-      f"and the refused write left the stored value untouched (got "
-      f"{after['stored']['checkpoints_dir']!r})")
-
-# An unknown route under the prefix is a 404, not a 500.
-status, _, body = asgi_request(app, "/api/v1/installer/nonsense")
-check(status == 404, f"an unknown installer path is 404 (got {status})")
-
-# ==========================================================================
-print("\n-- the conflicts endpoint: three outcomes over HTTP --")
-
-# A fake port, because a *conflict* on a real machine is a bug in someone's
-# environment and a test that waits for one is a test that never runs. The
-# classification itself is covered in test_comfy_conflicts.py, against both
-# a fake and the real checkout; this section is about the wire format and
-# about which arguments the route passes.
-from backend.application.ports.comfy_environment import (  # noqa: E402
-    ComfyEnvironment,
-    ComfyEnvironmentInfo,
-    Declaration,
-)
-from backend.application.ports.package_installer import (  # noqa: E402
-    PackageInstaller,
-)
-from backend.application.use_cases.check_comfy_conflicts import (  # noqa: E402
-    CheckComfyConflicts,
-)
-from backend.application.use_cases.install_packages import (  # noqa: E402
-    GetInstall,
-    StartInstall,
-)
-
-
-def _with_conflicts(base, check):
-    """Rebuild container -> services -> installer with a replaced use case.
-
-    Three frozen dataclasses, so a test cannot just assign the field --
-    `FrozenInstanceError` is the first thing that happens otherwise.
-    `dataclasses.replace` is the intended way through, and rebuilding the
-    app from the new services means the route under test is reached through
-    the same wiring production uses.
-    """
-    import dataclasses
-
-    installer = dataclasses.replace(base.services.installer, conflicts=check)
-    services = dataclasses.replace(base.services, installer=installer)
-    return dataclasses.replace(base, services=services), create_app(services)
-
-
-def _with_install(base, start):
-    """Rebuild the installer services with a real StartInstall.
-
-    Same reason as _with_conflicts: three frozen dataclasses, and the
-    install services must share one job dict or a job cannot be polled.
-    """
-    import dataclasses
-
-    installer = dataclasses.replace(
-        base.services.installer, install=start,
-        install_status=GetInstall(jobs=start.jobs),
-    )
-    services = dataclasses.replace(base.services, installer=installer)
-    return dataclasses.replace(base, services=services), create_app(services)
-
-
-class _StubComfyEnvironment(ComfyEnvironment):
-    def __init__(self, declarations=(), installed=()):
-        self.declarations = tuple(
-            d if isinstance(d, Declaration) else Declaration(*d) for d in declarations
-        )
-        self.installed = tuple(installed)
-        self.seen = []
-
-    def read(self, comfy_dir, venv_python=None):
-        self.seen.append((comfy_dir, venv_python))
-        return ComfyEnvironmentInfo(
-            comfy_dir=comfy_dir,
-            requirements_path="/stub/requirements.txt",
-            declarations=self.declarations,
-            installed=self.installed,
-            venv_python=venv_python,
-        )
-
-
-stub = _StubComfyEnvironment(
-    [("torch", ""), ("transformers", ">=4.50.3")],
-    [("torch", "2.12.1"), ("transformers", "4.44.0"), ("anyio", "4.14.0")],
-)
-container, app = _with_conflicts(container, CheckComfyConflicts(environment=stub))
-
-status, _, body = asgi_request(app, "/api/v1/installer/conflicts")
-check(status == 200, f"GET installer/conflicts 200 (got {status})")
-
-check(body["safe"] is False and body["checked"] is True,
-      f"a declared-and-violated package makes it unsafe but *checked* "
-      f"(safe={body['safe']}, checked={body['checked']})")
-check(body["refusal_reason"] and "transformers" in body["refusal_reason"],
-      f"and the refusal names the package and both versions, so the user "
-      f"can act on it ({body['refusal_reason']!r})")
-
-check(body["counts"] == {"total": 3, "safe": 1, "conflict": 1, "unknown": 1},
-      f"the three outcomes are counted separately, not folded into a "
-      f"boolean ({body['counts']})")
-
-outcomes = {row["name"]: row["outcome"] for row in body["findings"]}
-check(outcomes == {"transformers": "conflict", "anyio": "unknown", "torch": "safe"},
-      f"and each row carries its own outcome, so the client does not "
-      f"re-derive it ({outcomes})")
-
-check([r["name"] for r in body["findings"]][0] == "transformers",
-      f"conflicts lead, because a refusal must open with its reason "
-      f"({[r['name'] for r in body['findings']]})")
-
-check(body["constraints"] == ["anyio==4.14.0", "torch==2.12.1", "transformers==4.44.0"],
-      f"the exact pins are sent, so 'nothing already installed can change' "
-      f"is visible rather than asserted ({body['constraints']})")
-
-check(all({"name", "outcome", "description"} <= set(row) for row in body["findings"])
-      and all("description" in a for a in body["additions"]),
-      "every row carries a sentence, so the wizard does not write prose "
-      "that can drift from the rule")
-
-# The *stored* interpreter, not the resolved one. They differ exactly when
-# nothing is configured, which is every first-run machine: `resolved` then
-# ends in a bare "python" -- the right answer for a training subprocess,
-# and the wrong one here, because it is this server's interpreter and the
-# question is about ComfyUI's venv. Passing it read 87 packages where the
-# real answer is 185, with nothing in the response to say whose venv it was.
-view = container.services.settings.read.execute()
-asgi_request(app, "/api/v1/installer/conflicts")
-check(stub.seen[-1][1] == (view.stored.get("venv_python") or None),
-      f"the interpreter passed to the port is the configured one, and None "
-      f"when there is none so the port can derive it from the checkout "
-      f"(got {stub.seen[-1][1]!r}, stored {view.stored.get('venv_python')!r}, "
-      f"resolved {view.resolved.get('venv_python')!r})")
-
-# comfy_dir is overridable per call, so the wizard can check a directory the
-# user has just typed. It must reach the port unchanged.
-asgi_request(app, "/api/v1/installer/conflicts?comfy_dir=/somewhere/typed")
-check(stub.seen[-1][0] == "/somewhere/typed",
-      f"comfy_dir from the query reaches the port "
-      f"({stub.seen[-1][0]})")
-
-# And with no query it comes from settings, not from the request.
-asgi_request(app, "/api/v1/installer/conflicts")
-configured_dir = container.services.settings.read.execute().resolved.get("comfy_dir")
-check(stub.seen[-1][0] == (configured_dir or ""),
-      f"with no query it uses the configured ComfyUI directory "
-      f"({stub.seen[-1][0]!r} vs {configured_dir!r})")
-
-# An unreadable source is 200 with safe=false -- not a 404, and not 500.
-stub2 = _StubComfyEnvironment()
-stub2.read = lambda comfy_dir, venv_python=None: ComfyEnvironmentInfo(
-    comfy_dir=comfy_dir, requirements_error="there is no requirements.txt",
-)
-container, app = _with_conflicts(container, CheckComfyConflicts(environment=stub2))
-status, _, body = asgi_request(app, "/api/v1/installer/conflicts")
-check(status == 200 and body["safe"] is False and body["checked"] is False,
-      f"an unreadable source is a 200 saying unchecked-and-unsafe, so the "
-      f"client can render the reason (status={status}, safe={body['safe']}, "
-      f"checked={body['checked']})")
-check(body["refusal_reason"] and "Cannot check" in body["refusal_reason"],
-      f"with a reason that says the check did not run "
-      f"({body['refusal_reason']!r})")
-
-# ==========================================================================
-print("\n-- what may be installed into ComfyUI's venv --")
-
-# This is the split the whole conflict check exists to protect, and it is
-# per-row rather than per-tier. A first version of the wizard filtered on
-# `tier != "comfy_provided"` -- which no requirement actually uses, so the
-# filter matched nothing and the page offered to install torch into
-# ComfyUI's virtualenv. That is the single operation the whole design
-# refuses, so the invariant is asserted here rather than left to the JS.
-from backend.application.ports.requirements_manifest import (  # noqa: E402
-    COMFY_ADDITIONS,
-)
-
-# The manifest and requirements.txt must agree on the server's own
-# packages. They drifted: requirements.txt gained `packaging` for the
-# conflict check and the manifest kept saying four. The manifest is what
-# the wizard renders *and* what the install acts on, so a package the
-# server needs and the manifest does not know about is invisible to the
-# only screen that can install it.
-req_file = sorted(
-    line.strip()
-    for line in (Path(__file__).resolve().parents[2] / "requirements.txt")
-    .read_text(encoding="utf-8").splitlines()
-    if line.strip() and not line.startswith(("#", "-"))
-)
-required_tier = sorted(r.distribution for r in REQUIREMENTS if r.tier == "required")
-check(req_file == required_tier,
-      f"requirements.txt and the manifest's required tier are the same list "
-      f"({req_file} vs {required_tier})")
-
-check("torch" not in COMFY_ADDITIONS and "numpy" not in COMFY_ADDITIONS,
-      f"the accelerator stack is never in what may go into ComfyUI's venv "
-      f"({list(COMFY_ADDITIONS)})")
-check(all(r.never_install for r in REQUIREMENTS if r.distribution
-          in ("torch", "numpy", "safetensors", "pillow")),
-      "and each of those rows says so on itself, per row")
-check(not any(r.tier == "comfy_provided" for r in REQUIREMENTS),
-      "no requirement uses the comfy_provided tier, which is why filtering "
-      "on the tier rather than the flag matched nothing")
-
-# A fresh, *unconfigured* container. The one above has already had its
-# paths applied by the first-run section, so it is `configured: true` and
-# the install gate refuses it -- correctly. Reusing it here would have
-# tested the gate twice and the install not at all.
-install_root = Path(tempfile.mkdtemp(prefix="backend-installer-unconf-"))
-install_container = build_container(
-    Settings(project_root=install_root, db_path=install_root / "backend.db")
-)
-
-# An empty project_root is not enough: `paths` is already imported by the
-# time this runs, and it resolves the *developer's* ComfyUI, so every
-# container in this process reports configured: true. That is the same trap
-# `test_path_tiers.py` works around, in the other direction, by copying
-# paths.py into a scratch tree.
-#
-# Forcing `get_comfy_dir` to raise is the honest way to get an unconfigured
-# machine in-process -- it is exactly the condition a fresh install has, and
-# it is restored below so nothing after this section sees it.
-import paths as _paths_module  # noqa: E402
-
-_saved_get_comfy_dir = _paths_module.get_comfy_dir
-
-
-def _no_comfyui(*_a, **_k):
-    raise RuntimeError("Cannot find ComfyUI directory.")
-
-
-_paths_module.get_comfy_dir = _no_comfyui
-check(install_container.services.installer.apply.execute().configured is False,
-      "a machine with no ComfyUI is unconfigured, which is the only state "
-      "the install gate allows")
-
-# The endpoint must not install into a venv it has not been told about.
-class _RecordingInstaller(PackageInstaller):
-    def install(self, request, on_line=None):
-        recorded["request"] = request
-        if on_line:
-            on_line("ok")
-
-
-recorded: dict = {}
-install_container, install_app = _with_install(
-    install_container,
-    StartInstall(installer=_RecordingInstaller(),
-                 project_root=install_root, base_python=sys.executable,
-                 jobs={}),
-)
-# torch is never-install, so this is refused on the package list alone --
-# *before* the venv is even considered. That ordering matters: the check is
-# about ComfyUI's environment, and it must not depend on the caller having
-# told us which interpreter that is.
-status, _, body = asgi_request(install_app, "/api/v1/installer/install",
-                               method="POST",
-                               json_body={"target": "comfy",
-                                          "packages": ["torch"],
-                                          "comfy_venv_python": sys.executable})
-check(status == 400,
-      f"a request to install torch into ComfyUI's venv is refused even with "
-      f"a valid interpreter (got {status})")
-message = str((body.get("error") or body.get("detail") or {}).get("message", ""))
-check("never-install" in message and "separate virtualenv" in message,
-      f"and says why, and what to do instead ({message!r})")
-
-# And with no interpreter either, it is still refused -- for the other reason.
-status, _, body = asgi_request(install_app, "/api/v1/installer/install",
-                               method="POST",
-                               json_body={"target": "comfy",
-                                          "packages": ["fastapi"]})
-check(status == 400 and "could not be found" in str(body)
-      and "Nothing was changed" in str(body),
-      f"a server that cannot find ComfyUI's venv refuses rather than "
-      f"guessing one, and promises nothing changed (got {status}: {body})")
-
-# With one, it proceeds -- and installs exactly what it was told, so the
-# caller's list is never second-guessed into something else.
-recorded.clear()
-install_container, install_app = _with_install(
-    install_container,
-    # The interpreter comes from the server now, so a container that *can*
-    # detect one is what "the venv is known" means. Asking for the same
-    # interpreter the request names keeps the check honest: if the server
-    # and the client ever disagree, this request is refused, and the refusal
-    # is checked further down.
-    StartInstall(installer=_RecordingInstaller(),
-                 project_root=install_root, base_python=sys.executable,
-                 jobs={}, detect_comfy_python=lambda: sys.executable),
-)
-status, _, body = asgi_request(install_app, "/api/v1/installer/install",
-                               method="POST",
-                               json_body={"target": "comfy",
-                                          "packages": ["fastapi"],
-                                          "constraints": ["torch==2.12.1+xpu"],
-                                          "comfy_venv_python": sys.executable})
-check(status == 200, f"and proceeds when the venv is known (got {status})")
-check(recorded.get("request") is not None
-      and recorded["request"].packages == ("fastapi",),
-      f"installing exactly the packages it was sent, unaltered "
-      f"({recorded.get('request') and recorded['request'].packages})")
-check(recorded["request"].constraints == ("torch==2.12.1+xpu",),
-      f"with the pins intact ({recorded['request'].constraints})")
-check(recorded["request"].target_python == sys.executable,
-      f"into the interpreter it was told to, named absolutely "
-      f"({recorded['request'].target_python})")
-
-# An unknown job is a 404 with a code, never a fabricated success.
-status, _, body = asgi_request(install_app, "/api/v1/installer/install/never-existed")
-check(status == 404,
-      f"an unknown job id is 404, not a fabricated state (got {status})")
-check(body.get("error", {}).get("code") == "install_job_not_found",
-      f"with a documented code, so the client can tell it from a lost job "
-      f"({body.get('error', {}).get('code')!r})")
-
-# And an empty package list is refused rather than run as a no-op.
-status, _, body = asgi_request(install_app, "/api/v1/installer/install",
-                               method="POST",
-                               json_body={"target": "new", "packages": []})
-check(status == 400 and "nothing to install" in str(body).lower(),
-      f"an empty install is refused with a sentence (got {status}: {body})")
-
-_paths_module.get_comfy_dir = _saved_get_comfy_dir
-check(install_container.services.installer.apply.execute().configured is True,
-      "and the forced 'no ComfyUI' is restored, so nothing later in this "
-      "process is a statement about a fiction")
+check(status == 200 and len(body["requirements"]) == len(REQUIREMENTS), "GET manifest has one row per requirement")
+status, _, body = asgi_request(app, "/api/v1/installer/environment", method="POST", json_body={"target": "existing", "venv_dir": "/env"})
+check(status == 200 and body["usable"] and "torch" not in body["to_install"], "POST environment reports the missing packages")
+status, _, body = asgi_request(app, "/api/v1/installer/environment", method="POST", json_body={"target": "bogus"})
+check(status == 422, f"an unknown target is rejected by the schema (got {status})")
+status, _, body = asgi_request(app, "/api/v1/installer/environment/verify", method="POST", json_body={"target": "existing", "venv_dir": "/env"})
+check(status == 200 and body["present"] and body["torch_version"].endswith("+xpu"), "POST verify answers from the environment's own torch")
+status, _, body = asgi_request(app, "/api/v1/installer/tokenizers")
+check(status == 200 and {row["key"] for row in body} == {"clip", "qwen", "t5"} and not any(r["complete"] for r in body), "GET tokenizers lists the sets")
+status, _, body = asgi_request(app, "/api/v1/installer/tokenizers/t5", method="POST")
+check(status == 200 and body["complete"] and files.downloads == ["t5"], "POST tokenizers/t5 fetches that set")
+status, _, body = asgi_request(app, "/api/v1/installer/install", method="POST", json_body={"target": "existing", "venv_dir": "/env"})
+check(status == 200 and body["id"] and body["packages"], "POST install returns a job with its packages")
+wait(services, body["id"])
+status, _, body = asgi_request(app, "/api/v1/installer/install/nope")
+check(status == 404 and body["error"]["code"] == "install_job_not_found", "an unknown job is a 404 with a code")
+status, _, body = asgi_request(app, "/api/v1/installer/apply", method="POST", json_body={"models_dir": str(root / "m")})
+check(status == 200 and body["state"]["configured"], "POST apply finishes setup")
+status, _, body = asgi_request(app, "/api/v1/installer/apply", method="POST", json_body={"models_dir": str(root / "n")})
+check(status == 409 and body["error"]["code"] == "installer_not_allowed", "a second apply is 409")
+status, _, body = asgi_request(app, "/api/v1/installer/install", method="POST", json_body={"target": "existing", "venv_dir": "/env"})
+check(status == 409, "installing on a configured machine is refused")
 
 finish()

@@ -38,5 +38,6 @@ and a state-changing method carrying an `Origin` must match this server's origin
 | `memory_unavailable` | 409 | graphs, datasets (memory admission: this start cannot fit on the device — either the device total is unknown (`details.reason = device_total_unknown`, and `details.holders` names what the unfinished rows still claim) or the ledger's refusal is in `details`: capacity, foreign reserve, every holder and its size, free, asked. A refused start writes no row and holds nothing) |
 | `node_diagnostics_failed` | 400 | graphs |
 | `installer_not_allowed` | 409 | installer (a wizard write after this installation is configured) |
-| `install_refused` | 400 | installer (a deliberate refusal: a `never_install` package aimed at a venv this project does not own, an unknown ComfyUI venv, an empty package list, or pip exiting non-zero. Nothing was changed — the message says which of those it was) |
-| `install_job_not_found` | 404 | installer (a job id this process never issued, or one lost when the server restarted; the readiness report is the source of truth for whether the packages are installed) |
+| `install_refused` | 400 | installer (a deliberate refusal: no usable environment at the chosen folder, a torch that is not the Intel XPU build, nothing left to install, or pip exiting non-zero. Nothing was changed — the message says which) |
+| `install_job_not_found` | 404 | installer (a job id this process never issued, or one lost when the server restarted; inspect the environment again to see what is installed) |
+| `tokenizer_download_failed` | 502 | installer (a tokenizer file set could not be fetched from the model hub, or a downloaded file failed validation; the message says where to place the files by hand) |

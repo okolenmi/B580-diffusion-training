@@ -16,7 +16,8 @@ server and opens `/setup`. Setup has five steps; nothing is installed until you 
    ComfyUI's works). For an existing one the packages found there are listed first and everything already installed is pinned, so
    pip adds what is missing and cannot move what is there. An environment whose torch is not the Intel XPU build is refused.
 3. **Install**: pip output streams into a scrollable log. PyTorch comes from the Intel XPU index (`download.pytorch.org/whl/xpu`),
-   everything else from PyPI. Afterwards the card is checked through that environment's own PyTorch.
+   everything else from PyPI. A new environment offers the tested PyTorch release (2.12.1, `TORCH_TESTED_VERSION` in the manifest),
+   the newest on that index, or an exact version. Afterwards the card is checked through that environment's own PyTorch.
 4. **Prompt files**: the CLIP, Qwen and T5 vocabulary files, downloaded into `./assets/<set>_tokenizer`. Optional; the buttons stay
    available if you skip it. Where the network is blocked, put the files into those folders by hand (`TESTING.md` lists the names).
 5. **Models folder**: default `./models`. A ComfyUI `models` folder works as it is: checkpoints are read from `<folder>/checkpoints`

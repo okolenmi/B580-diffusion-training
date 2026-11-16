@@ -31,6 +31,8 @@ const wizard = {
   python: null,      // the interpreter the trainer will use, once known
   verify: null,      // POST /installer/environment/verify
   tokenizers: null,  // GET /installer/tokenizers
+  torch: "tested",    // "tested" | "latest" | "custom"
+  torchCustom: "",
 };
 
 const size = (mb) => (mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${mb} MB`);
@@ -100,6 +102,31 @@ function packageTable(report) {
     h("span", { class: "setup-pkg-why text-dim" }, p.why))));
 }
 
+/* Which torch to install, only when the environment has none. The tested release is the default because it is the one the
+   trainer's speed and memory numbers come from; the others exist for people who need a different build. */
+function torchChoice(report) {
+  if (!report.to_install.includes("torch")) return null;
+  const option = (id, title, blurb) => h("label", { class: `setup-option${wizard.torch === id ? " is-picked" : ""}` },
+    h("input", { type: "radio", name: "setup-torch", checked: wizard.torch === id, onchange: () => { wizard.torch = id; stepEnvironment(false); } }),
+    h("span", { class: "setup-option-body" },
+      h("span", { class: "setup-option-title" }, title),
+      h("span", { class: "setup-option-blurb" }, blurb)));
+  return h("fieldset", { class: "setup-options" },
+    h("legend", {}, "Which PyTorch (Intel XPU build)?"),
+    option("tested", `${report.tested_torch} (tested)`, "The release the trainer is tested with on the Arc B580. Recommended."),
+    option("latest", "The newest on the Intel XPU index", "Not tested with this trainer; may change speed or memory use."),
+    option("custom", "A specific version",
+      "For example 2.11.0. The install fails with pip's message if the Intel XPU index does not have it."),
+    wizard.torch === "custom"
+      ? h("input", { class: "setup-input", type: "text", id: "setup-torch-version", value: wizard.torchCustom, placeholder: report.tested_torch,
+          oninput: (e) => { wizard.torchCustom = e.target.value.trim(); } })
+      : null);
+}
+
+function torchValue() {
+  return wizard.torch === "custom" ? (wizard.torchCustom || "tested") : wizard.torch;
+}
+
 function reportSummary(report) {
   if (report.error) return h("p", { class: "setup-error" }, report.error);
   const missing = report.to_install.length;
@@ -153,6 +180,7 @@ async function stepEnvironment(fresh = true) {
       : null,
     message(),
     report ? reportSummary(report) : null,
+    report && !report.error ? torchChoice(report) : null,
     actions(
       button("Back", () => show(1)),
       nothing
@@ -188,7 +216,7 @@ async function startInstall() {
   showMessage("setup-msg", "");
   let job;
   try {
-    job = await api("/installer/install", { method: "POST", body: { target: wizard.target, venv_dir: wizard.venvDir || null } });
+    job = await api("/installer/install", { method: "POST", body: { target: wizard.target, venv_dir: wizard.venvDir || null, torch: torchValue() } });
   } catch (err) {
     showMessage("setup-msg", errText(err));
     logError("installer: could not start the install", err);

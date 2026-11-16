@@ -20,6 +20,7 @@ from ..domain.graph import GRAPH_FORMAT, GraphDefinition
 from ..domain.memory_settings import AUTO
 from ..application.ports.settings_store import SettingsChanges, SettingsView
 from ..application.use_cases.apply_installation import InstallationState
+from ..application.ports.requirements_manifest import TORCH_TESTED_VERSION
 from ..application.use_cases.inspect_environment import EnvironmentReport
 from ..domain.value_objects import GraphStatus
 
@@ -132,6 +133,8 @@ class InstallerEnvironmentOut(BaseModel):
     installed_count: int
     problems: list[str]
     usable: bool
+    #: The torch release offered as the default.
+    tested_torch: str
 
 
 class InstallerVerifyOut(BaseModel):
@@ -148,6 +151,9 @@ class InstallerInstallIn(BaseModel):
     target: Literal["new", "existing"]
     #: The virtualenv folder; required for ``existing``.
     venv_dir: str | None = None
+    #: Which torch to install when the environment has none: ``tested`` (the release the trainer is tested with), ``latest``
+    #: (what the Intel XPU index offers) or an exact version such as ``2.11.0``.
+    torch: str = "tested"
 
 
 class InstallerInstallOut(BaseModel):
@@ -194,6 +200,7 @@ def environment_out(report: EnvironmentReport) -> InstallerEnvironmentOut:
         installed_count=report.installed_count,
         problems=list(report.problems),
         usable=report.usable,
+        tested_torch=TORCH_TESTED_VERSION,
     )
 
 

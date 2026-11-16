@@ -22,7 +22,7 @@ from packaging.utils import canonicalize_name
 
 from ..errors import ApplicationError
 from ..ports.package_installer import InstallError, InstallRequest, PackageInstaller, create_virtualenv
-from ..ports.requirements_manifest import ACCELERATOR_PACKAGES, TORCH_INDEX_URL
+from ..ports.requirements_manifest import ACCELERATOR_PACKAGES, TORCH_INDEX_URL, torch_requirement
 from .inspect_environment import InspectEnvironment
 
 logger = logging.getLogger(__name__)
@@ -108,8 +108,15 @@ class StartInstall:
     _active: str | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    def execute(self, target: str, venv_dir: str | None = None) -> InstallJob:
-        """Queue an install into ``target`` ("new" or "existing" with ``venv_dir``). Returns without waiting for it."""
+    def execute(self, target: str, venv_dir: str | None = None, torch: str = "tested") -> InstallJob:
+        """Queue an install into ``target`` ("new" or "existing" with ``venv_dir``). Returns without waiting for it.
+
+        ``torch`` is only used when the environment has no torch: "tested", "latest" or an exact version.
+        """
+        try:
+            torch_entry = torch_requirement(torch)
+        except ValueError as exc:
+            raise InstallError(f"{exc}. Nothing was changed.") from exc
         report = self.inspect.for_target(target, venv_dir)
         if report.error:
             raise InstallError(f"{report.error}. Nothing was changed.")
@@ -119,7 +126,8 @@ class StartInstall:
             raise InstallError("every package this project needs is already installed there; there is nothing to install.")
 
         label = "a new environment in the project folder" if target == "new" else report.venv_dir
-        job = InstallJob(id=uuid.uuid4().hex[:12], target_label=label, packages=report.to_install)
+        packages = tuple(torch_entry if canonicalize(n) in ACCELERATOR_PACKAGES else n for n in report.to_install)
+        job = InstallJob(id=uuid.uuid4().hex[:12], target_label=label, packages=packages)
         with self._lock:
             if self._active is not None:
                 running = self.jobs.get(self._active)
@@ -139,8 +147,8 @@ class StartInstall:
                 job.line(f"Creating a virtualenv at {target}")
                 python = create_virtualenv(self.base_python or "python3", target)
                 job.line(f"Created {python}")
-            accelerator = tuple(n for n in report.to_install if canonicalize(n) in ACCELERATOR_PACKAGES)
-            rest = tuple(n for n in report.to_install if n not in accelerator)
+            accelerator = tuple(n for n in job.packages if canonicalize(n.split('==')[0]) in ACCELERATOR_PACKAGES)
+            rest = tuple(n for n in job.packages if n not in accelerator)
             # The accelerator build first and alone: it is the one package that comes from a different index, and the rest must
             # then see it as already installed instead of replacing it with the CPU/CUDA wheel from PyPI.
             for packages, index in ((accelerator, TORCH_INDEX_URL), (rest, None)):

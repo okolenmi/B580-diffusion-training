@@ -153,7 +153,7 @@ def start_install(body: InstallerInstallIn, services: ApplicationServices = Depe
     """
     if services.installer.apply.execute().configured:
         raise InstallerNotAllowedError("this installation is already configured; install packages from a fresh setup, not from a working one")
-    job = services.installer.install.execute(target=body.target, venv_dir=body.venv_dir)
+    job = services.installer.install.execute(target=body.target, venv_dir=body.venv_dir, torch=body.torch)
     return InstallerInstallOut(**job.snapshot())
 
 

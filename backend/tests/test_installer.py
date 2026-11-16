@@ -102,10 +102,26 @@ snap = wait(services, job.id)
 check(snap["state"] == "succeeded" and snap["target_python"] == "/env/bin/python", f"the job succeeds ({snap['error']})")
 check(len(recorder.requests) == 2, "two stages: torch, then everything else")
 first, second = recorder.requests
-check(first.packages == ("torch",) and first.index_url == TORCH_INDEX_URL, "the first stage is torch from the XPU index")
+check(first.packages == ("torch==2.12.1",) and first.index_url == TORCH_INDEX_URL, "the first stage is torch from the XPU index")
 check(second.index_url is None and "torch" not in second.packages, "the second stage uses the default index")
 check("numpy==2.1.0" in first.constraints and first.constraints == second.constraints, "both stages are pinned to what was already there")
 check("fake pip line" in snap["log"], "pip output reaches the job log")
+check(first.packages == ("torch==2.12.1",), "torch is pinned to the tested release by default")
+
+recorder = RecordingInstaller()
+services, root = services_with({"/env": inventory(fastapi="0.139.0")}, recorder)
+wait(services, services.installer.install.execute("existing", "/env", torch="2.11.0").id)
+check(recorder.requests[0].packages == ("torch==2.11.0",), "an exact version can be chosen")
+recorder = RecordingInstaller()
+services, root = services_with({"/env": inventory(fastapi="0.139.0")}, recorder)
+wait(services, services.installer.install.execute("existing", "/env", torch="latest").id)
+check(recorder.requests[0].packages == ("torch",), "latest leaves torch unpinned, so the XPU index decides")
+for bad in ("2.12; rm", "--index-url=x", "torch==2"):
+    try:
+        services.installer.install.execute("existing", "/env", torch=bad)
+        check(False, f"torch choice {bad!r} is refused")
+    except InstallError:
+        check(True, f"torch choice {bad!r} is refused")
 
 recorder = RecordingInstaller()
 services, root = services_with({"/env": inventory(**{n: "1.0+xpu" if n == "torch" else "1.0" for n in NAMES})}, recorder)

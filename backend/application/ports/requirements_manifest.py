@@ -17,6 +17,21 @@ TIERS: tuple[str, ...] = (REQUIRED, TRAINING, OPTIONAL)
 #: Installed from this index instead of PyPI: PyPI's torch is a CUDA or CPU build, and the trainer runs on the Intel XPU build.
 TORCH_INDEX_URL = "https://download.pytorch.org/whl/xpu"
 ACCELERATOR_PACKAGES: tuple[str, ...] = ("torch",)
+#: The torch release the trainer is tested with on the card; the setup page installs it unless told otherwise.
+TORCH_TESTED_VERSION = "2.12.1"
+
+
+def torch_requirement(choice: str) -> str:
+    """The pip entry for a torch choice: ``"tested"``, ``"latest"`` (whatever the XPU index offers) or an exact version like ``2.11.0``."""
+    import re
+
+    if choice == "tested":
+        return f"torch=={TORCH_TESTED_VERSION}"
+    if choice == "latest":
+        return "torch"
+    if re.fullmatch(r"\d+(\.\d+){1,3}", choice):
+        return f"torch=={choice}"
+    raise ValueError(f"'{choice}' is not a torch choice; use 'tested', 'latest' or a version such as {TORCH_TESTED_VERSION}")
 
 
 @dataclass(frozen=True, slots=True)

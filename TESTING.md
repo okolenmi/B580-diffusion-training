@@ -192,7 +192,7 @@ Start from a clone with no `venv`, no `backend.db` and no `assets` folder, then 
 
 In the `oko-xpu-kernels` checkout (its latest commit), with your venv active; install it with `pip install -e .` after `./build.sh` if the `.so` is stale.
 
-1. `python -m xpu_kernels` and `python debug/verify_published_wheel.sh`'s gate part: the gates must be open, including `geglu` and `geglu_backward`. The SYCL weight dequantizer was rewritten since 0.3.0 (probe: 0.454 to 0.039 ms), so run `python debug/verify_prepare_fused.py` and `debug/verify_linear_dx.py` too: the results must be identical to before.
+1. `python -m xpu_kernels`: the gates must be open, including `geglu` and `geglu_backward`. The SYCL weight dequantizer was rewritten since 0.3.0 (probe: 0.454 to 0.039 ms), so run `python debug/verify_prepare_fused.py` and `debug/verify_linear_dx.py` too: the results must be identical to before.
 2. `python debug/verify_attention_capture.py`: report all four parts. Part 1 shows whether the kernel even compiles for the B580; part 3 whether the capture works (the line `CAPTURE FAILED` is a result, not a bug to hide); part 4 is the time against flash and math. The trainer's target: capture works, replay identical, at least 2x faster than math.
 3. Only if part 3 captures: `python debug/bench_attention.py` (several minutes) and send the `best for ...` lines. A kernel that captures but is slower than math is recorded as dead, as the Triton dequantizer was.
 4. Then a 50-step run with the int8 base and `buckets.max_shapes=4`, before and after, to see whether the new dequantizer moves the step (about 82 ms per step was spent there).

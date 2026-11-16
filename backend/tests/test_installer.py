@@ -223,6 +223,96 @@ except Exception as exc:  # noqa: BLE001
     check(getattr(exc, "code", "") == "installer_not_allowed", "a configured installation refuses the wizard (installer_not_allowed)")
 
 # ==========================================================================
+print("\n-- the project's own venv with the wrong torch, and moving the server into the chosen one --")
+
+from backend.application.ports.server_restart import ServerRestarter  # noqa: E402
+
+
+def own_venv(root: Path) -> str:
+    interpreter = root / "venv" / ("Scripts" if sys.platform == "win32" else "bin") / ("python.exe" if sys.platform == "win32" else "python")
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text("#!/bin/sh\n")
+    interpreter.chmod(0o755)
+    return str(interpreter)
+
+
+root = Path(tempfile.mkdtemp(prefix="backend-installer-own-"))
+own = own_venv(root)
+recorder = RecordingInstaller()
+inventory_own = VenvInventory(own, "3.13.1", (("torch", "2.15.0"), ("numpy", "2.1.0"), ("sympy", "1.13")))
+services = build_services(project_root=root, venv_inspector=FakeVenvInspector({str(root / "venv"): inventory_own}))
+services.installer.install.installer = recorder
+report = services.installer.inspect.for_target("new", None)
+check(report.usable and not report.problems, "a wrong torch in the project's own venv is not a blocker")
+check(report.replaces == ("torch 2.15.0",) and "torch" in report.to_install and report.constraints == (),
+      "it is replaced, and nothing is pinned against the replacement")
+wait(services, services.installer.install.execute("new").id)
+check(recorder.requests[0].reinstall and recorder.requests[0].index_url == TORCH_INDEX_URL, "the XPU torch is installed over it")
+check(not recorder.requests[1].reinstall, "only the torch stage reinstalls")
+check("--force-reinstall" in PipInstaller.build_command(recorder.requests[0]), "the reinstall reaches the pip command line")
+
+other = services_with({"/cpu": inventory(torch="2.15.0")})[0].installer.inspect.for_target("existing", "/cpu")
+check(not other.usable and other.replaces == (), "a user's own environment is still never modified")
+
+
+class FakeRestarter(ServerRestarter):
+    def __init__(self, running: str = "", serves: bool = True) -> None:
+        self.running, self.serves, self.restarted = running, serves, []
+
+    def running_in(self, interpreter):
+        return interpreter == self.running
+
+    def can_serve(self, interpreter):
+        return self.serves
+
+    def restart_into(self, interpreter):
+        self.restarted.append(interpreter)
+
+
+for running, serves, expected, why in ((own, True, False, "already running there"), ("", False, False, "it cannot run the server"),
+                                       ("", True, True, "a different environment that can")):
+    root = Path(tempfile.mkdtemp(prefix="backend-installer-restart-"))
+    chosen = own_venv(root)
+    database = SqliteDatabase(root / "backend.db")
+    database.initialize()
+    restarter = FakeRestarter(chosen if running else "", serves)
+    result = ApplyInstallation(FreshMachine(SqliteSettingsStore(database, root)), root, restarter).apply(
+        SettingsChanges(models_dir=str(root / "m"), venv_python=chosen))
+    check(result.restarting is expected and bool(restarter.restarted) is expected, f"restart into the chosen environment: {expected} ({why})")
+
+root = Path(tempfile.mkdtemp(prefix="backend-installer-restart-"))
+database = SqliteDatabase(root / "backend.db")
+database.initialize()
+restarter = FakeRestarter()
+check(not ApplyInstallation(FreshMachine(SqliteSettingsStore(database, root)), root, restarter).apply(
+    SettingsChanges(models_dir=str(root / "m"))).restarting, "no environment chosen: the server stays where it is")
+
+from backend import first_run  # noqa: E402
+
+check(first_run.same_environment("/a/venv/bin/python", "/a/venv/bin/python3") and not first_run.same_environment("/a/venv/bin/python", "/b/venv/bin/python"),
+      "two interpreters of one virtualenv are one environment, without resolving the link to the base python")
+
+import os  # noqa: E402
+
+root = Path(tempfile.mkdtemp(prefix="backend-installer-stored-"))
+chosen = own_venv(root)
+database = SqliteDatabase(root / "backend.db")
+database.initialize()
+SqliteSettingsStore(database, root).update(SettingsChanges(venv_python=chosen))
+saved_env = {key: os.environ.pop(key, None) for key in ("VENV_PYTHON", "BACKEND_DB_PATH")}
+try:
+    os.environ["BACKEND_DB_PATH"] = str(root / "backend.db")
+    check(first_run.stored_interpreter() == chosen, "the launcher reads the stored interpreter without the server's own code")
+    check(first_run.preferred_interpreter() == chosen, "a stored environment other than the running one is preferred at start")
+    os.environ["VENV_PYTHON"] = "/explicit/python"
+    check(first_run.preferred_interpreter() is None, "an explicit VENV_PYTHON still wins")
+finally:
+    for key, value in saved_env.items():
+        os.environ.pop(key, None)
+        if value is not None:
+            os.environ[key] = value
+
+# ==========================================================================
 print("\n-- tokenizer files --")
 
 check(check_content("vocab.json", b"<html>error</html>") is not None, "an error page is not a vocabulary")
@@ -243,6 +333,7 @@ app = create_app(services)
 
 status, _, body = asgi_request(app, "/api/v1/installer/state")
 check(status == 200 and body["configured"] is False and body["default_models_dir"].endswith("models"), "GET state on a fresh machine")
+check(body["installing"] is False and body["install_id"] is None, "no install yet: nothing to lock or resume")
 status, _, body = asgi_request(app, "/api/v1/installer/manifest")
 check(status == 200 and len(body["requirements"]) == len(REQUIREMENTS), "GET manifest has one row per requirement")
 status, _, body = asgi_request(app, "/api/v1/installer/environment", method="POST", json_body={"target": "existing", "venv_dir": "/env"})
@@ -257,7 +348,12 @@ status, _, body = asgi_request(app, "/api/v1/installer/tokenizers/t5", method="P
 check(status == 200 and body["complete"] and files.downloads == ["t5"], "POST tokenizers/t5 fetches that set")
 status, _, body = asgi_request(app, "/api/v1/installer/install", method="POST", json_body={"target": "existing", "venv_dir": "/env"})
 check(status == 200 and body["id"] and body["packages"], "POST install returns a job with its packages")
-wait(services, body["id"])
+job_id = body["id"]
+status, _, body = asgi_request(app, "/api/v1/installer/state")
+check(body["install_id"] == job_id, "state names the latest install, so a reloaded page can resume it")
+wait(services, job_id)
+status, _, body = asgi_request(app, "/api/v1/installer/state")
+check(body["installing"] is False and body["install_id"] == job_id, "a finished install no longer locks the app")
 status, _, body = asgi_request(app, "/api/v1/installer/install/nope")
 check(status == 404 and body["error"]["code"] == "install_job_not_found", "an unknown job is a 404 with a code")
 status, _, body = asgi_request(app, "/api/v1/installer/apply", method="POST", json_body={"models_dir": str(root / "m")})

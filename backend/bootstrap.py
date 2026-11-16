@@ -82,6 +82,7 @@ from .application.use_cases import (
     ValidateGraph,
 )
 from .config import GRAPH_EXECUTION_CHILD, Settings
+from .infrastructure.server_restart import ExecServerRestarter
 from .infrastructure.clock import SystemClock
 from .infrastructure.image_libraries import FsImageLibraries
 from .infrastructure.events.callback_event_bus import CallbackEventBus
@@ -305,7 +306,7 @@ def build_container(settings: Settings) -> Container:
     services = ApplicationServices(
         installer=InstallerServices(
             device_probe=device_probe,
-            apply=ApplyInstallation(settings=settings_store, project_root=settings.project_root),
+            apply=ApplyInstallation(settings=settings_store, project_root=settings.project_root, restarter=ExecServerRestarter()),
             manifest=DescribeRequirements(),
             inspect=inspect_environment,
             # One job dict, shared: `install` writes it and `install_status` reads it. New environments are made with the interpreter

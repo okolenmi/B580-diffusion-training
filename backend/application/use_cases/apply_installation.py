@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..errors import InstallerNotAllowedError
+from ..ports.server_restart import ServerRestarter
 from ..ports.settings_store import SettingsChanges, SettingsStore, SettingsView
 
 
@@ -32,22 +33,43 @@ class InstallationState:
     missing: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ApplyResult:
+    view: SettingsView
+    #: The server is about to restart into the chosen environment; the page waits for it to come back.
+    restarting: bool
+
+
 class ApplyInstallation:
-    def __init__(self, settings: SettingsStore, project_root: Path) -> None:
+    def __init__(self, settings: SettingsStore, project_root: Path, restarter: ServerRestarter | None = None) -> None:
         self._settings = settings
         self._project_root = project_root
+        self._restarter = restarter
 
     def execute(self) -> InstallationState:
         return self._state_of(self._settings.read())
 
-    def apply(self, changes: SettingsChanges) -> SettingsView:
-        """Validate and persist, but only while unconfigured. Returns the fresh view, as the settings API does."""
+    def apply(self, changes: SettingsChanges) -> ApplyResult:
+        """Validate and persist, but only while unconfigured.
+
+        When the chosen environment is not the one this server runs in, the server restarts into it: the node library needs the
+        packages that were just installed there.
+        """
         state = self._state_of(self._settings.read())
         if state.configured:
             raise InstallerNotAllowedError(
                 "this installation is already configured "
                 f"(checkpoints in {state.resolved_checkpoints_dir}); change the folders from Settings instead")
-        return self._settings.update(changes)
+        view = self._settings.update(changes)
+        return ApplyResult(view, self._restart_if_needed(changes, view))
+
+    def _restart_if_needed(self, changes: SettingsChanges, view: SettingsView) -> bool:
+        interpreter = view.resolved.get("venv_python") if changes.venv_python else None
+        restarter = self._restarter
+        if not interpreter or restarter is None or restarter.running_in(interpreter) or not restarter.can_serve(interpreter):
+            return False
+        restarter.restart_into(interpreter)
+        return True
 
     def _state_of(self, view: SettingsView) -> InstallationState:
         resolved = view.resolved

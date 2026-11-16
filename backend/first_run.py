@@ -431,27 +431,83 @@ def bootstrap(python: str, host: str, port: int, argv: list[str]) -> None:
     # Hand the interpreter forward, so the server -- and every training
     # subprocess it spawns, which resolves VENV_PYTHON the same way -- runs
     # from the venv that actually has the packages.
-    command = next_argv(argv)
     try:
-        # Flush before exec, which is not obvious and was a real bug.
-        # `os.execve` replaces this process without flushing, so every
-        # `print` above is lost when stdout is not a terminal -- a pipe, a
-        # redirect to a log, systemd, Docker. On a terminal stdout is
-        # line-buffered and it works, which is why it survived being run by
-        # hand. The install test caught it because it redirects.
-        sys.stdout.flush()
-        sys.stderr.flush()
-        env = dict(os.environ, VENV_PYTHON=str(interpreter))
-        if os.name == "nt":
-            # os.exec* does not replace the process on Windows and cannot run a .bat; wait for the server and pass its exit code on.
-            raise SystemExit(subprocess.call(command, env=env))
-        os.execve(command[0], command, env)
+        relaunch(str(interpreter), argv)
     except OSError as exc:
         raise BootstrapError(
             f"could not restart run_server_linux.sh ({exc}). The packages are "
             f"installed and working -- start the server yourself with:\n"
             f"    VENV_PYTHON={interpreter} ./run_server_linux.sh"
         ) from exc
+
+
+def relaunch(interpreter: str, argv: list[str], *, wait: bool = True) -> None:
+    """Start the launcher again with ``VENV_PYTHON`` set, replacing this process.
+
+    ``wait`` is for a caller that is the launcher's own child: on Windows ``os.exec*`` cannot run a .bat, so the new server is a
+    child this process waits for. A running server passes ``wait=False``: it starts the replacement and exits.
+    """
+    command = next_argv(argv)
+    # `os.execve` replaces this process without flushing, so everything printed so far is lost when stdout is a pipe or a log.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    env = dict(os.environ, VENV_PYTHON=interpreter)
+    if os.name == "nt":
+        if wait:
+            raise SystemExit(subprocess.call(command, env=env))
+        subprocess.Popen(command, env=env)
+        os._exit(0)
+    os.execve(command[0], command, env)
+
+
+def same_environment(first: str, second: str) -> bool:
+    """Whether two interpreter paths belong to one virtualenv. Not ``resolve()``: a venv's python is a link to the base one."""
+    def root(path: str) -> Path:
+        return Path(os.path.abspath(path)).parent.parent
+
+    return root(first) == root(second)
+
+
+def can_serve(interpreter: str) -> bool:
+    """Whether ``interpreter`` is new enough to run the server and can import every package it needs."""
+    from .python_floor import MIN_PYTHON
+
+    imports = ", ".join(_IMPORT_NAMES.get(name, name) for name in SERVER_PACKAGES)
+    script = f"import sys; assert sys.version_info >= {MIN_PYTHON!r}; import {imports}"
+    try:
+        done = subprocess.run([interpreter, "-I", "-c", script], capture_output=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return done.returncode == 0
+
+
+def stored_interpreter() -> str | None:
+    """The interpreter the setup page stored, read without the server's own code: this module runs before its packages exist."""
+    import sqlite3
+
+    root = Path(__file__).resolve().parents[1]
+    database = Path(os.environ.get("BACKEND_DB_PATH") or root / "backend" / "data" / "backend.db")
+    if not database.is_file():
+        return None
+    try:
+        with sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=5) as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key = 'venv_python'").fetchone()
+    except sqlite3.Error:
+        return None
+    return row[0] if row and row[0] and Path(row[0]).is_file() else None
+
+
+def preferred_interpreter() -> str | None:
+    """The environment this server should run in when it is not already: the stored choice, unless ``VENV_PYTHON`` says otherwise.
+
+    None when nothing better is chosen, the choice is already the running one, or it cannot run the server.
+    """
+    if os.environ.get("VENV_PYTHON"):
+        return None
+    stored = stored_interpreter()
+    if stored is None or same_environment(stored, sys.executable) or not can_serve(stored):
+        return None
+    return stored
 
 
 # --------------------------------------------------------------------------
@@ -490,6 +546,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.open_when_serving:
         return 0 if open_when_serving(args.open_when_serving) else 1
+
+    chosen = preferred_interpreter()
+    if chosen is not None and not args.check:
+        relaunch(chosen, argv)
 
     missing = missing_server_packages()
     if not missing:

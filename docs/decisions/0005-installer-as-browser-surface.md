@@ -137,3 +137,11 @@ virtualenv, and installed into an environment before looking at what was in it. 
   report are gone.
 * **Prompt vocabulary files** are downloaded into `./assets` instead of being found inside ComfyUI.
 * The routes that run a chosen interpreter (`/environment`, `/environment/verify`) are POST, inside the Origin guard.
+* **The server runs in the environment the user chose.** The bootstrap environment has only the server's packages, so a server left
+  there cannot import the node modules (torch) and the graph editor shows almost every node red. `/apply` therefore restarts the
+  server into the chosen interpreter (`ServerRestarter`, re-running the launcher with `VENV_PYTHON`), and `backend.first_run` reads the
+  stored `venv_python` on every start. An interpreter older than `MIN_PYTHON` or without the server packages is never restarted into.
+* **The project's own `./venv` is completed, not refused.** A torch there that is not the XPU build is replaced (`--force-reinstall`
+  on the torch stage, no pins); a user's own environment is still only ever added to.
+* **Setup is a place in the sidebar**, visible while unconfigured, locking the other entries (Help excepted) while an install runs.
+  `/setup` redirects to Help once configured.

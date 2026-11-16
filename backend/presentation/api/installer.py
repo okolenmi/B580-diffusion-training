@@ -44,14 +44,17 @@ _ERROR_409 = {"description": "already configured, or an install is running"}
 @router.get("/state", response_model=InstallerStateOut)
 def get_installer_state(services: ApplicationServices = Depends(get_services)) -> InstallerStateOut:
     """Whether setup still has anything to do. Cheap: settings reads, no subprocess."""
-    return state_out(services.installer.apply.execute())
+    job = services.installer.install.current()
+    return state_out(services.installer.apply.execute(), job.snapshot() if job else None)
 
 
 @router.post("/apply", response_model=InstallerApplyOut, responses={400: _ERROR_400, 409: _ERROR_409})
 def apply_installation(body: InstallerApplyIn, services: ApplicationServices = Depends(get_services)) -> InstallerApplyOut:
     """Persist the models folder and the environment's interpreter. First run only."""
-    view = services.installer.apply.apply(body.to_changes())
+    result = services.installer.apply.apply(body.to_changes())
+    view = result.view
     return InstallerApplyOut(
+        restarting=result.restarting,
         settings={"stored": dict(view.stored), "resolved": dict(view.resolved)},
         state=state_out(services.installer.apply.execute()).model_dump(),
     )

@@ -138,10 +138,19 @@ class StartInstall:
         threading.Thread(target=self._run, args=(job, report), name=f"install-{job.id}", daemon=True).start()
         return job
 
+    def current(self) -> InstallJob | None:
+        """The install in flight, else the most recent one: what a reloaded page should resume watching."""
+        with self._lock:
+            if self._active is not None and self._active in self.jobs:
+                return self.jobs[self._active]
+            return next(reversed(self.jobs.values()), None)
+
     def _run(self, job: InstallJob, report) -> None:
         job.set_state(RUNNING)
         try:
             python = report.interpreter
+            for replaced in report.replaces:
+                job.line(f"Replacing {replaced} with the Intel XPU build")
             if python is None:
                 target = Path(report.venv_dir)
                 job.line(f"Creating a virtualenv at {target}")
@@ -158,7 +167,8 @@ class StartInstall:
                 job.line(f"== {', '.join(packages)}" + (f"  (from {index})" if index else ""))
                 self.installer.install(
                     InstallRequest(target_python=python, packages=packages, constraints=report.constraints,
-                                   index_url=index, target_label=job.target_label),
+                                   index_url=index, target_label=job.target_label,
+                                   reinstall=bool(report.replaces) and index is not None),
                     on_line=job.line,
                 )
             job.target_python = python

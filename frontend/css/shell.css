@@ -105,6 +105,10 @@ body.has-rail { padding-left: var(--rail-w); }
     color: var(--accent);
 }
 
+/* Unavailable while an install runs: visible, inert. */
+.rail-item.locked { opacity: 0.35; cursor: not-allowed; }
+.rail-item.locked:hover { background: none; color: var(--text-dim); }
+
 /* Future feature: visible, inert, honest about it. */
 .rail-item.rail-soon { opacity: 0.45; }
 .rail-item.rail-soon:hover { background: none; color: var(--text-dim); }

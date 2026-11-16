@@ -36,6 +36,8 @@ class EnvironmentReport:
     installed_count: int
     #: Reasons the environment cannot serve a run even after the missing packages are added.
     problems: tuple[str, ...]
+    #: Installed packages the install will replace, as "name version". Only ever in the project's own environment.
+    replaces: tuple[str, ...] = ()
 
     @property
     def to_install(self) -> tuple[str, ...]:
@@ -48,6 +50,10 @@ class EnvironmentReport:
     @property
     def usable(self) -> bool:
         return self.error is None and not self.problems
+
+
+def is_xpu_build(version: str) -> bool:
+    return "+xpu" in version
 
 
 class InspectEnvironment:
@@ -70,10 +76,20 @@ class InspectEnvironment:
         raise ValueError(f"'{target}' is not an install target; use 'new' or 'existing'")
 
     def plan_new(self) -> EnvironmentReport:
-        """A fresh environment inside the project; a venv already sitting in that folder is reused and inspected like any other."""
+        """A fresh environment inside the project.
+
+        A venv already in that folder is the project's own, so it is reused, and a torch in it that is not the XPU build is replaced
+        rather than treated as a blocker: unlike a user's environment, nothing there needs protecting from it.
+        """
         target = self.new_venv_dir
         if find_interpreter(str(target)):
-            return replace(self.inspect_existing(str(target)), kind="new")
+            report = replace(self.inspect_existing(str(target)), kind="new")
+            wrong = self._wrong_torch(report)
+            if wrong is None:
+                return report
+            version = wrong.installed_version
+            packages = tuple(replace(p, installed_version=None) if p is wrong else p for p in report.packages)
+            return replace(report, packages=packages, constraints=(), problems=(), replaces=(f"torch {version}",))
         problems = ()
         if target.exists() and any(target.iterdir()):
             problems = (f"{target} exists and is not a virtualenv; move it aside or choose an existing environment.",)
@@ -87,7 +103,7 @@ class InspectEnvironment:
         installed = {canonicalize(name): version for name, version in inventory.packages}
         problems = []
         torch = installed.get("torch")
-        if torch and "+xpu" not in torch:
+        if torch and not is_xpu_build(torch):
             problems.append(f"torch {torch} in this environment is not the Intel XPU build, so the card cannot be used; "
                             "use a new environment, or install torch from the XPU index there first")
         return EnvironmentReport(
@@ -96,6 +112,13 @@ class InspectEnvironment:
             tuple(f"{canonicalize(name)}=={version}" for name, version in inventory.packages if version),
             len(inventory.packages), tuple(problems),
         )
+
+    @staticmethod
+    def _wrong_torch(report: EnvironmentReport) -> PackageState | None:
+        for package in report.packages:
+            if canonicalize(package.name) == "torch" and package.installed_version and not is_xpu_build(package.installed_version):
+                return package
+        return None
 
     @staticmethod
     def _states(installed: dict[str, str]) -> tuple[PackageState, ...]:

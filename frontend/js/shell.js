@@ -33,6 +33,7 @@ const ICONS = {
   pulse: svg(`<path d="M3 12h3.8l2.3-5.6 3.9 11.2 2.3-5.6H21"/>`),
   help: svg(`<circle cx="12" cy="12" r="8.6"/><path d="M9.7 9.6a2.4 2.4 0 1 1 3.5 2.1c-.8.5-1.2 1-1.2 1.9"/><path d="M12 16.8h.01" stroke-width="2.4"/>`),
   sliders: svg(`<path d="M4 7.5h9M19.5 7.5h.5M4 16.5h3.5M13.5 16.5H20"/><circle cx="16" cy="7.5" r="2.4"/><circle cx="10" cy="16.5" r="2.4"/>`),
+  setup: svg(`<path d="M12 3.5v11.2M7.6 10.6l4.4 4.4 4.4-4.4"/><path d="M4.5 16.5v2.2c0 .9.7 1.6 1.6 1.6h11.8c.9 0 1.6-.7 1.6-1.6v-2.2"/>`),
   terminal: svg(`<rect x="3" y="4.6" width="18" height="14.8" rx="2.5"/><path d="m7.6 10.2 2.4 2.1-2.4 2.1M13 14.4h3.6"/>`),
 };
 
@@ -46,6 +47,10 @@ const MAIN_ITEMS = [
   { id: "tracker", href: "/", label: "System tracker", icon: ICONS.pulse },
   { id: "help", href: "/help", label: "Help", icon: ICONS.help },
 ];
+/* Shown first, only while the installation is not finished. */
+const SETUP_ITEM = { id: "setup", href: "/setup", label: "Setup", icon: ICONS.setup };
+/* What stays usable while an install runs: the install itself, and the page that explains things. */
+const OPEN_DURING_INSTALL = new Set(["setup", "help"]);
 const BOTTOM_ITEMS = [
   { id: "settings", href: "/settings", label: "Settings", icon: ICONS.sliders },
 ];
@@ -58,11 +63,16 @@ function activeRailId() {
   if (path.startsWith("/datasets")) return "datasets";
   if (path.startsWith("/help")) return "help";
   if (path.startsWith("/settings")) return "settings";
+  if (path.startsWith("/setup")) return "setup";
   return null; // sub-pages (run detail, monitor, config) have no rail entry
 }
 
-function railItem(item, activeId) {
+function railItem(item, activeId, locked = false) {
   const active = item.id === activeId;
+  if (locked && !OPEN_DURING_INSTALL.has(item.id)) {
+    return `<span class="rail-item locked" data-rail="${item.id}" aria-disabled="true" aria-label="${item.label} (locked while installing)">
+              ${item.icon}<span class="rail-tip">${item.label} -- locked while installing</span></span>`;
+  }
   const tip = `<span class="rail-tip">${item.label}</span>`;
   if (!item.href) {
     // future feature: present, inert, and honest when clicked
@@ -76,23 +86,46 @@ function railItem(item, activeId) {
             aria-label="${item.label}"${cur}>${item.icon}${tip}</a>`;
 }
 
-function mountRail() {
+/* ``setup`` is the installer's state as the server reports it: null until known, which renders the ordinary rail. */
+function railHtml(setup) {
   const activeId = activeRailId();
-  const main = MAIN_ITEMS.map((it) => railItem(it, activeId)).join("\n");
-  const bottom = BOTTOM_ITEMS.map((it) => railItem(it, activeId)).join("\n");
-  document.body.insertAdjacentHTML(
-    "afterbegin",
-    `<nav class="rail" aria-label="Main navigation">
-       <a class="rail-logo" href="/" aria-label="Distillation -- home">${ICONS.bolt}</a>
-       <div class="rail-group">${main}</div>
-       <div class="rail-group rail-bottom">${bottom}</div>
-     </nav>`,
-  );
-  document.body.classList.add("has-rail");
+  const needsSetup = Boolean(setup) && !setup.configured;
+  const locked = needsSetup && setup.installing;
+  const render = (items) => items.map((it) => railItem(it, activeId, locked)).join("\n");
+  const mainItems = needsSetup ? [SETUP_ITEM, ...MAIN_ITEMS] : MAIN_ITEMS;
+  const logo = locked
+    ? `<span class="rail-logo" aria-hidden="true">${ICONS.bolt}</span>`
+    : `<a class="rail-logo" href="/" aria-label="Distillation -- home">${ICONS.bolt}</a>`;
+  return `${logo}
+       <div class="rail-group">${render(mainItems)}</div>
+       <div class="rail-group rail-bottom">${render(BOTTOM_ITEMS)}</div>`;
+}
 
+function bindRail() {
   document.querySelector(".rail-soon")?.addEventListener("click", () => {
     logShell("Pre-built workflows: coming soon (future feature).", "warn");
   });
+}
+
+/* While setup is unfinished the rail follows the server, so the lock lifts and the Setup entry disappears without a reload. */
+async function syncRail(nav) {
+  let setup = null;
+  try {
+    const response = await fetch("/api/v1/installer/state");
+    if (response.ok) setup = await response.json();
+  } catch (err) {
+    console.warn("shell: installer state unavailable, showing the ordinary rail", err);
+  }
+  nav.innerHTML = railHtml(setup);
+  bindRail();
+  if (setup && !setup.configured) setTimeout(() => syncRail(nav), 3000);
+}
+
+function mountRail() {
+  document.body.insertAdjacentHTML("afterbegin", `<nav class="rail" aria-label="Main navigation">${railHtml(null)}</nav>`);
+  document.body.classList.add("has-rail");
+  bindRail();
+  syncRail(document.querySelector(".rail"));
 }
 
 /* ---- floating console ---------------------------------------------------- */

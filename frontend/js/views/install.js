@@ -94,6 +94,27 @@ async function stepDevices() {
 
 /* ---- 2. environment ------------------------------------------------------ */
 
+/* The choices that survive a reload, so a refreshed tab resumes instead of starting over. The install itself is the server's. */
+const SAVED = "setup.wizard.v1";
+
+function loadWizard() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SAVED) || "{}");
+    for (const key of ["target", "venvDir", "torch", "torchCustom"]) if (typeof saved[key] === "string") wizard[key] = saved[key];
+  } catch (err) {
+    logError("installer: saved choices unreadable", err);
+  }
+}
+
+function saveWizard() {
+  try {
+    const { target, venvDir, torch, torchCustom } = wizard;
+    localStorage.setItem(SAVED, JSON.stringify({ target, venvDir, torch, torchCustom }));
+  } catch (err) {
+    logError("installer: could not save choices", err);
+  }
+}
+
 function packageTable(report) {
   return h("div", { class: "setup-packages" }, report.packages.map((p) => h("div", { class: `setup-pkg ${p.installed_version ? "is-ok" : "is-missing"}` },
     h("span", { class: "setup-pkg-state", "aria-hidden": "true" }, p.installed_version ? "✓" : "○"),
@@ -107,7 +128,7 @@ function packageTable(report) {
 function torchChoice(report) {
   if (!report.to_install.includes("torch")) return null;
   const option = (id, title, blurb) => h("label", { class: `setup-option${wizard.torch === id ? " is-picked" : ""}` },
-    h("input", { type: "radio", name: "setup-torch", checked: wizard.torch === id, onchange: () => { wizard.torch = id; stepEnvironment(false); } }),
+    h("input", { type: "radio", name: "setup-torch", checked: wizard.torch === id, onchange: () => { wizard.torch = id; saveWizard(); stepEnvironment(false); } }),
     h("span", { class: "setup-option-body" },
       h("span", { class: "setup-option-title" }, title),
       h("span", { class: "setup-option-blurb" }, blurb)));
@@ -119,7 +140,7 @@ function torchChoice(report) {
       "For example 2.11.0. The install fails with pip's message if the Intel XPU index does not have it."),
     wizard.torch === "custom"
       ? h("input", { class: "setup-input", type: "text", id: "setup-torch-version", value: wizard.torchCustom, placeholder: report.tested_torch,
-          oninput: (e) => { wizard.torchCustom = e.target.value.trim(); } })
+          oninput: (e) => { wizard.torchCustom = e.target.value.trim(); saveWizard(); } })
       : null);
 }
 
@@ -133,6 +154,7 @@ function reportSummary(report) {
   return h("div", {},
     report.python_version ? h("p", { class: "setup-note text-dim" }, `Python ${report.python_version} at ${report.interpreter}; ${report.installed_count} packages installed.`) : null,
     report.problems.map((text) => h("p", { class: "setup-error" }, text)),
+    report.replaces.map((what) => h("p", { class: "setup-note" }, `${what} is in this environment but is not the Intel XPU build. It will be replaced.`)),
     packageTable(report),
     h("p", { class: "setup-note text-dim" }, missing
       ? `${missing} package${missing === 1 ? "" : "s"} to install (~${size(report.download_mb)}). Everything already in the environment is pinned and left as it is.`
@@ -157,7 +179,7 @@ async function stepEnvironment(fresh = true) {
     try { wizard.report = await api("/installer/environment", { method: "POST", body: { target: "new" } }); } catch (err) { logError("installer: environment", err); }
   }
   const pick = (target, title, blurb) => h("label", { class: `setup-option${wizard.target === target ? " is-picked" : ""}` },
-    h("input", { type: "radio", name: "setup-target", checked: wizard.target === target, onchange: () => { wizard.target = target; wizard.report = null; stepEnvironment(true); } }),
+    h("input", { type: "radio", name: "setup-target", checked: wizard.target === target, onchange: () => { wizard.target = target; wizard.report = null; saveWizard(); stepEnvironment(true); } }),
     h("span", { class: "setup-option-body" },
       h("span", { class: "setup-option-title" }, title),
       h("span", { class: "setup-option-blurb" }, blurb)));
@@ -167,13 +189,13 @@ async function stepEnvironment(fresh = true) {
   frame("Python environment",
     h("p", { class: "setup-note text-dim" }, "Training runs in a Python virtualenv. Choose one; nothing is changed until you press Install."),
     h("fieldset", { class: "setup-options" },
-      pick("new", "A new virtualenv in the project folder", "Created at ./venv with the packages below. Delete the folder to undo it."),
+      pick("new", "A new virtualenv in the project folder", "Created at ./venv with the packages below; a venv already there is completed. Delete the folder to undo it."),
       pick("existing", "An existing virtualenv", "Give the folder of a virtualenv you already have (ComfyUI's works). Its packages are checked first and never changed.")),
     wizard.target === "existing"
       ? h("div", { class: "setup-field" },
           h("span", { class: "setup-field-label" }, "Virtualenv folder"),
           h("input", { class: "setup-input", type: "text", id: "setup-venv", value: wizard.venvDir, placeholder: "/path/to/venv",
-            oninput: (e) => { wizard.venvDir = e.target.value; },
+            oninput: (e) => { wizard.venvDir = e.target.value; saveWizard(); },
             onkeydown: (e) => { if (e.key === "Enter") inspect(); } }),
           h("span", { class: "setup-field-hint text-dim" }, "The folder that holds bin/python (Scripts\\python.exe on Windows)."),
           actions(button("Check packages", inspect)))
@@ -346,9 +368,11 @@ async function finish(event) {
   try {
     const body = { models_dir: models };
     if (wizard.python) body.venv_python = wizard.python;
-    await api("/installer/apply", { method: "POST", body });
+    const result = await api("/installer/apply", { method: "POST", body });
     log("installer: setup finished");
-    await boot();
+    if (result.restarting) await waitForRestart();
+    window.location.replace("/help");
+    return;
   } catch (err) {
     if (err instanceof ApiError && err.code === "installer_not_allowed") {
       showMessage("setup-msg", "Setup was already completed. Reloading…");
@@ -361,17 +385,39 @@ async function finish(event) {
   }
 }
 
+/* The server restarts into the chosen environment so its node library can import torch. Wait for it to go down and come back;
+   a server that never seems to go down is taken as already restarted. */
+async function waitForRestart() {
+  frame("Restarting the server…", h("p", { class: "setup-note text-dim" }, "It restarts inside the environment you chose. This takes a few seconds."));
+  const started = Date.now();
+  let wentDown = false;
+  while (Date.now() - started < 120000) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    try {
+      await api("/health");
+      if (wentDown || Date.now() - started > 15000) return;
+    } catch (err) {
+      wentDown = true;
+    }
+  }
+}
+
 /* ---- start --------------------------------------------------------------- */
 
 async function boot() {
+  loadWizard();
   wizard.state = await api("/installer/state");
   if (wizard.state.configured) {
-    document.title = "Setup complete";
-    mount(root(),
-      h("h2", { class: "setup-step-title" }, "Setup is complete."),
-      h("p", { class: "setup-note text-dim" }, `Models folder: ${wizard.state.resolved_models_dir || wizard.state.resolved_checkpoints_dir}`),
-      h("p", {}, h("a", { class: "setup-link", href: "/settings" }, "Open Settings"), " to change it."));
+    window.location.replace("/help");
     return;
+  }
+  if (wizard.state.install_id) {
+    const job = await api(`/installer/install/${wizard.state.install_id}`).catch(() => null);
+    if (job && !job.terminal) return watchInstall(job);
+    if (job && job.state === "succeeded") {
+      wizard.python = job.target_python;
+      return stepInstalled();
+    }
   }
   show(wizard.step);
 }

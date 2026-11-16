@@ -88,6 +88,10 @@ class InstallerStateOut(BaseModel):
     #: Where the model folder goes when the user accepts the default.
     default_models_dir: str
     missing: list[str]
+    #: An install is running now; the rest of the app is locked until it ends.
+    installing: bool = False
+    #: The latest install job, running or finished, so a reloaded setup page can resume it.
+    install_id: str | None = None
 
 
 class InstallerDeviceOut(BaseModel):
@@ -132,6 +136,8 @@ class InstallerEnvironmentOut(BaseModel):
     download_mb: int
     installed_count: int
     problems: list[str]
+    #: Packages the install will replace ("torch 2.15.0"), only in the project's own environment.
+    replaces: list[str] = []
     usable: bool
     #: The torch release offered as the default.
     tested_torch: str
@@ -184,6 +190,8 @@ class InstallerApplyOut(BaseModel):
 
     settings: dict[str, Any]
     state: dict[str, Any]
+    #: True when the server is restarting into the chosen environment; the page waits for /health before leaving.
+    restarting: bool = False
 
 
 def environment_out(report: EnvironmentReport) -> InstallerEnvironmentOut:
@@ -199,13 +207,16 @@ def environment_out(report: EnvironmentReport) -> InstallerEnvironmentOut:
         download_mb=report.download_mb,
         installed_count=report.installed_count,
         problems=list(report.problems),
+        replaces=list(report.replaces),
         usable=report.usable,
         tested_torch=TORCH_TESTED_VERSION,
     )
 
 
-def state_out(state: InstallationState) -> InstallerStateOut:
+def state_out(state: InstallationState, install: dict | None = None) -> InstallerStateOut:
     return InstallerStateOut(
+        installing=bool(install) and not install["terminal"],
+        install_id=install["id"] if install else None,
         configured=state.configured,
         resolved_checkpoints_dir=state.resolved_checkpoints_dir,
         resolved_loras_dir=state.resolved_loras_dir,

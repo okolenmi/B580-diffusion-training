@@ -47,6 +47,8 @@ class InstallRequest:
     #: Replaces pip's default index. Used for the accelerator wheels, which PyPI does not carry for Intel GPUs.
     index_url: str | None = None
     target_label: str = "this project"
+    #: Install over a package that satisfies the requirement by version but is a different build (a CPU torch where the XPU one is wanted).
+    reinstall: bool = False
 
 
 class PackageInstaller(ABC):
@@ -69,9 +71,13 @@ class PipInstaller(PackageInstaller):
         """The exact command. Pure: it writes nothing."""
         if uv:
             command = [uv, "pip", "install", "--python", request.target_python, "--no-progress"]
+            if request.reinstall:
+                command.append("--reinstall")
         else:
             command = [request.target_python, "-m", "pip", "install",
                        "--disable-pip-version-check", "--no-input", "--progress-bar", "off"]
+            if request.reinstall:
+                command.append("--force-reinstall")
         if constraints_path is not None:
             command += ["--constraint", str(constraints_path)]
         if request.index_url:

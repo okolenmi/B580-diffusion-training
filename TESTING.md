@@ -189,12 +189,5 @@ Start from a clone with no `venv`, no `backend.db` and no `assets` folder, then 
 4. At every step of Setup the sidebar shows *Setup* at the top and every entry except Help is greyed and does nothing; typing `/graph` in the address bar returns to Setup. Reload the tab mid-install and the log resumes. When the install succeeds the page says it is restarting the server, comes back by itself and shows the card check (the terminal shows the server starting from the venv). After the install, reload the tab: the card check is shown again, not step 1.
 5. Step 5 with ComfyUI's `models` folder (not `models/checkpoints`): *Finish setup* must succeed without a ComfyUI folder anywhere. *Finish setup* opens Help; *Setup* has left the sidebar. `/graph` shows the full node palette (no red nodes), lists your checkpoints, and a 20-step run starts in the environment you chose (Settings shows `venv_python`). Restart `./run_server_linux.sh`: `/setup` must go straight to Help, and the nodes are still complete.
 
-## 96. xpu-kernels: what is left from the attention work (about 20 minutes)
-
-The kernel is verified on the card and the whole-step result is in `docs/manual/speed.md`. Two things remain:
-
-1. A 50-step run with the int8 base and `buckets.max_shapes=4`, before and after the rewritten SYCL dequantizer (about 82 ms per step was spent there), to see whether it moves the step.
-2. On the platform where Triton cannot see the matrix units (the default rusticl OpenCL one), `trainer.graph_attention=triton` must log why it ran `chunked_bf16` and still train.
-
 ## Reading a bundle automatically
 `python -m accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m perf hwcheck` without running anything.

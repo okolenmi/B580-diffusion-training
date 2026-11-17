@@ -24,7 +24,7 @@ class FusedGeglu:
         try:
             module = importlib.import_module("xpu_kernels.triton.geglu")
         except ImportError as error:
-            return f"the installed xpu-kernels has no fused GEGLU, or Triton is missing ({error}); the fused GEGLU is newer than the 0.3.0 release"
+            return f"the installed xpu-kernels has no fused GEGLU, or Triton is missing ({error}); the fused GEGLU needs xpu-kernels 0.4.0 or newer"
         if not hasattr(module, "geglu"):
             return "the installed xpu-kernels has no fused GEGLU"
         probe = torch.zeros(2, 8, dtype=torch.bfloat16, device=device)

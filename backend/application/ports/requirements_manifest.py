@@ -6,6 +6,7 @@ Three tiers: ``required`` (the server does not start without it), ``training`` (
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 
 REQUIRED = "required"
@@ -65,6 +66,10 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement("tokenizers", TRAINING, "Anima's Qwen and T5 tokenizers; without it only Anima text encoding is unavailable"),
     Requirement("transformers", OPTIONAL, "the auto-caption node's local image-to-text backend; imported only when that backend is used"),
 )
+if sys.platform.startswith("linux"):
+    # Its wheel is built for Linux only; elsewhere pip would try to compile the sdist and fail the whole install.
+    REQUIREMENTS += (Requirement("xpu-kernels", TRAINING, "fused INT8 and NF4 base-weight kernels, fused GEGLU and the capturable attention for graph replay; "
+                                                       "without it those stay off (slower steps, more memory)"),)
 
 #: Every package a fresh environment gets.
 FULL_INSTALL: tuple[str, ...] = tuple(r.distribution for r in REQUIREMENTS)

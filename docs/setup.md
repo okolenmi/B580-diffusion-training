@@ -50,7 +50,8 @@ some-parent-dir/
 pip install -r requirements.txt        # the server only (five lines)
 ```
 
-The trainer itself needs `torch` (Intel XPU build), `numpy`, `pillow`, `safetensors`, `tqdm`, `regex` and `tokenizers` (Anima) in the
+The trainer itself needs `torch` (Intel XPU build), `numpy`, `pillow`, `safetensors`, `tqdm`, `regex`, `tokenizers` (Anima) and, on Linux, `xpu-kernels` (the fused INT8/NF4,
+GEGLU and attention kernels; without it those features stay off) in the
 environment; `transformers` is optional (auto-captioning). The manifest the setup page checks is
 `backend/application/ports/requirements_manifest.py`.
 

@@ -59,6 +59,7 @@ IMPORT_NAMES: dict[str, str] = {
     "pillow": "PIL",
     "scikit-learn": "sklearn",
     "opencv-python": "cv2",
+    "xpu-kernels": "xpu_kernels",
 }
 
 

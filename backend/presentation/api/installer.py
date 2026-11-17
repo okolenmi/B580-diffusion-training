@@ -15,7 +15,6 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends
 
-from ...application.errors import InstallerNotAllowedError
 from ...application.memory_admission import admit
 from ...application.ports.environment import CachedDeviceProbe
 from ...application.services import ApplicationServices
@@ -159,10 +158,9 @@ def start_install(body: InstallerInstallIn, services: ApplicationServices = Depe
     """Install what the chosen environment is missing. Returns a job id at once; the client polls ``GET /install/{id}``.
 
     The request names only the target. The server inspects the environment, pins everything already installed there, and installs the
-    rest (torch from the Intel XPU index). Refused once the installation is configured.
+    rest (torch from the Intel XPU index). Refused once the installation is configured and its environment works.
     """
-    if services.installer.apply.execute().configured:
-        raise InstallerNotAllowedError("this installation is already configured; install packages from a fresh setup, not from a working one")
+    services.installer.apply.require_open()
     job = services.installer.install.execute(target=body.target, venv_dir=body.venv_dir, torch=body.torch)
     return InstallerInstallOut(**job.snapshot())
 

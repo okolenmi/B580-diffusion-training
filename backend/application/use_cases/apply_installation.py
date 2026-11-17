@@ -4,6 +4,11 @@
 write filesystem paths and run installs, so a setup page left open in a tab on a working machine must not be able to re-point the
 model folders under a run that is using them. Settings is where they change afterwards.
 
+**Reopening.** A configured installation whose chosen environment is gone (the stored interpreter is not a file any more) opens the
+installer again, because nothing can train without it and the setup page is the only place that rebuilds one. It stays open for the
+rest of this server run, even once the rebuild has put the folder back: the page still has to store the choice and restart the server
+after that, and the restart is what closes it again. A working environment is never offered for reinstalling; delete its folder to do that.
+
 **Configured** means the checkpoint and LoRA folders resolve -- from the models folder the user chose, from an explicit setting, or
 from a ComfyUI checkout found next to the project. Nothing else is required: ComfyUI is optional, and the graphics card and the
 training packages are things the page reports, not conditions of finishing setup.
@@ -31,6 +36,13 @@ class InstallationState:
     resolved_models_dir: str | None
     default_models_dir: str
     missing: tuple[str, ...]
+    #: The stored interpreter that no longer exists, while the installer is reopened for it.
+    missing_environment: str | None = None
+
+    @property
+    def open(self) -> bool:
+        """Whether the installer accepts writes."""
+        return not self.configured or self.missing_environment is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +59,7 @@ class ApplyInstallation:
         self._settings = settings
         self._project_root = project_root
         self._restarter = restarter
+        self._reopened_for: str | None = None
 
     def execute(self) -> InstallationState:
         return self._state_of(self._settings.read())
@@ -58,9 +71,9 @@ class ApplyInstallation:
         package was just installed: a running process keeps what it imported (and what it failed to import) before the install, even
         when the environment is the same one.
         """
-        self._require_unconfigured()
+        self.require_open()
         view = self._settings.update(changes)
-        interpreter = view.resolved.get("venv_python") if changes.venv_python else None
+        interpreter = self._chosen(view) if changes.venv_python else None
         return ApplyResult(view, *self._restart(interpreter, force=restart))
 
     def server_runs_in(self, interpreter: str | None) -> bool | None:
@@ -71,13 +84,22 @@ class ApplyInstallation:
 
     def restart(self) -> ApplyResult:
         """Restart now into the stored environment: the page's own button, for a restart that did not happen by itself."""
-        self._require_unconfigured()
+        self.require_open()
         view = self._settings.read()
-        return ApplyResult(view, *self._restart(view.resolved.get("venv_python"), force=True))
+        return ApplyResult(view, *self._restart(self._chosen(view), force=True))
 
-    def _require_unconfigured(self) -> None:
+    @staticmethod
+    def _chosen(view: SettingsView) -> str | None:
+        """The environment the person picked, which is the *stored* value.
+
+        Not ``resolved``: that puts the ``VENV_PYTHON`` variable first, and a server started through the bootstrap has that variable
+        pointing at its own temporary environment, so restarting "into" the resolved one re-launched the same temporary environment.
+        """
+        return view.stored.get("venv_python") or None
+
+    def require_open(self) -> None:
         state = self._state_of(self._settings.read())
-        if state.configured:
+        if not state.open:
             raise InstallerNotAllowedError(
                 "this installation is already configured "
                 f"(checkpoints in {state.resolved_checkpoints_dir}); change the folders from Settings instead")
@@ -96,6 +118,9 @@ class ApplyInstallation:
 
     def _state_of(self, view: SettingsView) -> InstallationState:
         resolved = view.resolved
+        stored = view.stored.get("venv_python")
+        if stored and not Path(stored).is_file():
+            self._reopened_for = stored
         missing = tuple(key for key in ("checkpoints_dir", "loras_dir") if not resolved.get(key))
         return InstallationState(
             configured=not missing,
@@ -104,4 +129,5 @@ class ApplyInstallation:
             resolved_models_dir=resolved.get("models_dir"),
             default_models_dir=str(self._project_root / "models"),
             missing=missing,
+            missing_environment=self._reopened_for,
         )

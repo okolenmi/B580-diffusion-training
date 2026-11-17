@@ -89,7 +89,7 @@ function railItem(item, activeId, locked = false) {
 /* ``setup`` is the installer's state as the server reports it: null until known, which renders the ordinary rail. */
 function railHtml(setup) {
   const activeId = activeRailId();
-  const needsSetup = Boolean(setup) && !setup.configured;
+  const needsSetup = Boolean(setup) && setup.setup_open;
   const locked = needsSetup;
   const render = (items) => items.map((it) => railItem(it, activeId, locked)).join("\n");
   const mainItems = needsSetup ? [SETUP_ITEM, ...MAIN_ITEMS] : MAIN_ITEMS;
@@ -117,13 +117,13 @@ async function syncRail(nav) {
   } catch (err) {
     console.warn("shell: installer state unavailable, showing the ordinary rail", err);
   }
-  if (setup && !setup.configured && !OPEN_BEFORE_SETUP.has(activeRailId())) {
+  if (setup && setup.setup_open && !OPEN_BEFORE_SETUP.has(activeRailId())) {
     window.location.replace("/setup");
     return;
   }
   nav.innerHTML = railHtml(setup);
   bindRail();
-  if (setup && !setup.configured) setTimeout(() => syncRail(nav), 3000);
+  if (setup && setup.setup_open) setTimeout(() => syncRail(nav), 3000);
 }
 
 function mountRail() {

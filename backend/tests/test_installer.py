@@ -328,6 +328,62 @@ check(apply_case.restart().restarting and restarter.restarted == [chosen], "the 
 check(not ApplyInstallation(FreshMachine(SqliteSettingsStore(SqliteDatabase(root / "other.db"), root)), root, FakeRestarter()).restart().restarting,
       "a restart with no environment chosen says so instead of doing nothing")
 
+# A configured installation stays closed while its environment works, reopens when that environment is gone, and stays open for the rest of the
+# server run so the rebuild can be stored and the server restarted; the next server run sees a working environment and closes it again.
+from backend.application.errors import InstallerNotAllowedError  # noqa: E402
+
+root = Path(tempfile.mkdtemp(prefix="backend-installer-reopen-"))
+chosen = own_venv(root)
+database = SqliteDatabase(root / "backend.db")
+database.initialize()
+store = FreshMachine(SqliteSettingsStore(database, root))
+restarter = FakeRestarter()
+case = ApplyInstallation(store, root, restarter)
+case.apply(SettingsChanges(models_dir=str(root / "m"), venv_python=chosen))
+check(case.execute().configured and not case.execute().open, "a configured installation with a working environment is closed")
+try:
+    case.require_open()
+    refused = False
+except InstallerNotAllowedError:
+    refused = True
+check(refused, "and the installer refuses writes there")
+Path(chosen).unlink()
+state = case.execute()
+check(state.configured and state.open and state.missing_environment == chosen, "the environment being gone reopens setup, naming it")
+case.require_open()
+own_venv_again = Path(chosen)
+own_venv_again.write_text("#!/bin/sh\n")
+own_venv_again.chmod(0o755)
+check(case.execute().open, "setup stays open once the folder is rebuilt, until the server restarts")
+restarter.restarted.clear()
+check(case.apply(SettingsChanges(venv_python=chosen), restart=True).restarting and restarter.restarted == [chosen],
+      "the rebuilt environment can be stored and the server restarted into it")
+check(not ApplyInstallation(store, root, FakeRestarter()).execute().open, "the restarted server finds a working environment and closes setup")
+
+# A server started through the bootstrap has VENV_PYTHON pointing at its own temporary environment, and that variable outranks the stored
+# choice when paths resolve. The restart has to go to what was chosen, or it re-launches the temporary environment and nothing changes.
+import os  # noqa: E402
+
+root = Path(tempfile.mkdtemp(prefix="backend-installer-restart-"))
+chosen = own_venv(root)
+temporary = str(root / "tmp-venv" / "bin" / "python")
+database = SqliteDatabase(root / "backend.db")
+database.initialize()
+restarter = FakeRestarter(temporary)
+was = os.environ.get("VENV_PYTHON")
+os.environ["VENV_PYTHON"] = temporary
+try:
+    case = ApplyInstallation(FreshMachine(SqliteSettingsStore(database, root)), root, restarter)
+    check(case.apply(SettingsChanges(venv_python=chosen), restart=True).restarting and restarter.restarted == [chosen],
+          "a server whose VENV_PYTHON names its temporary environment still restarts into the chosen one")
+    restarter.restarted.clear()
+    check(case.restart().restarting and restarter.restarted == [chosen], "the restart button does the same")
+finally:
+    if was is None:
+        os.environ.pop("VENV_PYTHON", None)
+    else:
+        os.environ["VENV_PYTHON"] = was
+
 root = Path(tempfile.mkdtemp(prefix="backend-installer-restart-"))
 database = SqliteDatabase(root / "backend.db")
 database.initialize()

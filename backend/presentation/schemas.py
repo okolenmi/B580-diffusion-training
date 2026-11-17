@@ -84,6 +84,10 @@ def settings_out(view: SettingsView) -> SettingsViewOut:
 
 class InstallerStateOut(BaseModel):
     configured: bool
+    #: Whether the installer accepts writes: unconfigured, or reopened because the chosen environment is gone.
+    setup_open: bool
+    #: The environment chosen earlier that no longer exists, while setup is reopened for it.
+    missing_environment: str | None = None
     resolved_checkpoints_dir: str | None
     resolved_loras_dir: str | None
     resolved_models_dir: str | None
@@ -223,6 +227,8 @@ def state_out(state: InstallationState, install: dict | None = None) -> Installe
     return InstallerStateOut(
         install_id=install["id"] if install else None,
         configured=state.configured,
+        setup_open=state.open,
+        missing_environment=state.missing_environment,
         resolved_checkpoints_dir=state.resolved_checkpoints_dir,
         resolved_loras_dir=state.resolved_loras_dir,
         resolved_models_dir=state.resolved_models_dir,

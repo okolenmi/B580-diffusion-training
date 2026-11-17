@@ -148,3 +148,9 @@ virtualenv, and installed into an environment before looking at what was in it. 
   before the packages existed). The page recognizes the new server by the `boot_id` in `/health` and never proceeds on a guess.
 * **Setup is a place in the sidebar**, visible while unconfigured, locking the other entries (Help excepted) at every step, and every
   other page redirects to it. `/setup` redirects to Help once configured.
+* **The restart target is the stored `venv_python`.** The resolved value puts the `VENV_PYTHON` variable first, and a server started
+  through the bootstrap has it pointing at its own temporary environment; restarting "into" that re-executed the same environment
+  (same PID, same red note, a manual start fixed it).
+* **A missing environment reopens setup.** Configured is not the same as working: when the stored interpreter is no longer a file the
+  installer accepts writes again and the page rebuilds it, staying open for that server run so the rebuild can be stored and the
+  server restarted. A working environment is never reinstalled from the page; its folder has to be deleted first.

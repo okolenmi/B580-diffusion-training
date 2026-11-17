@@ -63,6 +63,14 @@ function show(n) {
   if (render) render();
 }
 
+/* Setup was reopened because the environment chosen earlier no longer exists; the rest of the installation is already configured. */
+const repairing = () => Boolean(wizard.state && wizard.state.missing_environment);
+
+function finishRepair() {
+  try { localStorage.removeItem(SAVED); } catch { /* only a convenience */ }
+  window.location.replace("/help");
+}
+
 /* ---- 1. graphics card ---------------------------------------------------- */
 
 async function stepDevices() {
@@ -87,6 +95,8 @@ async function stepDevices() {
           h("div", {}, d.name || `Device ${d.index}`, d.total_memory_mb ? ` — ${Math.round(d.total_memory_mb).toLocaleString()} MB` : ""),
           d.note ? h("div", { class: "text-dim" }, d.note) : null))));
   frame("Graphics card",
+    repairing() ? h("p", { class: "setup-error" },
+      `The environment chosen in the earlier setup is gone: ${wizard.state.missing_environment}. Rebuild it here; your folders and settings are kept.`) : null,
     h("p", { class: "setup-note text-dim" },
       "Training uses an Intel GPU through PyTorch's XPU build. This is what the system lists; the next steps install and verify PyTorch."),
     body,
@@ -344,7 +354,7 @@ async function stepInstalled() {
     wizard.restartNote ? h("p", { class: "setup-error" }, wizard.restartNote) : null,
     actions(v.present && v.server_in_environment !== false ? null : button("Check again", stepInstalled),
       v.present && v.server_in_environment !== false ? null : button("Restart the server", restartNow),
-      button("Continue", () => show(4), { primary: true })));
+      repairing() ? button("Finish", finishRepair, { primary: true }) : button("Continue", () => show(4), { primary: true })));
 }
 
 /* ---- 4. prompt files ----------------------------------------------------- */
@@ -453,7 +463,7 @@ async function waitForRestart(before) {
 async function boot() {
   loadWizard();
   wizard.state = await api("/installer/state");
-  if (wizard.state.configured) {
+  if (!wizard.state.setup_open) {
     window.location.replace("/help");
     return;
   }

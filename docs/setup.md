@@ -31,6 +31,15 @@ seen, the step offers *Check again* and *Restart the server*. Finishing stores `
 the launcher runs in the stored environment unless `VENV_PYTHON` says otherwise. ComfyUI is not needed anywhere. After that
 `/setup` redirects to Help and the installer routes are refused (`installer_not_allowed`); change both in Settings (*Folders and environment*).
 
+The server is restarted into the environment that was *stored*, not the one its own paths resolve to: a server started through the
+bootstrap runs with `VENV_PYTHON` naming its temporary environment, and that variable outranks the stored choice when paths resolve.
+
+**Repairing.** If the stored environment is later deleted, setup opens again by itself (`/state` reports `setup_open` and
+`missing_environment`): the sidebar locks, `/setup` shows the wizard with a note, and the installer routes accept writes. Rebuild the
+environment as in step 2 (*new virtualenv*); the page stores it, restarts the server and *Finish* opens Help, keeping your folders.
+It stays open for that server run, so the page can store the rebuilt environment and restart; the restarted server finds a working one
+and closes setup. A working environment is never offered for reinstalling: to rebuild one, delete its folder (a wrong torch included).
+
 While setup is unfinished the sidebar has a *Setup* entry at the top and every other entry except Help is locked; opening any other
 page by address sends you back to Setup. A reloaded setup page resumes the running install, or the step you were on.
 

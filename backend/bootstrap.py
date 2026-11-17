@@ -314,7 +314,7 @@ def build_container(settings: Settings) -> Container:
             install=StartInstall(
                 installer=PipInstaller(),
                 inspect=inspect_environment,
-                base_python=sys.executable,
+                base_python=getattr(sys, "_base_executable", sys.executable),
                 jobs=install_jobs,
             ),
             install_status=GetInstall(jobs=install_jobs),

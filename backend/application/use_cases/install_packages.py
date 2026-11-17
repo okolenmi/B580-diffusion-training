@@ -21,7 +21,7 @@ from pathlib import Path
 from packaging.utils import canonicalize_name
 
 from ..errors import ApplicationError
-from ..ports.package_installer import InstallError, InstallRequest, PackageInstaller, create_virtualenv
+from ..ports.package_installer import InstallError, InstallRequest, PackageInstaller, create_virtualenv, remove_virtualenv
 from ..ports.requirements_manifest import ACCELERATOR_PACKAGES, TORCH_INDEX_URL, torch_requirement
 from .inspect_environment import InspectEnvironment
 
@@ -149,8 +149,11 @@ class StartInstall:
         job.set_state(RUNNING)
         try:
             python = report.interpreter
-            for replaced in report.replaces:
-                job.line(f"Replacing {replaced} with the Intel XPU build")
+            if report.discards:
+                if Path(report.venv_dir) != self.inspect.new_venv_dir:
+                    raise InstallError("only the project's own virtualenv is ever deleted")
+                job.line(f"Deleting {report.venv_dir}")
+                remove_virtualenv(Path(report.venv_dir))
             if python is None:
                 target = Path(report.venv_dir)
                 job.line(f"Creating a virtualenv at {target}")
@@ -167,8 +170,7 @@ class StartInstall:
                 job.line(f"== {', '.join(packages)}" + (f"  (from {index})" if index else ""))
                 self.installer.install(
                     InstallRequest(target_python=python, packages=packages, constraints=report.constraints,
-                                   index_url=index, target_label=job.target_label,
-                                   reinstall=bool(report.replaces) and index is not None),
+                                   index_url=index, target_label=job.target_label),
                     on_line=job.line,
                 )
             job.target_python = python

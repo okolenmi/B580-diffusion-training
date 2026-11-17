@@ -13,10 +13,12 @@
     <main class="content-area">
         <header class="page-topbar">
             <h1>Settings</h1>
-            <span class="page-sub">Application preferences -- this page is new, sections will grow</span>
+            <span class="page-sub">Where models live, which Python trains, and how the app looks</span>
         </header>
 
         <div class="page-body">
+            <div id="settings-folders"></div>
+
             <!-- First item, as agreed: the design theme. Dark is what
                  ships; Light is honestly marked and disabled, not faked. -->
             <section class="card settings-card" id="theme-group">
@@ -54,5 +56,6 @@
     </main>
 
     <script type="module" src="/ui/js/shell.js"></script>
+    <script type="module" src="/ui/js/views/settings.js"></script>
 </body>
 </html>

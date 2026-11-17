@@ -99,3 +99,21 @@
     line-height: 1.55;
     margin: 12px 0 0;
 }
+
+/* ---- 5. Folders and environment ------------------------------------------- */
+
+.settings-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 0;
+    max-width: 720px;
+}
+.settings-field-label { font-weight: 700; font-size: 13px; }
+.settings-field-hint { font-size: 12px; line-height: 1.5; }
+.settings-input {
+    --ctl-pad: 9px 12px; --ctl-family: var(--font-mono); --ctl-font: 13px; --ctl-bg: var(--surface); --ctl-radius: var(--radius);
+}
+.settings-actions { display: flex; align-items: center; gap: 14px; padding-top: 8px; }
+.settings-actions .settings-note { margin: 0; }
+.settings-bad { color: var(--red); }

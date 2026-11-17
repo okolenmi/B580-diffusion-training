@@ -38,6 +38,8 @@ class ApplyResult:
     view: SettingsView
     #: The server is about to restart into the chosen environment; the page waits for it to come back.
     restarting: bool
+    #: Why the server stays where it is although the chosen environment is a different one; None when nothing needs saying.
+    restart_note: str | None = None
 
 
 class ApplyInstallation:
@@ -61,15 +63,19 @@ class ApplyInstallation:
                 "this installation is already configured "
                 f"(checkpoints in {state.resolved_checkpoints_dir}); change the folders from Settings instead")
         view = self._settings.update(changes)
-        return ApplyResult(view, self._restart_if_needed(changes, view))
+        restarting, note = self._restart_if_needed(changes, view)
+        return ApplyResult(view, restarting, note)
 
-    def _restart_if_needed(self, changes: SettingsChanges, view: SettingsView) -> bool:
+    def _restart_if_needed(self, changes: SettingsChanges, view: SettingsView) -> tuple[bool, str | None]:
         interpreter = view.resolved.get("venv_python") if changes.venv_python else None
         restarter = self._restarter
-        if not interpreter or restarter is None or restarter.running_in(interpreter) or not restarter.can_serve(interpreter):
-            return False
+        if not interpreter or restarter is None or restarter.running_in(interpreter):
+            return False, None
+        if not restarter.can_serve(interpreter):
+            return False, (f"{interpreter} cannot run the server (it needs Python 3.14 or newer and the server's own packages), so the "
+                           "server stays in its temporary environment and most nodes will not load. Choose another environment.")
         restarter.restart_into(interpreter)
-        return True
+        return True, None
 
     def _state_of(self, view: SettingsView) -> InstallationState:
         resolved = view.resolved

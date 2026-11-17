@@ -49,8 +49,8 @@ const MAIN_ITEMS = [
 ];
 /* Shown first, only while the installation is not finished. */
 const SETUP_ITEM = { id: "setup", href: "/setup", label: "Setup", icon: ICONS.setup };
-/* What stays usable while an install runs: the install itself, and the page that explains things. */
-const OPEN_DURING_INSTALL = new Set(["setup", "help"]);
+/* What stays usable until setup is finished: setup itself, and the page that explains things. Nothing else can work without the packages. */
+const OPEN_BEFORE_SETUP = new Set(["setup", "help"]);
 const BOTTOM_ITEMS = [
   { id: "settings", href: "/settings", label: "Settings", icon: ICONS.sliders },
 ];
@@ -69,9 +69,9 @@ function activeRailId() {
 
 function railItem(item, activeId, locked = false) {
   const active = item.id === activeId;
-  if (locked && !OPEN_DURING_INSTALL.has(item.id)) {
-    return `<span class="rail-item locked" data-rail="${item.id}" aria-disabled="true" aria-label="${item.label} (locked while installing)">
-              ${item.icon}<span class="rail-tip">${item.label} -- locked while installing</span></span>`;
+  if (locked && !OPEN_BEFORE_SETUP.has(item.id)) {
+    return `<span class="rail-item locked" data-rail="${item.id}" aria-disabled="true" aria-label="${item.label} (locked until setup is finished)">
+              ${item.icon}<span class="rail-tip">${item.label} -- locked until setup is finished</span></span>`;
   }
   const tip = `<span class="rail-tip">${item.label}</span>`;
   if (!item.href) {
@@ -90,7 +90,7 @@ function railItem(item, activeId, locked = false) {
 function railHtml(setup) {
   const activeId = activeRailId();
   const needsSetup = Boolean(setup) && !setup.configured;
-  const locked = needsSetup && setup.installing;
+  const locked = needsSetup;
   const render = (items) => items.map((it) => railItem(it, activeId, locked)).join("\n");
   const mainItems = needsSetup ? [SETUP_ITEM, ...MAIN_ITEMS] : MAIN_ITEMS;
   const logo = locked
@@ -107,7 +107,8 @@ function bindRail() {
   });
 }
 
-/* While setup is unfinished the rail follows the server, so the lock lifts and the Setup entry disappears without a reload. */
+/* While setup is unfinished every page but Setup and Help sends the visitor to Setup, and the rail follows the server, so the lock
+   lifts and the Setup entry disappears without a reload. */
 async function syncRail(nav) {
   let setup = null;
   try {
@@ -115,6 +116,10 @@ async function syncRail(nav) {
     if (response.ok) setup = await response.json();
   } catch (err) {
     console.warn("shell: installer state unavailable, showing the ordinary rail", err);
+  }
+  if (setup && !setup.configured && !OPEN_BEFORE_SETUP.has(activeRailId())) {
+    window.location.replace("/setup");
+    return;
   }
   nav.innerHTML = railHtml(setup);
   bindRail();

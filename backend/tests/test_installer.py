@@ -233,26 +233,40 @@ def own_venv(root: Path) -> str:
     interpreter.parent.mkdir(parents=True)
     interpreter.write_text("#!/bin/sh\n")
     interpreter.chmod(0o755)
+    (root / "venv" / "pyvenv.cfg").write_text("home = /usr/bin\n")
     return str(interpreter)
 
 
 root = Path(tempfile.mkdtemp(prefix="backend-installer-own-"))
 own = own_venv(root)
+(root / "venv" / "stale-cuda-torch.txt").write_text("gigabytes")
 recorder = RecordingInstaller()
-inventory_own = VenvInventory(own, "3.13.1", (("torch", "2.15.0"), ("numpy", "2.1.0"), ("sympy", "1.13")))
-services = build_services(project_root=root, venv_inspector=FakeVenvInspector({str(root / "venv"): inventory_own}))
+services = build_services(project_root=root)
 services.installer.install.installer = recorder
+services.installer.install.base_python = sys.executable
 report = services.installer.inspect.for_target("new", None)
-check(report.usable and not report.problems, "a wrong torch in the project's own venv is not a blocker")
-check(report.replaces == ("torch 2.15.0",) and "torch" in report.to_install and report.constraints == (),
-      "it is replaced, and nothing is pinned against the replacement")
+check(report.usable and not report.problems and report.discards and "torch" in report.to_install and report.constraints == (),
+      "a project venv that is already there is planned as deleted and recreated, with nothing pinned")
 wait(services, services.installer.install.execute("new").id)
-check(recorder.requests[0].reinstall and recorder.requests[0].index_url == TORCH_INDEX_URL, "the XPU torch is installed over it")
-check(not recorder.requests[1].reinstall, "only the torch stage reinstalls")
-check("--force-reinstall" in PipInstaller.build_command(recorder.requests[0]), "the reinstall reaches the pip command line")
+check(not (root / "venv" / "stale-cuda-torch.txt").exists() and Path(own).exists(), "the old files are gone and a fresh venv stands in its place")
+check(recorder.requests[0].index_url == TORCH_INDEX_URL, "torch still comes from the XPU index")
 
-other = services_with({"/cpu": inventory(torch="2.15.0")})[0].installer.inspect.for_target("existing", "/cpu")
-check(not other.usable and other.replaces == (), "a user's own environment is still never modified")
+from backend.application.ports.package_installer import InstallError, remove_virtualenv  # noqa: E402
+
+keep = Path(tempfile.mkdtemp(prefix="backend-installer-notvenv-"))
+(keep / "mine.txt").write_text("x")
+try:
+    remove_virtualenv(keep)
+    refused = False
+except InstallError:
+    refused = True
+check(refused and (keep / "mine.txt").exists(), "a folder that is not a virtualenv is never deleted")
+
+root = Path(tempfile.mkdtemp(prefix="backend-installer-notvenv-"))
+(root / "venv").mkdir()
+(root / "venv" / "mine.txt").write_text("x")
+report = build_services(project_root=root).installer.inspect.for_target("new", None)
+check(report.problems and not report.discards, "a ./venv that is not a virtualenv blocks instead of being deleted")
 
 
 class FakeRestarter(ServerRestarter):
@@ -279,6 +293,8 @@ for running, serves, expected, why in ((own, True, False, "already running there
     result = ApplyInstallation(FreshMachine(SqliteSettingsStore(database, root)), root, restarter).apply(
         SettingsChanges(models_dir=str(root / "m"), venv_python=chosen))
     check(result.restarting is expected and bool(restarter.restarted) is expected, f"restart into the chosen environment: {expected} ({why})")
+    if not serves:
+        check(result.restart_note and "cannot run the server" in result.restart_note, "a refused restart says why instead of failing silently")
 
 root = Path(tempfile.mkdtemp(prefix="backend-installer-restart-"))
 database = SqliteDatabase(root / "backend.db")
@@ -333,7 +349,7 @@ app = create_app(services)
 
 status, _, body = asgi_request(app, "/api/v1/installer/state")
 check(status == 200 and body["configured"] is False and body["default_models_dir"].endswith("models"), "GET state on a fresh machine")
-check(body["installing"] is False and body["install_id"] is None, "no install yet: nothing to lock or resume")
+check(body["install_id"] is None, "no install yet: nothing to resume")
 status, _, body = asgi_request(app, "/api/v1/installer/manifest")
 check(status == 200 and len(body["requirements"]) == len(REQUIREMENTS), "GET manifest has one row per requirement")
 status, _, body = asgi_request(app, "/api/v1/installer/environment", method="POST", json_body={"target": "existing", "venv_dir": "/env"})
@@ -352,8 +368,6 @@ job_id = body["id"]
 status, _, body = asgi_request(app, "/api/v1/installer/state")
 check(body["install_id"] == job_id, "state names the latest install, so a reloaded page can resume it")
 wait(services, job_id)
-status, _, body = asgi_request(app, "/api/v1/installer/state")
-check(body["installing"] is False and body["install_id"] == job_id, "a finished install no longer locks the app")
 status, _, body = asgi_request(app, "/api/v1/installer/install/nope")
 check(status == 404 and body["error"]["code"] == "install_job_not_found", "an unknown job is a 404 with a code")
 status, _, body = asgi_request(app, "/api/v1/installer/apply", method="POST", json_body={"models_dir": str(root / "m")})

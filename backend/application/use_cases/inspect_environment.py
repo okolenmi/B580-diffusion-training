@@ -6,7 +6,7 @@ what is already there. For a new environment nothing exists yet and everything i
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from packaging.utils import canonicalize_name as canonicalize
@@ -36,8 +36,8 @@ class EnvironmentReport:
     installed_count: int
     #: Reasons the environment cannot serve a run even after the missing packages are added.
     problems: tuple[str, ...]
-    #: Installed packages the install will replace, as "name version". Only ever in the project's own environment.
-    replaces: tuple[str, ...] = ()
+    #: What the install deletes first. Only ever the project's own environment, which is recreated from nothing.
+    discards: tuple[str, ...] = ()
 
     @property
     def to_install(self) -> tuple[str, ...]:
@@ -78,22 +78,17 @@ class InspectEnvironment:
     def plan_new(self) -> EnvironmentReport:
         """A fresh environment inside the project.
 
-        A venv already in that folder is the project's own, so it is reused, and a torch in it that is not the XPU build is replaced
-        rather than treated as a blocker: unlike a user's environment, nothing there needs protecting from it.
+        A virtualenv already in that folder is the project's own, and an old or wrong one is not worth repairing (a CUDA torch alone is
+        gigabytes), so it is deleted and created again.
         """
         target = self.new_venv_dir
-        if find_interpreter(str(target)):
-            report = replace(self.inspect_existing(str(target)), kind="new")
-            wrong = self._wrong_torch(report)
-            if wrong is None:
-                return report
-            version = wrong.installed_version
-            packages = tuple(replace(p, installed_version=None) if p is wrong else p for p in report.packages)
-            return replace(report, packages=packages, constraints=(), problems=(), replaces=(f"torch {version}",))
-        problems = ()
-        if target.exists() and any(target.iterdir()):
+        problems: tuple[str, ...] = ()
+        discards: tuple[str, ...] = ()
+        if (target / "pyvenv.cfg").is_file() and not target.is_symlink():
+            discards = (f"the virtualenv already at {target} is deleted first, and created again with only what is listed below",)
+        elif target.exists() and any(target.iterdir()):
             problems = (f"{target} exists and is not a virtualenv; move it aside or choose an existing environment.",)
-        return EnvironmentReport("new", str(target), None, None, None, self._states({}), (), 0, problems)
+        return EnvironmentReport("new", str(target), None, None, None, self._states({}), (), 0, problems, discards)
 
     def verify_device(self, venv_dir: str) -> VenvDevice:
         return self._inspector.device(venv_dir)
@@ -112,13 +107,6 @@ class InspectEnvironment:
             tuple(f"{canonicalize(name)}=={version}" for name, version in inventory.packages if version),
             len(inventory.packages), tuple(problems),
         )
-
-    @staticmethod
-    def _wrong_torch(report: EnvironmentReport) -> PackageState | None:
-        for package in report.packages:
-            if canonicalize(package.name) == "torch" and package.installed_version and not is_xpu_build(package.installed_version):
-                return package
-        return None
 
     @staticmethod
     def _states(installed: dict[str, str]) -> tuple[PackageState, ...]:

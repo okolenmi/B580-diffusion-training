@@ -14,7 +14,7 @@ server and opens `/setup`. Setup has five steps; nothing is installed until you 
 1. **Graphics card**: the Intel GPU the system lists (PyTorch may not exist yet).
 2. **Environment**: *a new virtualenv* (created at `./venv`) or *an existing virtualenv* (its folder, the one that holds `bin/python`;
    ComfyUI's works). For an existing one the packages found there are listed first and everything already installed is pinned, so
-   pip adds what is missing and cannot move what is there. An existing environment whose torch is not the Intel XPU build is refused. The new virtualenv is the project's own: if `./venv` is already there it is completed, and a torch in it that is not the XPU build is replaced.
+   pip adds what is missing and cannot move what is there. An existing environment whose torch is not the Intel XPU build is refused. The new virtualenv is the project's own: if `./venv` is already there (a virtualenv, not a folder of your own) it is deleted and created again, so an old or wrong torch cannot leave gigabytes behind.
 3. **Install**: pip output streams into a scrollable log. PyTorch comes from the Intel XPU index (`download.pytorch.org/whl/xpu`),
    everything else from PyPI. A new environment offers the tested PyTorch release (2.12.1, `TORCH_TESTED_VERSION` in the manifest),
    the newest on that index, or an exact version. Afterwards the card is checked through that environment's own PyTorch.
@@ -23,13 +23,13 @@ server and opens `/setup`. Setup has five steps; nothing is installed until you 
 5. **Models folder**: default `./models`. A ComfyUI `models` folder works as it is: checkpoints are read from `<folder>/checkpoints`
    and LoRAs are saved to `<folder>/loras`. Missing folders are created.
 
-Finishing stores `models_dir` and the environment's interpreter (`venv_python`) in the settings, restarts the server inside that
-environment (the node library imports torch, which the temporary environment does not have) and opens Help. Every later start of
+Right after a successful install the environment's interpreter (`venv_python`) is stored and the server restarts inside it (the
+node library imports torch, which the temporary environment does not have); the page waits for it and carries on. Finishing stores `models_dir` and opens Help. Every later start of
 the launcher runs in the stored environment unless `VENV_PYTHON` says otherwise. ComfyUI is not needed anywhere. After that
-`/setup` redirects to Help and the installer routes are refused (`installer_not_allowed`); change both from Settings.
+`/setup` redirects to Help and the installer routes are refused (`installer_not_allowed`); change both in Settings (*Folders and environment*).
 
-While setup is unfinished the sidebar has a *Setup* entry at the top; during an install every other entry except Help is locked.
-A reloaded setup page resumes the running install (or the card check after a finished one).
+While setup is unfinished the sidebar has a *Setup* entry at the top and every other entry except Help is locked; opening any other
+page by address sends you back to Setup. A reloaded setup page resumes the running install, or the step you were on.
 
 Without the page: set `VENV_PYTHON` (in `.env` or the environment) to an interpreter that has the packages in
 `backend/application/ports/requirements_manifest.py`, and `models_dir` in Settings.

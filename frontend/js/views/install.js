@@ -58,6 +58,7 @@ const message = () => h("p", { class: "setup-error", id: "setup-msg", hidden: tr
 
 function show(n) {
   wizard.step = n;
+  saveWizard();
   const render = [null, stepDevices, stepEnvironment, null, stepTokenizers, stepModels][n];
   if (render) render();
 }
@@ -100,7 +101,8 @@ const SAVED = "setup.wizard.v1";
 function loadWizard() {
   try {
     const saved = JSON.parse(localStorage.getItem(SAVED) || "{}");
-    for (const key of ["target", "venvDir", "torch", "torchCustom"]) if (typeof saved[key] === "string") wizard[key] = saved[key];
+    for (const key of ["target", "venvDir", "torch", "torchCustom", "python"]) if (typeof saved[key] === "string") wizard[key] = saved[key];
+    if (Number.isInteger(saved.step)) wizard.step = saved.step;
   } catch (err) {
     logError("installer: saved choices unreadable", err);
   }
@@ -108,8 +110,8 @@ function loadWizard() {
 
 function saveWizard() {
   try {
-    const { target, venvDir, torch, torchCustom } = wizard;
-    localStorage.setItem(SAVED, JSON.stringify({ target, venvDir, torch, torchCustom }));
+    const { target, venvDir, torch, torchCustom, python, step } = wizard;
+    localStorage.setItem(SAVED, JSON.stringify({ target, venvDir, torch, torchCustom, python, step }));
   } catch (err) {
     logError("installer: could not save choices", err);
   }
@@ -119,7 +121,7 @@ function packageTable(report) {
   return h("div", { class: "setup-packages" }, report.packages.map((p) => h("div", { class: `setup-pkg ${p.installed_version ? "is-ok" : "is-missing"}` },
     h("span", { class: "setup-pkg-state", "aria-hidden": "true" }, p.installed_version ? "✓" : "○"),
     h("span", { class: "setup-pkg-name" }, p.name),
-    h("span", { class: "setup-pkg-version text-dim" }, p.installed_version || (p.approx_mb ? `will install ~${size(p.approx_mb)}` : "will install")),
+    h("span", { class: "setup-pkg-version text-dim" }, p.installed_version || (p.approx_mb ? `will install, ~${size(p.approx_mb)} on disk` : "will install")),
     h("span", { class: "setup-pkg-why text-dim" }, p.why))));
 }
 
@@ -154,10 +156,10 @@ function reportSummary(report) {
   return h("div", {},
     report.python_version ? h("p", { class: "setup-note text-dim" }, `Python ${report.python_version} at ${report.interpreter}; ${report.installed_count} packages installed.`) : null,
     report.problems.map((text) => h("p", { class: "setup-error" }, text)),
-    report.replaces.map((what) => h("p", { class: "setup-note" }, `${what} is in this environment but is not the Intel XPU build. It will be replaced.`)),
+    report.discards.map((what) => h("p", { class: "setup-note" }, `Note: ${what}.`)),
     packageTable(report),
     h("p", { class: "setup-note text-dim" }, missing
-      ? `${missing} package${missing === 1 ? "" : "s"} to install (~${size(report.download_mb)}). Everything already in the environment is pinned and left as it is.`
+      ? `${missing} package${missing === 1 ? "" : "s"} to install (about ${size(report.download_mb)} on disk). Everything already in the environment is pinned and left as it is.`
       : "Everything this project needs is already there."));
 }
 
@@ -212,8 +214,23 @@ async function stepEnvironment(fresh = true) {
 }
 
 function useEnvironment(report) {
-  wizard.python = report.interpreter;
-  stepInstalled();
+  adoptEnvironment(report.interpreter);
+}
+
+/* Store the chosen interpreter and let the server move into it right away: the card check, the node library and every later
+   step need the packages that are there, and the temporary environment the server started in has none of them. */
+async function adoptEnvironment(python) {
+  wizard.python = python;
+  frame("Using that environment…", h("p", { class: "setup-note text-dim" }, "Saving the choice."));
+  try {
+    const result = await api("/installer/apply", { method: "POST", body: { venv_python: python } });
+    if (result.restarting) await waitForRestart();
+    wizard.restartNote = result.restart_note;
+  } catch (err) {
+    wizard.restartNote = errText(err);
+    logError("installer: could not store the environment", err);
+  }
+  await stepInstalled();
 }
 
 /* ---- 3. install ---------------------------------------------------------- */
@@ -250,6 +267,7 @@ async function startInstall() {
 
 async function watchInstall(job) {
   wizard.step = 3;
+  saveWizard();
   const title = h("h2", { class: "setup-step-title" }, "Installing…");
   const note = h("p", { class: "setup-note text-dim" });
   const failure = h("p", { class: "setup-error", hidden: true });
@@ -276,9 +294,8 @@ async function watchInstall(job) {
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   if (job.state === "succeeded") {
-    wizard.python = job.target_python;
     log(`installer: job ${job.id} succeeded`);
-    await stepInstalled();
+    await adoptEnvironment(job.target_python);
   } else {
     title.textContent = "The install did not finish.";
     failure.textContent = job.error || job.state;
@@ -291,6 +308,7 @@ async function watchInstall(job) {
 /* Whether the card is visible to PyTorch in the environment that will be used: the real answer, now that torch exists there. */
 async function stepInstalled() {
   wizard.step = 3;
+  saveWizard();
   frame("Checking the graphics card in that environment…", h("p", { class: "setup-note text-dim" }, "Importing PyTorch takes a few seconds."));
   try {
     wizard.verify = await api("/installer/environment/verify", { method: "POST", body: { target: wizard.target, venv_dir: wizard.venvDir || null } });
@@ -303,6 +321,7 @@ async function stepInstalled() {
       h("span", { class: "setup-device-state", "aria-hidden": "true" }, v.present ? "✓" : "!"),
       h("span", {}, v.present ? `${v.name} — ${Number(v.total_memory_mb).toLocaleString()} MB, PyTorch ${v.torch_version}` : (v.reason || "PyTorch sees no Intel GPU.")),
       v.present ? null : h("div", { class: "text-dim" }, "Training will not start until PyTorch sees the card. You can finish setup and fix the driver afterwards.")),
+    wizard.restartNote ? h("p", { class: "setup-error" }, wizard.restartNote) : null,
     actions(button("Continue", () => show(4), { primary: true })));
 }
 
@@ -323,6 +342,7 @@ async function downloadTokenizer(key, node) {
 async function stepTokenizers() {
   try { wizard.tokenizers = await api("/installer/tokenizers"); } catch (err) { wizard.tokenizers = []; logError("installer: tokenizers", err); }
   wizard.step = 4;
+  saveWizard();
   frame("Prompt files",
     h("p", { class: "setup-note text-dim" },
       "Prompts are tokenized with published vocabulary files. They are downloaded once into the project's assets folder; ComfyUI is not needed. "
@@ -370,6 +390,7 @@ async function finish(event) {
     if (wizard.python) body.venv_python = wizard.python;
     const result = await api("/installer/apply", { method: "POST", body });
     log("installer: setup finished");
+    try { localStorage.removeItem(SAVED); } catch { /* only a convenience */ }
     if (result.restarting) await waitForRestart();
     window.location.replace("/help");
     return;
@@ -414,12 +435,9 @@ async function boot() {
   if (wizard.state.install_id) {
     const job = await api(`/installer/install/${wizard.state.install_id}`).catch(() => null);
     if (job && !job.terminal) return watchInstall(job);
-    if (job && job.state === "succeeded") {
-      wizard.python = job.target_python;
-      return stepInstalled();
-    }
   }
-  show(wizard.step);
+  if (wizard.step === 3 && wizard.python) return stepInstalled();
+  show(wizard.step === 3 ? 2 : Math.min(Math.max(wizard.step, 1), 5));
 }
 
 boot().catch((err) => {

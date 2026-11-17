@@ -141,7 +141,9 @@ virtualenv, and installed into an environment before looking at what was in it. 
   there cannot import the node modules (torch) and the graph editor shows almost every node red. `/apply` therefore restarts the
   server into the chosen interpreter (`ServerRestarter`, re-running the launcher with `VENV_PYTHON`), and `backend.first_run` reads the
   stored `venv_python` on every start. An interpreter older than `MIN_PYTHON` or without the server packages is never restarted into.
-* **The project's own `./venv` is completed, not refused.** A torch there that is not the XPU build is replaced (`--force-reinstall`
-  on the torch stage, no pins); a user's own environment is still only ever added to.
-* **Setup is a place in the sidebar**, visible while unconfigured, locking the other entries (Help excepted) while an install runs.
-  `/setup` redirects to Help once configured.
+* **The project's own `./venv` is recreated.** If it already exists it is deleted (only when it has a `pyvenv.cfg`, is not a link, and
+  is exactly `<project>/venv`) and made again: a wrong torch left behind doubles the size and repairing it in place gains nothing. A
+  user's own environment is still only ever added to. The interpreter is stored and the server restarts into it as soon as the
+  install succeeds, not only at the end of the wizard.
+* **Setup is a place in the sidebar**, visible while unconfigured, locking the other entries (Help excepted) at every step, and every
+  other page redirects to it. `/setup` redirects to Help once configured.

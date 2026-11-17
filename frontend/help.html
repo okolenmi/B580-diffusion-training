@@ -13,103 +13,128 @@
     <main class="content-area">
         <header class="page-topbar">
             <h1>Help</h1>
-            <span class="page-sub">Guide skeleton -- headings in place, prose to be written</span>
+            <span class="page-sub">Train an SDXL LoRA on your Intel Arc card: the short path, then where things are</span>
         </header>
 
         <div class="page-body">
-            <!-- The only section with real content today: factual
-                 navigation help. Everything else is an honest stub. -->
+            <section class="card" id="help-start">
+                <div class="card-header"><span>Your first LoRA</span></div>
+                <ol class="help-steps">
+                    <li><strong>Put a checkpoint in place.</strong> Copy an SDXL checkpoint (<code>.safetensors</code>) into
+                        <code>&lt;models folder&gt;/checkpoints</code>. The models folder is the one you chose in Setup; the page
+                        <a href="/settings">Settings</a> shows it and lets you change it.</li>
+                    <li><strong>Make a dataset.</strong> Open <a href="/datasets">Datasets</a>, press <em>New dataset</em>, then
+                        <em>Import</em> and give the folder with your pictures. Pictures are read where they are, not copied. A
+                        caption file beside a picture (<code>name.txt</code>) is imported with it. Look through the pictures and
+                        write or fix captions: they decide what the LoRA learns.</li>
+                    <li><strong>Open the graph editor.</strong> In <a href="/graph">Graph Editor</a> press <em>Quick workflow</em>.
+                        Pick the checkpoint, the dataset, an output folder and the length (steps), then confirm. The whole
+                        training graph appears, ready to run.</li>
+                    <li><strong>Check it.</strong> <em>Validate</em> lists anything missing or wrong, by node. A red node means the
+                        server could not load that node type; see Troubleshooting below.</li>
+                    <li><strong>Run.</strong> <em>&#9654; Run</em> starts training. <em>Watch</em> (top of the editor) shows the
+                        loss charts, boards and the run history. <em>&#9632; Stop</em> stops it.</li>
+                    <li><strong>Use the result.</strong> The adapter is a <code>.safetensors</code> file in the output folder you
+                        chose, saved every N steps (<em>Save every</em>). Copy it to <code>&lt;models folder&gt;/loras</code>
+                        to use it in ComfyUI or any other tool that reads LoRAs.</li>
+                </ol>
+                <p class="help-note">For a first run keep the defaults except the steps: a few hundred steps at resolution 1024 and
+                    batch size 1 show whether everything works before you commit to a long run.</p>
+            </section>
+
             <section class="card" id="help-where">
                 <div class="card-header"><span>Where things live</span></div>
                 <dl class="help-map">
                     <div class="help-map-row">
-                        <dt><a href="/">System tracker</a></dt>
-                        <dd>Start, control and review runs; live log and history.</dd>
-                        <code>/</code>
-                    </div>
-                    <div class="help-map-row">
                         <dt><a href="/graph">Graph Editor</a></dt>
-                        <dd>Build, validate and run node graphs (training workflows).</dd>
+                        <dd>Build, validate and run training graphs. This is where training starts.</dd>
                         <code>/graph</code>
                     </div>
                     <div class="help-map-row">
-                        <dt><a href="/datasets">Dataset manager</a></dt>
-                        <dd>Items, prompts, training sets, cache sweeps.</dd>
+                        <dt><a href="/datasets">Datasets</a></dt>
+                        <dd>Import pictures, edit captions (three channels: text, tags, desc), group pictures into sets.</dd>
                         <code>/datasets</code>
                     </div>
                     <div class="help-map-row">
+                        <dt><a href="/">System tracker</a></dt>
+                        <dd>The landing page; a shortcut to the editor.</dd>
+                        <code>/</code>
+                    </div>
+                    <div class="help-map-row">
                         <dt><a href="/settings">Settings</a></dt>
-                        <dd>Application preferences (design theme first).</dd>
+                        <dd>Models folder, checkpoint and LoRA folders, the Python environment that trains, the theme.</dd>
                         <code>/settings</code>
                     </div>
                     <div class="help-map-row">
-                        <dt>Monitors</dt>
-                        <dd>Attached to runs and workflows -- opened from their
-                            links, or by pasting an id on the System tracker.</dd>
-                        <code>/monitor/&lt;id&gt;</code>
+                        <dt>Setup</dt>
+                        <dd>Appears in the sidebar until the installation is finished, and then goes away. Every other page
+                            except Help waits for it.</dd>
+                        <code>/setup</code>
                     </div>
                 </dl>
             </section>
 
             <div class="help-grid">
                 <section class="card help-card">
-                    <div class="card-header"><span>Getting started</span></div>
-                    <ol class="help-outline">
-                        <li>Open a config and start a run</li>
-                        <li>Watch it on the System tracker</li>
-                        <li>Find it later in the run history</li>
-                    </ol>
-                    <p class="help-todo">To be written.</p>
+                    <div class="card-header"><span>Datasets</span></div>
+                    <ul class="help-list">
+                        <li>Datasets are kept in the <code>datasets</code> folder next to the project.</li>
+                        <li>Captions have three channels. <em>text</em> is the sentence prompt, <em>tags</em> a comma list,
+                            <em>desc</em> a longer description. Switch the channel above the pictures to see and edit each.</li>
+                        <li>A picture can be marked good or bad, or discarded, without deleting the file.</li>
+                        <li>Sets group pictures inside a dataset.</li>
+                        <li>Importing the same folder again keeps the captions you already wrote, unless a caption file exists.</li>
+                    </ul>
                 </section>
 
                 <section class="card help-card">
-                    <div class="card-header"><span>Working with datasets</span></div>
-                    <ol class="help-outline">
-                        <li>Create a dataset, run a cache sweep</li>
-                        <li>Curate items (prompts, good/bad, discard)</li>
-                        <li>Commit a training set</li>
-                    </ol>
-                    <p class="help-todo">To be written.</p>
+                    <div class="card-header"><span>The graph editor</span></div>
+                    <ul class="help-list">
+                        <li>A graph is nodes (dataset, model, optimizer, trainer, saver...) joined by edges. The quick workflow builds
+                            the usual one; edit it to change anything the form does not offer.</li>
+                        <li>The <em>Nodes</em> panel lists every node type; drag one onto the canvas. <em>Inspector</em> edits the
+                            selected node's parameters.</li>
+                        <li><em>Arrange</em> tidies the layout and <em>Fit</em> shows all of it.</li>
+                        <li><em>Save</em> keeps the graph in the library; <em>Export</em> and <em>Import file</em> move it to
+                            and from a file.</li>
+                        <li>Two runs at once are allowed when the card's memory can hold both; otherwise the second is refused or
+                            queued, with the reason.</li>
+                    </ul>
                 </section>
 
                 <section class="card help-card">
-                    <div class="card-header"><span>Graph editor basics</span></div>
-                    <ol class="help-outline">
-                        <li>Nodes, edges, validation</li>
-                        <li>Saving to the library</li>
-                        <li>Running a graph</li>
-                    </ol>
-                    <p class="help-todo">To be written.</p>
-                </section>
-
-                <section class="card help-card">
-                    <div class="card-header"><span>Editing the config</span></div>
-                    <ol class="help-outline">
-                        <li>Form mode vs raw TOML</li>
-                        <li>Field visibility follows distillation mode</li>
-                        <li>Save, revert, reload</li>
-                    </ol>
-                    <p class="help-todo">To be written.</p>
-                </section>
-
-                <section class="card help-card">
-                    <div class="card-header"><span>Monitors, runs and logs</span></div>
-                    <ol class="help-outline">
-                        <li>What a monitor shows</li>
-                        <li>Run detail pages and log tails</li>
-                        <li>Stopping and force-killing</li>
-                    </ol>
-                    <p class="help-todo">To be written.</p>
+                    <div class="card-header"><span>Memory on a 12 GB card</span></div>
+                    <ul class="help-list">
+                        <li>If a run does not fit, the cheapest changes are a lower resolution, batch size 1, and a smaller LoRA rank.</li>
+                        <li>Close other programs that use the card (browsers with video, games, ComfyUI) before a long run.</li>
+                        <li>Every memory setting, with what it costs and gains, is in <code>docs/manual/vram.md</code>.</li>
+                    </ul>
                 </section>
 
                 <section class="card help-card">
                     <div class="card-header"><span>Troubleshooting</span></div>
-                    <ol class="help-outline">
-                        <li>A run failed -- where to look</li>
-                        <li>Dataset task states</li>
-                        <li>Reading the system console</li>
-                    </ol>
-                    <p class="help-todo">To be written.</p>
+                    <ul class="help-list">
+                        <li><strong>Most nodes are red.</strong> The server is running without PyTorch. Open <a href="/settings">Settings</a>
+                            and check that the Python interpreter is the virtualenv that Setup installed, then restart the
+                            server with the launcher script.</li>
+                        <li><strong>A run is refused for memory.</strong> Another program or run holds the card. Stop it, lower the
+                            batch size or resolution, or run later.</li>
+                        <li><strong>The card is not found.</strong> Update the Intel graphics driver and check that your user may use
+                            the GPU (on Linux usually the <code>render</code> group), then check again in Setup's card step.</li>
+                        <li><strong>A run failed.</strong> Find it in the run history under <em>Watch</em> and read its log; the
+                            last lines usually name the failing node and why.</li>
+                        <li><strong>Prompts do not tokenize.</strong> The vocabulary files are missing; download them in Setup's
+                            Prompt files step, or put them in the project's <code>assets</code> folder.</li>
+                    </ul>
+                </section>
+
+                <section class="card help-card">
+                    <div class="card-header"><span>Going deeper</span></div>
+                    <ul class="help-list">
+                        <li><code>docs/MANUAL.md</code>: tuning for speed, memory and quality, and the command-line runner.</li>
+                        <li><code>docs/setup.md</code>: installing, environments, the launcher scripts, <code>.env</code>.</li>
+                        <li><code>docs/status.md</code>: what is built and what is verified on hardware.</li>
+                    </ul>
                 </section>
             </div>
         </div>

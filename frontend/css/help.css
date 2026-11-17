@@ -1,13 +1,11 @@
 /* ---------------------------------------------------------------------------
-   help.css -- Help page (/help), a structured placeholder: the "Where things
-   live" block carries real factual content; every other section shows its
-   outline plus an honest "To be written." marker. Loaded after style.css
+   help.css -- Help page (/help): a first-run guide, the page map, and short reference cards. Loaded after style.css
    (tokens + page chrome come from there).
 
    Sections:
    1. .help-map  -- the where-things-live rows (name / meaning / href)
-   2. .help-grid -- responsive card grid for the stub sections
-   3. .help-outline / .help-todo -- stub anatomy
+   2. .help-grid -- responsive card grid for the reference cards
+   3. Guide prose -- the numbered steps, bullet lists and notes
 --------------------------------------------------------------------------- */
 
 /* ---- 1. Where things live ------------------------------------------------ */
@@ -63,24 +61,6 @@
 /* page-body stacks cards vertically; the grid provides its own gaps */
 .help-grid .card { margin-bottom: 0; }
 
-/* ---- 3. Stub anatomy ------------------------------------------------------ */
-
-.help-outline {
-    margin: 0 0 12px;
-    padding-left: 20px;
-    color: var(--text-dim);
-    font-size: 13px;
-}
-.help-outline li { margin: 4px 0; }
-
-.help-todo {
-    font-size: 13px;
-    font-style: italic;
-    color: var(--text-dim);
-    opacity: 0.8;
-    margin: 0;
-}
-
 /* ---- Responsive ----------------------------------------------------------- */
 
 @media (max-width: 900px) {
@@ -88,4 +68,31 @@
         grid-template-columns: 1fr;
         gap: 4px;
     }
+}
+
+/* ---- Guide prose ---------------------------------------------------------- */
+
+.help-steps {
+    margin: 0;
+    padding: 16px 24px 4px 46px;
+    font-size: 14px;
+    line-height: 1.6;
+}
+.help-steps li { margin: 10px 0; }
+.help-list {
+    margin: 0;
+    padding: 12px 20px 14px 38px;
+    color: var(--text-dim);
+    font-size: 13px;
+    line-height: 1.55;
+}
+.help-list li { margin: 7px 0; }
+.help-note { color: var(--text-dim); font-size: 13px; margin: 0; padding: 4px 24px 18px; }
+.help-steps a, .help-list a, .help-note a { color: var(--accent); }
+.help-steps code, .help-list code, .help-note code {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    background: var(--surface-alt);
+    border-radius: var(--radius-sm);
+    padding: 1px 5px;
 }

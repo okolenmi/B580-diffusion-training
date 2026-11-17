@@ -1,7 +1,7 @@
 """What this project needs installed, and why, as data the setup page and the installer share.
 
 Three tiers: ``required`` (the server does not start without it), ``training`` (the page works but a run does not) and
-``optional`` (a feature degrades quietly). A row's ``approx_mb`` is None where no honest size is known.
+``optional`` (a feature degrades quietly). A row's ``approx_mb`` is its size on disk once installed (the XPU torch brings its own runtime libraries), None where no honest size is known.
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ REQUIREMENTS: tuple[Requirement, ...] = (
     Requirement("python-multipart", REQUIRED, "multipart body parsing, for the upload endpoints"),
     Requirement("tomli_w", REQUIRED, "writing training config TOML back out"),
     Requirement("packaging", REQUIRED, "PEP 440 version comparison and requirement parsing in the installer"),
-    Requirement("torch", TRAINING, "every training step runs through it; without it no run starts (the Intel XPU build)", approx_mb=2500),
+    Requirement("torch", TRAINING, "every training step runs through it; without it no run starts (the Intel XPU build)", approx_mb=5400),
     Requirement("numpy", TRAINING, "array maths throughout the trainer and nodes", approx_mb=20),
     Requirement("safetensors", TRAINING, "the only checkpoint format read or written", approx_mb=3),
     Requirement("pillow", TRAINING, "image loading for dataset items", approx_mb=4),
@@ -75,5 +75,5 @@ def by_tier(tier: str) -> tuple[Requirement, ...]:
 
 
 def total_approx_mb() -> int:
-    """Rough download size of a full install, for the disk decision."""
+    """Rough size on disk of a full install, for the disk decision."""
     return sum(r.approx_mb or 0 for r in REQUIREMENTS)

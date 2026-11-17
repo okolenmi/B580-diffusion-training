@@ -55,6 +55,7 @@ def apply_installation(body: InstallerApplyIn, services: ApplicationServices = D
     view = result.view
     return InstallerApplyOut(
         restarting=result.restarting,
+        restart_note=result.restart_note,
         settings={"stored": dict(view.stored), "resolved": dict(view.resolved)},
         state=state_out(services.installer.apply.execute()).model_dump(),
     )

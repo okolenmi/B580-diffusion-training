@@ -84,12 +84,11 @@ class DiffusionTrainerNode(Node):
                           "about twice as fast per step where the step is bound by kernel launches. Costs memory for the graph "
                           "(shared by the shapes) and needs no dropout, no gate and no fused optimizer. Shapes that cannot be "
                           "captured keep running eagerly."),
-        "graph_attention": Port("graph_attention", str, required=False, default="math", choices=("math", "math_bf16", "chunked_bf16", "triton"), group="speed",
+        "graph_attention": Port("graph_attention", str, required=False, default="triton", choices=("math", "math_bf16", "chunked_bf16", "triton"), group="speed",
                                 visible_when=("graph", True),
-                                doc="The attention a captured graph runs (the default fast kernel cannot be captured). math: the stock math backend (fp32 products, exact). "
+                                doc="The attention a captured graph runs (the default fast kernel cannot be captured). triton (default): the fused kernel from xpu-kernels, capturable and about as fast as the default one; chunked_bf16 where it cannot run (the log says which). math: the stock math backend (fp32 products, exact). "
                                     "math_bf16: the same with bf16 products. chunked_bf16: bf16 products over blocks of query rows, probabilities recomputed in backward "
-                                    "(no score matrix kept). triton: the fused attention kernel from xpu-kernels, about as fast as the default one and capturable (chunked_bf16 "
-                                    "where it cannot run; the log says which). The bf16 modes round the scores before the softmax; compare the loss with math over a few hundred steps."),
+                                    "(no score matrix kept). The bf16 modes round the scores before the softmax; compare the loss with math over a few hundred steps."),
         "fused_geglu": Port("fused_geglu", bool, required=False, default=True, group="speed",
                             doc="Run the feed-forward activation (split, gelu, multiply, and their gradient) as one kernel pass each way, from the "
                                 "xpu-kernels package. The kernel checks itself against the eager chain first and stays off, with a warning, if it differs."),
@@ -278,7 +277,7 @@ class DiffusionTrainerNode(Node):
         # The default kernel (flash) uses work-group scratch memory, which graph capture does not support; the memory-efficient
         # backend is not implemented on XPU and would only warn and fall back to this one.
         scopes = getattr(model.denoiser, "attention_scopes", lambda: {})()
-        mode = inputs.get("graph_attention") or "math"
+        mode = inputs.get("graph_attention") or "triton"
         if mode != "math" and mode not in scopes:
             raise ValueError(f"DiffusionTrainer: this model has no graph attention mode {mode!r}")
         if mode == "triton":

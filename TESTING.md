@@ -189,20 +189,12 @@ Start from a clone with no `venv`, no `backend.db` and no `assets` folder, then 
 4. At every step of Setup the sidebar shows *Setup* at the top and every entry except Help is greyed and does nothing; typing `/graph` in the address bar returns to Setup. Reload the tab mid-install and the log resumes. When the install succeeds the page says it is restarting the server, comes back by itself and shows the card check (the terminal shows the server starting from the venv). After the install, reload the tab: the card check is shown again, not step 1.
 5. Step 5 with ComfyUI's `models` folder (not `models/checkpoints`): *Finish setup* must succeed without a ComfyUI folder anywhere. *Finish setup* opens Help; *Setup* has left the sidebar. `/graph` shows the full node palette (no red nodes), lists your checkpoints, and a 20-step run starts in the environment you chose (Settings shows `venv_python`). Restart `./run_server_linux.sh`: `/setup` must go straight to Help, and the nodes are still complete.
 
-## 96. xpu-kernels: the repository's unreleased changes and the new Triton attention (about 30 minutes)
+## 96. xpu-kernels: what is left from the attention work (about 20 minutes)
 
-In the `oko-xpu-kernels` checkout (its latest commit), with your venv active; install it with `pip install -e .` after `./build.sh` if the `.so` is stale.
+The kernel is verified on the card and the whole-step result is in `docs/manual/speed.md`. Two things remain:
 
-1. `python -m xpu_kernels`: the gates must be open, including `geglu` and `geglu_backward`. The SYCL weight dequantizer was rewritten since 0.3.0 (probe: 0.454 to 0.039 ms), so run `python debug/verify_prepare_fused.py` and `debug/verify_linear_dx.py` too: the results must be identical to before.
-2. `python debug/verify_attention_capture.py`: report all four parts. Part 1 shows whether the kernel even compiles for the B580; part 3 whether the capture works (the line `CAPTURE FAILED` is a result, not a bug to hide); part 4 is the time against flash and math. The trainer's target: capture works, replay identical, at least 2x faster than math.
-3. Only if part 3 captures: `python debug/bench_attention.py` (several minutes) and send the `best for ...` lines. A kernel that captures but is slower than math is recorded as dead, as the Triton dequantizer was.
-4. Then a 50-step run with the int8 base and `buckets.max_shapes=4`, before and after, to see whether the new dequantizer moves the step (about 82 ms per step was spent there).
-
-Steps 1-3 passed on the card (xpu-kernels `docs/experiments.md` 5c). What is left is the whole step:
-
-5. Batch 4, 512 px, bf16, same seed and 200 steps, three runs: eager; `trainer.graph=true` with `trainer.graph_attention=math`; the same with `triton`. The log must say `graph attention: the fused kernel`. Report ms per step (steady state), peak memory and the loss curve of each. The question is whether `triton` replay beats eager (1134 ms before) and whether its loss follows `math`.
-6. The same three at 1024 px, batch 1. The device is about 94 % busy there, so expect little; a loss is a result.
-7. On the platform where Triton cannot see the matrix units (the default rusticl OpenCL one), `triton` must report why it ran `chunked_bf16` and still train.
+1. A 50-step run with the int8 base and `buckets.max_shapes=4`, before and after the rewritten SYCL dequantizer (about 82 ms per step was spent there), to see whether it moves the step.
+2. On the platform where Triton cannot see the matrix units (the default rusticl OpenCL one), `trainer.graph_attention=triton` must log why it ran `chunked_bf16` and still train.
 
 ## Reading a bundle automatically
 `python -m accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m perf hwcheck` without running anything.

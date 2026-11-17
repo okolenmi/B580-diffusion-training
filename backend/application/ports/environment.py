@@ -34,6 +34,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TypeGuard, TypeVar
 
 from .system_cards import SystemCards
@@ -385,6 +386,14 @@ print(json.dumps({"ok": True, "devices": devices, "count": count}))
     def enumerate_all(self) -> bool:
         return True
 
+    @staticmethod
+    def _python() -> str:
+        """The interpreter the probe child runs under. When the environment the server started in has been deleted (a new one is being
+        built over it) its python is gone; the base interpreter then answers "no torch" and the cards are listed from the system."""
+        if Path(sys.executable).exists():
+            return sys.executable
+        return getattr(sys, "_base_executable", None) or sys.executable
+
     def devices_with_reason(self) -> tuple[tuple[DeviceReport, ...], str | None]:
         """The devices, by enumeration rather than by asking which is current."""
         if self._in_process:
@@ -392,7 +401,7 @@ print(json.dumps({"ok": True, "devices": devices, "count": count}))
 
         try:
             result = subprocess.run(
-                [sys.executable, "-c",
+                [self._python(), "-c",
                  self._LIST_CHILD_TEMPLATE.replace("__BACKEND__", repr(self.backend))],
                 capture_output=True, text=True, timeout=self.timeout,
             )
@@ -484,7 +493,7 @@ print(json.dumps({"ok": True, "devices": devices, "count": count}))
             return self._report_here()
         try:
             result = subprocess.run(
-                [sys.executable, "-c", self._child_source(self.backend)],
+                [self._python(), "-c", self._child_source(self.backend)],
                 capture_output=True, text=True, timeout=self.timeout,
             )
         except subprocess.TimeoutExpired:

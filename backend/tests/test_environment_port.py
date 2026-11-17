@@ -150,6 +150,12 @@ print("\n-- the subprocess path agrees with the in-process one --")
 # Both run the same source, but one is exec'd in a captured stdout and the
 # other is a real child. A difference between them would mean the probe's
 # answer depends on how it was asked.
+import sys as _sys
+from unittest import mock
+
+with mock.patch.object(_sys, "executable", "/nonexistent/venv/bin/python"):
+    check(Path(TorchDeviceProbe._python()).exists(), "a deleted server environment does not stop the probe from running (the base interpreter answers)")
+
 subprocess_listed, subprocess_reason = TorchDeviceProbe(backend="xpu").devices_with_reason()
 check(subprocess_reason is None,
       f"the subprocess lists without complaint ({subprocess_reason!r})")

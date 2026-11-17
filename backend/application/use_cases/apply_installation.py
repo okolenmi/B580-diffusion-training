@@ -63,6 +63,12 @@ class ApplyInstallation:
         interpreter = view.resolved.get("venv_python") if changes.venv_python else None
         return ApplyResult(view, *self._restart(interpreter, force=restart))
 
+    def server_runs_in(self, interpreter: str | None) -> bool | None:
+        """Whether this server is running in ``interpreter``'s environment; None when that cannot be told."""
+        if not interpreter or self._restarter is None:
+            return None
+        return self._restarter.running_in(interpreter)
+
     def restart(self) -> ApplyResult:
         """Restart now into the stored environment: the page's own button, for a restart that did not happen by itself."""
         self._require_unconfigured()

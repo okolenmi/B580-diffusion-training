@@ -149,6 +149,8 @@ class InstallerVerifyOut(BaseModel):
     total_memory_mb: int | None
     torch_version: str | None
     reason: str | None
+    #: Whether the server itself runs in that environment; False means its nodes cannot import what was installed there.
+    server_in_environment: bool | None = None
 
 
 class InstallerInstallIn(BaseModel):

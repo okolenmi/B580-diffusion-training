@@ -296,6 +296,23 @@ for running, serves, expected, why in ((own, True, False, "already running there
     if not serves:
         check(result.restart_note and "cannot run the server" in result.restart_note, "a refused restart says why instead of failing silently")
 
+# Verifying after an install looks at the folder as it is; it must not plan one (a plan for "new" deletes and recreates it).
+root = Path(tempfile.mkdtemp(prefix="backend-installer-verify-"))
+chosen = own_venv(root)
+seen = []
+
+
+class RecordingInspector(FakeVenvInspector):
+    def device(self, venv_dir):
+        seen.append(venv_dir)
+        return super().device(venv_dir)
+
+
+verifier = build_services(project_root=root, venv_inspector=RecordingInspector({str(root / "venv"): VenvInventory(chosen, "3.14.0", ())}))
+interpreter, device = verifier.installer.inspect.verify("new", None)
+check(interpreter == chosen and device.present and seen == [str(root / "venv")],
+      "the card check after an install of the new venv inspects that folder instead of planning a fresh one")
+
 # A server already running in the environment that was just installed into still has to restart: it imported before the packages existed.
 root = Path(tempfile.mkdtemp(prefix="backend-installer-restart-"))
 chosen = own_venv(root)

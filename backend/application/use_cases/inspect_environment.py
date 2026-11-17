@@ -90,8 +90,14 @@ class InspectEnvironment:
             problems = (f"{target} exists and is not a virtualenv; move it aside or choose an existing environment.",)
         return EnvironmentReport("new", str(target), None, None, None, self._states({}), (), 0, problems, discards)
 
-    def verify_device(self, venv_dir: str) -> VenvDevice:
-        return self._inspector.device(venv_dir)
+    def verify(self, target: str, venv_dir: str | None) -> tuple[str | None, VenvDevice]:
+        """Whether torch in the chosen environment sees the card, as ``(interpreter, device)``.
+
+        Looks at the folder as it is now. It does not plan an install: a plan for ``"new"`` describes a venv that does not exist yet
+        (it is deleted and created again), which is the opposite of what is asked after the install.
+        """
+        folder = str(self.new_venv_dir) if target == "new" else (venv_dir or "").strip()
+        return find_interpreter(folder) if folder else None, self._inspector.device(folder)
 
     def inspect_existing(self, venv_dir: str) -> EnvironmentReport:
         inventory = self._inspector.inspect(venv_dir)

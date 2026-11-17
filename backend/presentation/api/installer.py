@@ -148,13 +148,10 @@ def inspect_environment(body: InstallerInstallIn, services: ApplicationServices 
 @router.post("/environment/verify", response_model=InstallerVerifyOut)
 def verify_environment(body: InstallerInstallIn, services: ApplicationServices = Depends(get_services)) -> InstallerVerifyOut:
     """Whether torch in that environment sees the Intel GPU. Imports torch there, so it takes seconds."""
-    report = services.installer.inspect.for_target(body.target, body.venv_dir)
-    if report.interpreter is None:
-        return InstallerVerifyOut(present=False, name=None, total_memory_mb=None, torch_version=None,
-                                  reason=report.error or "the environment does not exist yet")
-    device = services.installer.inspect.verify_device(report.venv_dir)
+    interpreter, device = services.installer.inspect.verify(body.target, body.venv_dir)
     return InstallerVerifyOut(present=device.present, name=device.name, total_memory_mb=device.total_memory_mb,
-                              torch_version=device.torch_version, reason=device.reason)
+                              torch_version=device.torch_version, reason=device.reason,
+                              server_in_environment=services.installer.apply.server_runs_in(interpreter))
 
 
 @router.post("/install", response_model=InstallerInstallOut, responses={400: _ERROR_400, 409: _ERROR_409})

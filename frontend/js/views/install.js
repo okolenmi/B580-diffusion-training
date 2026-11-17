@@ -338,8 +338,12 @@ async function stepInstalled() {
       h("span", { class: "setup-device-state", "aria-hidden": "true" }, v.present ? "✓" : "!"),
       h("span", {}, v.present ? `${v.name} — ${Number(v.total_memory_mb).toLocaleString()} MB, PyTorch ${v.torch_version}` : (v.reason || "PyTorch sees no Intel GPU.")),
       v.present ? null : h("div", { class: "text-dim" }, "Training will not start until PyTorch sees the card. You can finish setup and fix the driver afterwards.")),
+    v.server_in_environment === false
+      ? h("p", { class: "setup-error" }, "The server is not running inside that environment, so its nodes cannot load PyTorch. Press Restart the server.")
+      : null,
     wizard.restartNote ? h("p", { class: "setup-error" }, wizard.restartNote) : null,
-    actions(v.present ? null : button("Check again", stepInstalled), v.present ? null : button("Restart the server", restartNow),
+    actions(v.present && v.server_in_environment !== false ? null : button("Check again", stepInstalled),
+      v.present && v.server_in_environment !== false ? null : button("Restart the server", restartNow),
       button("Continue", () => show(4), { primary: true })));
 }
 

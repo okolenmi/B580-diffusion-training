@@ -1,6 +1,6 @@
 # 73. Making attention capturable (brief for a separate project)
 
-Status: **route A is written in `xpu-kernels` (`xpu_kernels.triton.attention`, unreleased, arithmetic checked on the CPU) and waits for the card (`TESTING.md` 96); a pure-torch stopgap (route D) is built.** Written to be handed to the `xpu-kernels` project or an upstream report.
+Status: **route A works on the card (`xpu_kernels.triton.attention`, unreleased: captures bit-identically, 3-4x faster than the math attention, level with flash at the 1024-token shapes and 1.4x slower at the 20-head 256-token shapes; xpu-kernels `docs/experiments.md` 5c) and is selectable as `trainer.graph_attention=triton`. What it does to a whole captured step is not measured (`TESTING.md` 96).** A pure-torch stopgap (route D) is the fallback. Written to be handed to the `xpu-kernels` project or an upstream report.
 
 ## Problem
 - The trainer's replayed step (`engine/step/graphed.py`) captures forward, loss and backward in one `torch.xpu.XPUGraph`. The default SDPA kernel

@@ -220,7 +220,11 @@ def attention_modes_cases():
         check(((mine - exact).norm() / exact.norm()).item() < 0.02, f"bf16 attention stays close to the fp32 result ({((mine - exact).norm() / exact.norm()).item():.4f})")
     finally:
         attention_modes.ChunkedAttention.CHUNK_ELEMENTS = saved
-    check(set(attention_modes.MODES) == {"math", "math_bf16", "chunked_bf16"}, "the modes are named as the node's choices")
+    check(set(attention_modes.MODES) == {"math", "math_bf16", "chunked_bf16", "triton"}, "the modes are named as the node's choices")
+    q = k = v = torch.randn(1, 2, 8, 64, dtype=torch.bfloat16)
+    check(torch.equal(attention_modes.fused_attention(q, k, v), attention_modes.chunked_attention(q, k, v)),
+          "the triton mode falls back to the chunked mode where the kernel cannot run")
+    check(attention_modes.fused_attention_status("cpu") != "", "the fallback has a reason to report")
     allowed = torch.backends.cuda.fp16_bf16_reduction_math_sdp_allowed
     before = allowed()
     with attention_modes.MODES["math_bf16"]():

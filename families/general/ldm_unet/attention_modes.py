@@ -8,6 +8,7 @@ which is what most bf16 attention outside flash does; the softmax itself runs in
 from __future__ import annotations
 
 import contextlib
+import functools
 from contextlib import AbstractContextManager
 from collections.abc import Callable
 
@@ -93,8 +94,38 @@ def _math_with_bf16_products():
         setter(previous)
 
 
+@functools.cache
+def _fused_module():
+    """``xpu_kernels``' Triton attention, or None when the installed package predates it."""
+    try:
+        from xpu_kernels.triton import attention
+    except ImportError:
+        return None
+    return attention
+
+
+def fused_attention_status(device) -> str:
+    """Empty when the ``triton`` mode runs the fused kernel on ``device``, otherwise why it runs the chunked mode instead."""
+    kernels = _fused_module()
+    if kernels is None:
+        return "the installed xpu-kernels has no Triton attention (it needs a release newer than 0.3)"
+    probe = torch.zeros((1, 1, 16, 64), dtype=torch.bfloat16, device=device)
+    if not kernels.usable(probe, probe, probe):
+        return "the fused attention is not usable here (no matrix units exposed to Triton, or a verification gate closed)"
+    return ""
+
+
+def fused_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+    """The fused, capturable kernel where it can run these tensors; the chunked bf16 mode where it cannot (the choice is per shape, so a captured graph is consistent)."""
+    kernels = _fused_module()
+    if kernels is not None and kernels.usable(q, k, v):
+        return kernels.attention(q, k, v)
+    return chunked_attention(q, k, v)
+
+
 MODES: dict[str, Callable[[], AbstractContextManager]] = {
     "math": lambda: sdpa_kernel(SDPBackend.MATH),
     "math_bf16": _math_with_bf16_products,
     "chunked_bf16": lambda: replace_sdpa(chunked_attention),
+    "triton": lambda: replace_sdpa(fused_attention),
 }

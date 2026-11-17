@@ -198,7 +198,11 @@ In the `oko-xpu-kernels` checkout (its latest commit), with your venv active; in
 3. Only if part 3 captures: `python debug/bench_attention.py` (several minutes) and send the `best for ...` lines. A kernel that captures but is slower than math is recorded as dead, as the Triton dequantizer was.
 4. Then a 50-step run with the int8 base and `buckets.max_shapes=4`, before and after, to see whether the new dequantizer moves the step (about 82 ms per step was spent there).
 
-The trainer does not call the attention yet; that comes after step 2 and 3 say it is worth it.
+Steps 1-3 passed on the card (xpu-kernels `docs/experiments.md` 5c). What is left is the whole step:
+
+5. Batch 4, 512 px, bf16, same seed and 200 steps, three runs: eager; `trainer.graph=true` with `trainer.graph_attention=math`; the same with `triton`. The log must say `graph attention: the fused kernel`. Report ms per step (steady state), peak memory and the loss curve of each. The question is whether `triton` replay beats eager (1134 ms before) and whether its loss follows `math`.
+6. The same three at 1024 px, batch 1. The device is about 94 % busy there, so expect little; a loss is a result.
+7. On the platform where Triton cannot see the matrix units (the default rusticl OpenCL one), `triton` must report why it ran `chunked_bf16` and still train.
 
 ## Reading a bundle automatically
 `python -m accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m perf hwcheck` without running anything.

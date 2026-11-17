@@ -144,6 +144,7 @@ virtualenv, and installed into an environment before looking at what was in it. 
 * **The project's own `./venv` is recreated.** If it already exists it is deleted (only when it has a `pyvenv.cfg`, is not a link, and
   is exactly `<project>/venv`) and made again: a wrong torch left behind doubles the size and repairing it in place gains nothing. A
   user's own environment is still only ever added to. The interpreter is stored and the server restarts into it as soon as the
-  install succeeds, not only at the end of the wizard.
+  install succeeds, not only at the end of the wizard -- always, even when it already runs there (a process keeps what it imported
+  before the packages existed). The page recognizes the new server by the `boot_id` in `/health` and never proceeds on a guess.
 * **Setup is a place in the sidebar**, visible while unconfigured, locking the other entries (Help excepted) at every step, and every
   other page redirects to it. `/setup` redirects to Help once configured.

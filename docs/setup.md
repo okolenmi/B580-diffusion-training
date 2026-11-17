@@ -24,7 +24,10 @@ server and opens `/setup`. Setup has five steps; nothing is installed until you 
    and LoRAs are saved to `<folder>/loras`. Missing folders are created.
 
 Right after a successful install the environment's interpreter (`venv_python`) is stored and the server restarts inside it (the
-node library imports torch, which the temporary environment does not have); the page waits for it and carries on. Finishing stores `models_dir` and opens Help. Every later start of
+node library imports torch, which the temporary environment does not have); the page waits for it and carries on. The restart
+happens even when the server already runs in that environment, because a running process keeps what it imported before the install;
+`/health` carries a `boot_id` that differs per process, which is how the page knows the new server from the old. If the card is not
+seen, the step offers *Check again* and *Restart the server*. Finishing stores `models_dir` and opens Help. Every later start of
 the launcher runs in the stored environment unless `VENV_PYTHON` says otherwise. ComfyUI is not needed anywhere. After that
 `/setup` redirects to Help and the installer routes are refused (`installer_not_allowed`); change both in Settings (*Folders and environment*).
 

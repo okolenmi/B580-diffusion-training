@@ -217,18 +217,35 @@ function useEnvironment(report) {
   adoptEnvironment(report.interpreter);
 }
 
-/* Store the chosen interpreter and let the server move into it right away: the card check, the node library and every later
-   step need the packages that are there, and the temporary environment the server started in has none of them. */
-async function adoptEnvironment(python) {
+/* Store the chosen interpreter and move the server into it. After an install the server restarts even when it already runs in that
+   environment: a running process keeps what it imported before the packages existed, which is how "Installed" came to sit beside a
+   server that could not see torch. */
+async function adoptEnvironment(python, { installed = false } = {}) {
   wizard.python = python;
+  wizard.restartNote = null;
   frame("Using that environment…", h("p", { class: "setup-note text-dim" }, "Saving the choice."));
   try {
-    const result = await api("/installer/apply", { method: "POST", body: { venv_python: python } });
-    if (result.restarting) await waitForRestart();
-    wizard.restartNote = result.restart_note;
+    const before = await bootId();
+    const result = await api("/installer/apply", { method: "POST", body: { venv_python: python, restart: installed } });
+    if (result.restarting) await waitForRestart(before);
+    else if (result.restart_note) wizard.restartNote = result.restart_note;
   } catch (err) {
     wizard.restartNote = errText(err);
-    logError("installer: could not store the environment", err);
+    logError("installer: could not move the server into the environment", err);
+  }
+  await stepInstalled();
+}
+
+async function restartNow() {
+  wizard.restartNote = null;
+  try {
+    const before = await bootId();
+    const result = await api("/installer/restart", { method: "POST" });
+    if (result.restarting) await waitForRestart(before);
+    else wizard.restartNote = result.restart_note || "The server did not restart.";
+  } catch (err) {
+    wizard.restartNote = errText(err);
+    logError("installer: restart failed", err);
   }
   await stepInstalled();
 }
@@ -295,7 +312,7 @@ async function watchInstall(job) {
   }
   if (job.state === "succeeded") {
     log(`installer: job ${job.id} succeeded`);
-    await adoptEnvironment(job.target_python);
+    await adoptEnvironment(job.target_python, { installed: true });
   } else {
     title.textContent = "The install did not finish.";
     failure.textContent = job.error || job.state;
@@ -322,7 +339,8 @@ async function stepInstalled() {
       h("span", {}, v.present ? `${v.name} — ${Number(v.total_memory_mb).toLocaleString()} MB, PyTorch ${v.torch_version}` : (v.reason || "PyTorch sees no Intel GPU.")),
       v.present ? null : h("div", { class: "text-dim" }, "Training will not start until PyTorch sees the card. You can finish setup and fix the driver afterwards.")),
     wizard.restartNote ? h("p", { class: "setup-error" }, wizard.restartNote) : null,
-    actions(button("Continue", () => show(4), { primary: true })));
+    actions(v.present ? null : button("Check again", stepInstalled), v.present ? null : button("Restart the server", restartNow),
+      button("Continue", () => show(4), { primary: true })));
 }
 
 /* ---- 4. prompt files ----------------------------------------------------- */
@@ -388,10 +406,11 @@ async function finish(event) {
   try {
     const body = { models_dir: models };
     if (wizard.python) body.venv_python = wizard.python;
+    const before = await bootId();
     const result = await api("/installer/apply", { method: "POST", body });
     log("installer: setup finished");
     try { localStorage.removeItem(SAVED); } catch { /* only a convenience */ }
-    if (result.restarting) await waitForRestart();
+    if (result.restarting) await waitForRestart(before);
     window.location.replace("/help");
     return;
   } catch (err) {
@@ -406,21 +425,23 @@ async function finish(event) {
   }
 }
 
-/* The server restarts into the chosen environment so its node library can import torch. Wait for it to go down and come back;
-   a server that never seems to go down is taken as already restarted. */
-async function waitForRestart() {
+async function bootId() {
+  return (await api("/health")).boot_id;
+}
+
+/* Wait for a server whose boot id differs from ``before``: the new process, not the old one on its way out. */
+async function waitForRestart(before) {
   frame("Restarting the server…", h("p", { class: "setup-note text-dim" }, "It restarts inside the environment you chose. This takes a few seconds."));
   const started = Date.now();
-  let wentDown = false;
-  while (Date.now() - started < 120000) {
+  while (Date.now() - started < 180000) {
     await new Promise((resolve) => setTimeout(resolve, 1000));
     try {
-      await api("/health");
-      if (wentDown || Date.now() - started > 15000) return;
+      if ((await bootId()) !== before) return;
     } catch (err) {
-      wentDown = true;
+      /* down: it is restarting */
     }
   }
+  throw new Error("The server did not come back within three minutes. Stop it in the terminal and start run_server_linux.sh again; setup continues from this step.");
 }
 
 /* ---- start --------------------------------------------------------------- */

@@ -51,25 +51,36 @@ class ApplyInstallation:
     def execute(self) -> InstallationState:
         return self._state_of(self._settings.read())
 
-    def apply(self, changes: SettingsChanges) -> ApplyResult:
+    def apply(self, changes: SettingsChanges, *, restart: bool = False) -> ApplyResult:
         """Validate and persist, but only while unconfigured.
 
-        When the chosen environment is not the one this server runs in, the server restarts into it: the node library needs the
-        packages that were just installed there.
+        The server restarts into the chosen environment when that is not the one it runs in, and always when ``restart`` says a
+        package was just installed: a running process keeps what it imported (and what it failed to import) before the install, even
+        when the environment is the same one.
         """
+        self._require_unconfigured()
+        view = self._settings.update(changes)
+        interpreter = view.resolved.get("venv_python") if changes.venv_python else None
+        return ApplyResult(view, *self._restart(interpreter, force=restart))
+
+    def restart(self) -> ApplyResult:
+        """Restart now into the stored environment: the page's own button, for a restart that did not happen by itself."""
+        self._require_unconfigured()
+        view = self._settings.read()
+        return ApplyResult(view, *self._restart(view.resolved.get("venv_python"), force=True))
+
+    def _require_unconfigured(self) -> None:
         state = self._state_of(self._settings.read())
         if state.configured:
             raise InstallerNotAllowedError(
                 "this installation is already configured "
                 f"(checkpoints in {state.resolved_checkpoints_dir}); change the folders from Settings instead")
-        view = self._settings.update(changes)
-        restarting, note = self._restart_if_needed(changes, view)
-        return ApplyResult(view, restarting, note)
 
-    def _restart_if_needed(self, changes: SettingsChanges, view: SettingsView) -> tuple[bool, str | None]:
-        interpreter = view.resolved.get("venv_python") if changes.venv_python else None
+    def _restart(self, interpreter: str | None, *, force: bool) -> tuple[bool, str | None]:
         restarter = self._restarter
-        if not interpreter or restarter is None or restarter.running_in(interpreter):
+        if not interpreter or restarter is None:
+            return False, ("there is no environment to restart into yet" if force else None)
+        if restarter.running_in(interpreter) and not force:
             return False, None
         if not restarter.can_serve(interpreter):
             return False, (f"{interpreter} cannot run the server (it needs Python 3.14 or newer and the server's own packages), so the "

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends
 
 from ... import __version__
@@ -9,6 +11,9 @@ from ...application.memory_admission import holders_without_ledger
 from ...application.services import ApplicationServices
 from ..deps import get_services
 from ..schemas import HealthOut
+
+#: One per server process; a restart changes it.
+BOOT_ID = uuid.uuid4().hex
 
 router = APIRouter(tags=["health"])
 
@@ -40,4 +45,5 @@ def health(
         status="ok",
         version=__version__,
         memory=memory,
+        boot_id=BOOT_ID,
     )

@@ -37,6 +37,8 @@ class HealthOut(BaseModel):
     #: their sizes, what is free. None while the device total is
     #: unknown and no ledger exists.
     memory: dict | None = None
+    #: Differs for every server process, so a page that restarted the server can tell the new one from the old one.
+    boot_id: str = ""
 
 # --------------------------------------------------------------------------
 # Settings
@@ -178,6 +180,8 @@ class InstallerApplyIn(BaseModel):
 
     models_dir: str | None = None
     venv_python: str | None = None
+    #: A package was just installed: restart the server even if it already runs in that environment.
+    restart: bool = False
 
     def to_changes(self) -> SettingsChanges:
         return SettingsChanges(models_dir=self.models_dir, venv_python=self.venv_python)

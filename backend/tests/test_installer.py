@@ -296,6 +296,21 @@ for running, serves, expected, why in ((own, True, False, "already running there
     if not serves:
         check(result.restart_note and "cannot run the server" in result.restart_note, "a refused restart says why instead of failing silently")
 
+# A server already running in the environment that was just installed into still has to restart: it imported before the packages existed.
+root = Path(tempfile.mkdtemp(prefix="backend-installer-restart-"))
+chosen = own_venv(root)
+database = SqliteDatabase(root / "backend.db")
+database.initialize()
+restarter = FakeRestarter(chosen)
+apply_case = ApplyInstallation(FreshMachine(SqliteSettingsStore(database, root)), root, restarter)
+check(not apply_case.apply(SettingsChanges(venv_python=chosen)).restarting, "choosing the environment the server runs in does not restart it")
+check(apply_case.apply(SettingsChanges(venv_python=chosen), restart=True).restarting and restarter.restarted == [chosen],
+      "after an install the server restarts even though it already runs there")
+restarter.restarted.clear()
+check(apply_case.restart().restarting and restarter.restarted == [chosen], "the page's own restart button restarts into the stored environment")
+check(not ApplyInstallation(FreshMachine(SqliteSettingsStore(SqliteDatabase(root / "other.db"), root)), root, FakeRestarter()).restart().restarting,
+      "a restart with no environment chosen says so instead of doing nothing")
+
 root = Path(tempfile.mkdtemp(prefix="backend-installer-restart-"))
 database = SqliteDatabase(root / "backend.db")
 database.initialize()

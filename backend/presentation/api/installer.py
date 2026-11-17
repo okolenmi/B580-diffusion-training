@@ -51,7 +51,16 @@ def get_installer_state(services: ApplicationServices = Depends(get_services)) -
 @router.post("/apply", response_model=InstallerApplyOut, responses={400: _ERROR_400, 409: _ERROR_409})
 def apply_installation(body: InstallerApplyIn, services: ApplicationServices = Depends(get_services)) -> InstallerApplyOut:
     """Persist the models folder and the environment's interpreter. First run only."""
-    result = services.installer.apply.apply(body.to_changes())
+    return apply_out(services, services.installer.apply.apply(body.to_changes(), restart=body.restart))
+
+
+@router.post("/restart", response_model=InstallerApplyOut)
+def restart_server(services: ApplicationServices = Depends(get_services)) -> InstallerApplyOut:
+    """Restart the server into the stored environment. First run only."""
+    return apply_out(services, services.installer.apply.restart())
+
+
+def apply_out(services: ApplicationServices, result) -> InstallerApplyOut:
     view = result.view
     return InstallerApplyOut(
         restarting=result.restarting,

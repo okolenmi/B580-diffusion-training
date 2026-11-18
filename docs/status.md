@@ -22,13 +22,14 @@ Hardware results are not guessed here: `TESTING.md` (root) lists what still has 
 
 ## Declared but not working
 
-- Graph settings `runtime.graph_capture`, `runtime.block_swap` and `memory.ram_max_mb` are in the registry and the editor but nothing reads them
-  (`manual/persistence-and-unbuilt.md`). Block swap is therefore not available for Anima or anything else.
+- Graph setting `memory.ram_max_mb` is in the registry and the editor and is recorded with the run, but nothing enforces it
+  (`manual/persistence-and-unbuilt.md`); no host-memory sensing exists yet.
 - The old `/templates` page still exists beside the editor's views; it is to be retired.
 
 ## Not built
 
 - Event-trigger buttons in views (they need a control channel), image blocks in views, the `/apps/<name>` use mode.
+- Block swap (denoiser blocks held on the host; Anima may need it, SDXL does not): no setting, no family block layout, no engine code (`internals/memory.md`, "Open").
 - Weights shared between processes: measured not possible with plain torch (`internals/parallel-runs.md`); every run holds its own copy.
 - Custom kernels for the frozen-weight path beyond what `xpu-kernels` provides (`internals/kernels.md`, `internals/capturable-attention.md`).
 

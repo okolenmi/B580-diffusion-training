@@ -5,7 +5,7 @@ Python: `graph/settings.py`.
 `SettingSpec` JSON (also the dialog's row description):
 
 ```jsonc
-{ "key": "runtime.graph_capture", "label": "Graph capture", "doc": "...",
+{ "key": "runtime.profile", "label": "Profile steps", "doc": "...",
   "type": "bool" | "int" | "float" | "str" | "choice",
   "default": false, "choices": null, "unit": "", "minimum": null, "maximum": null,
   "step": null, "group": "Runtime", "advanced": false, "allow_auto": false,
@@ -22,9 +22,9 @@ memory.vram_max_mb` when both numeric.
 Core keys (`graph/settings.py` holds each one's meaning): `memory.vram_max_mb`,
 `memory.vram_min_mb`, `memory.strict`, `memory.ram_max_mb`, `device.default`,
 `precision.denoiser`, `precision.encoders`, `precision.vae`, `precision.autocast`,
-`runtime.graph_capture`, `runtime.residency.safety_margin`,
+`memory.margin_mb`, `memory.allocator_mb`,
 `runtime.residency.calibration_steps`, `runtime.empty_cache_every_n_steps`,
-`runtime.block_swap`, `runtime.profile`,
+`runtime.profile`,
 `conditioning.cache_mb`, `conditioning.prewarm`, `seed.base`.
 
 Access: `ctx.settings.get("device.default")` returns the resolved value of an immutable

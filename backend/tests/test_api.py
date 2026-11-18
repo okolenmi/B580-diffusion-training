@@ -44,6 +44,7 @@ def test_health() -> None:
             and str(body.get("version", "")).startswith("0."),
             f"health payload {body!r}",
         )
+        check(body["interpreter"] == sys.executable and body["python"] and body["started_at"], "health names the interpreter the server really runs in")
 
 
 

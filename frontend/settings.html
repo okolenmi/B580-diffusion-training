@@ -7,51 +7,21 @@
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="/ui/css/style.css">
     <link rel="stylesheet" href="/ui/css/shell.css">
+    <link rel="stylesheet" href="/ui/css/pages.css">
     <link rel="stylesheet" href="/ui/css/settings.css">
 </head>
 <body class="layout-fixed">
     <main class="content-area">
         <header class="page-topbar">
             <h1>Settings</h1>
-            <span class="page-sub">Where models live, which Python trains, and how the app looks</span>
+            <span class="page-sub">Folders, the Python environment, and housekeeping</span>
         </header>
 
-        <div class="page-body">
-            <div id="settings-folders"></div>
-
-            <!-- First item, as agreed: the design theme. Dark is what
-                 ships; Light is honestly marked and disabled, not faked. -->
-            <section class="card settings-card" id="theme-group">
-                <div class="card-header"><span>Design theme</span></div>
-                <div class="theme-options" role="radiogroup" aria-label="Design theme">
-                    <label class="theme-option">
-                        <input type="radio" name="theme" value="dark" checked>
-                        <span class="theme-swatch theme-swatch-dark" aria-hidden="true"></span>
-                        <span class="theme-name">Dark</span>
-                        <span class="settings-tag settings-tag-current">current</span>
-                    </label>
-                    <label class="theme-option theme-option-disabled">
-                        <input type="radio" name="theme" value="light" disabled>
-                        <span class="theme-swatch theme-swatch-light" aria-hidden="true"></span>
-                        <span class="theme-name">Light</span>
-                        <span class="settings-tag">planned</span>
-                    </label>
-                </div>
-                <p class="settings-note text-dim">
-                    Dark is the only theme that ships today. Every color in the
-                    UI comes from shared tokens, so a second theme is a token
-                    set, not a redesign -- Light is next and not yet
-                    implemented.
-                </p>
-            </section>
-
-            <section class="card settings-card">
-                <div class="card-header"><span>About</span></div>
-                <p class="settings-note text-dim">
-                    Distillation control server -- this UI and its API are
-                    served from a single origin.
-                </p>
-            </section>
+        <div class="page-body pg">
+            <div class="split">
+                <nav class="side-nav" aria-label="Settings sections" id="settings-nav"></nav>
+                <div class="split-main" id="settings-root"><div class="state-box">Loading…</div></div>
+            </div>
         </div>
     </main>
 

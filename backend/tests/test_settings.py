@@ -221,6 +221,18 @@ def main() -> None:
     check(body["stored"]["loras_dir"] == str(loras3),
           "failed POST changed nothing")
 
+    # An interpreter that was chosen and later deleted is still the resolved one, and the view says it is gone.
+    gone = root / "gone-venv" / "bin" / "python"
+    gone.parent.mkdir(parents=True)
+    gone.write_text("#!/bin/sh\n")
+    gone.chmod(0o755)
+    asgi_request(app, "/api/v1/settings", method="POST", json_body={"venv_python": str(gone)})
+    status, _, body = asgi_request(app, "/api/v1/settings")
+    check(body["exists"]["venv_python"] is True, "a chosen interpreter that is there is reported as existing")
+    gone.unlink()
+    status, _, body = asgi_request(app, "/api/v1/settings")
+    check(body["resolved"]["venv_python"] == str(gone) and body["exists"]["venv_python"] is False, "one that was deleted is reported as missing, not silently replaced")
+
     status, _, body = asgi_request(
         app, "/api/v1/settings", method="POST",
         json_body={"checkpoints_dir": ""},

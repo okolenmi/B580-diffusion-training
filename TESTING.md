@@ -191,5 +191,11 @@ Start from a clone with no `venv`, no `backend.db` and no `assets` folder, then 
    Repair: finish setup, delete `./venv`, reload `/setup` (it must open the wizard with the note naming the old interpreter, and the sidebar locks), rebuild with *new virtualenv*, then *Finish* opens Help with your folders unchanged.
 5. Step 5 with ComfyUI's `models` folder (not `models/checkpoints`): *Finish setup* must succeed without a ComfyUI folder anywhere. *Finish setup* opens Help; *Setup* has left the sidebar. `/graph` shows the full node palette (no red nodes), lists your checkpoints, and a 20-step run starts in the environment you chose (Settings shows `venv_python`). Restart `./run_server_linux.sh`: `/setup` must go straight to Help, and the nodes are still complete.
 
+## 96. Start page, Settings and Help (about 10 minutes, after item 95)
+
+1. `/` with the finished install: the four tiles show the server, `Arc B580` with its memory, PyTorch `2.12.1+xpu` and the node library as loaded (no red tile); *Getting started* lists only what is really missing and disappears once everything is done. Start a run: the card memory panel shows what it holds, and the run appears under *Recent runs* with its status.
+2. `/settings`: *Python environment* shows the card, PyTorch, `same environment` for the server, and the prompt files you downloaded. Start the server from another environment (or with `VENV_PYTHON` set to one) and the row must say `different environment`. A refused path (for example a ComfyUI folder that does not exist) is marked on its own field. *Delete run history* is disabled while a run is active and asks twice.
+3. `/help`: search for `memory` and `tokenize` narrows the page; `/help#nodes-red` opens that entry; the sidebar of Help and Settings follows the scroll.
+
 ## Reading a bundle automatically
 `python -m accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m perf hwcheck` without running anything.

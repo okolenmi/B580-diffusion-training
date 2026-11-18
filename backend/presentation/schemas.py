@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -39,6 +40,10 @@ class HealthOut(BaseModel):
     memory: dict | None = None
     #: Differs for every server process, so a page that restarted the server can tell the new one from the old one.
     boot_id: str = ""
+    #: When this server process started, and which interpreter it really runs in (the Settings page compares it with the chosen one).
+    started_at: datetime | None = None
+    interpreter: str = ""
+    python: str = ""
 
 # --------------------------------------------------------------------------
 # Settings
@@ -51,6 +56,8 @@ class SettingsViewOut(BaseModel):
 
     stored: dict[str, str]
     resolved: dict[str, str | None]
+    #: Whether the resolved interpreter file exists right now; a stored interpreter whose virtualenv was deleted is used as it is, not dropped.
+    exists: dict[str, bool] = {}
 
 
 class SettingsIn(BaseModel):
@@ -74,7 +81,11 @@ class SettingsIn(BaseModel):
 
 
 def settings_out(view: SettingsView) -> SettingsViewOut:
-    return SettingsViewOut(stored=dict(view.stored), resolved=dict(view.resolved))
+    python = view.resolved.get("venv_python")
+    # Folders that vanish resolve as unset, but an interpreter is used as stored (a stale one fails loudly at spawn), so only it can be
+    # reported as missing. A bare command like "python" names no file to look for.
+    exists = {"venv_python": Path(python).is_file()} if python and ("/" in python or "\\" in python) else {}
+    return SettingsViewOut(stored=dict(view.stored), resolved=dict(view.resolved), exists=exists)
 
 
 # --------------------------------------------------------------------------

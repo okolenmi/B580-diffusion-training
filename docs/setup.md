@@ -29,7 +29,7 @@ happens even when the server already runs in that environment, because a running
 `/health` carries a `boot_id` that differs per process, which is how the page knows the new server from the old. If the card is not
 seen, the step offers *Check again* and *Restart the server*. Finishing stores `models_dir` and opens Help. Every later start of
 the launcher runs in the stored environment unless `VENV_PYTHON` says otherwise. ComfyUI is not needed anywhere. After that
-`/setup` redirects to Help and the installer routes are refused (`installer_not_allowed`); change both in Settings (*Folders and environment*).
+`/setup` redirects to Help and the installer routes are refused (`installer_not_allowed`); change both in Settings (*Folders* and *Python environment*). Settings also runs the same card check as Setup and says whether the server itself runs in the chosen environment.
 
 The server is restarted into the environment that was *stored*, not the one its own paths resolve to: a server started through the
 bootstrap runs with `VENV_PYTHON` naming its temporary environment, and that variable outranks the stored choice when paths resolve.

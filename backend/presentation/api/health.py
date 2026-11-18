@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import platform
+import sys
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends
 
@@ -14,6 +17,7 @@ from ..schemas import HealthOut
 
 #: One per server process; a restart changes it.
 BOOT_ID = uuid.uuid4().hex
+STARTED_AT = datetime.now(UTC)
 
 router = APIRouter(tags=["health"])
 
@@ -46,4 +50,7 @@ def health(
         version=__version__,
         memory=memory,
         boot_id=BOOT_ID,
+        started_at=STARTED_AT,
+        interpreter=sys.executable,
+        python=platform.python_version(),
     )

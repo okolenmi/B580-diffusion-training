@@ -1,0 +1,56 @@
+/* ---------------------------------------------------------------------------
+   home.css -- the start page (/): status tiles, then the work. Blocks come from pages.css.
+--------------------------------------------------------------------------- */
+
+.home-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; align-items: start; }
+.home-col { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+
+.todo { list-style: none; margin: 0; padding: 0; }
+.todo-item {
+    display: grid;
+    grid-template-columns: 26px minmax(0, 1fr) auto;
+    gap: 4px 12px;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--border);
+}
+.todo-item:first-child { padding-top: 2px; }
+.todo-item:last-child { border-bottom: none; padding-bottom: 0; }
+.todo-mark {
+    width: 22px; height: 22px; border-radius: 50%;
+    display: grid; place-items: center;
+    border: 1.5px solid var(--border);
+    font-size: 12px; font-weight: 800; color: var(--text-dim);
+}
+.todo-item.is-done .todo-mark { background: rgba(16, 185, 129, 0.16); border-color: rgba(16, 185, 129, 0.5); color: var(--green); }
+.todo-item.is-next .todo-mark { border-color: var(--accent); color: var(--accent); }
+.todo-title { font-weight: 600; font-size: 14px; }
+.todo-item.is-done .todo-title { color: var(--text-dim); font-weight: 500; text-decoration: line-through; text-decoration-color: var(--border); }
+.todo-detail { grid-column: 2; color: var(--text-dim); font-size: 12.5px; line-height: 1.5; }
+.todo-item.is-done .todo-detail { display: none; }
+.todo-item > .btn { grid-column: 3; grid-row: 1; }
+
+.runs { display: flex; flex-direction: column; }
+.run-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 14px;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13.5px;
+}
+.run-row:first-child { padding-top: 0; }
+.run-row:last-child { border-bottom: none; padding-bottom: 0; }
+.run-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.run-when { color: var(--text-dim); font-size: 12.5px; white-space: nowrap; }
+.run-row .status-badge { margin: 0; }
+
+.empty { color: var(--text-dim); font-size: 13.5px; line-height: 1.6; padding: 6px 0 2px; }
+
+.start-links { display: flex; flex-direction: column; gap: 8px; }
+.start-links .btn { justify-content: center; }
+
+@media (max-width: 1000px) {
+    .home-grid { grid-template-columns: minmax(0, 1fr); }
+}

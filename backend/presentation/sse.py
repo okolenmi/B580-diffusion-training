@@ -13,10 +13,9 @@ design; getting it wrong silently loses information the client needs.
 ======================  ==========  ====================================
 Kind                    Class       Policy
 ======================  ==========  ====================================
-``run_progressed``      state       coalesce per ``run_id``: a newer
-                                    sample supersedes the queued one
-                                    for the same run, and only that
-                                    one.
+(none today)            state       coalesce per key: a newer sample
+                                    supersedes the queued one with the
+                                    same key, and only that one.
 ``graph_execution_      delta       never coalesced, never evicted.
 progressed``                        Every node's completion is a fact
                                     that happened; six of them must

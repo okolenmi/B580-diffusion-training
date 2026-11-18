@@ -3,7 +3,7 @@
 
    `/api/v1/events` **replays** now: the server numbers every event and
    rings the lifecycle ones, so a client that reconnects is handed what it
-   missed (`archive/old-documentation/design/backend/09-event-contract.md`). That is the whole
+   missed (`docs/contracts/event-stream.md`). That is the whole
    reason this module exists rather than three copies of `new
    EventSource(...)`:
 

@@ -2,6 +2,8 @@
 
 Python: `graph/events.py`.
 
+This page is the plane *between nodes* inside a run. The server's stream to the browser is `event-stream.md`.
+
 ## Plane
 
 Data wires carry values forward once. **Event wires** (`event_edges`) carry small

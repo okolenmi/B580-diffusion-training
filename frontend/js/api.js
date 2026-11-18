@@ -72,7 +72,7 @@ export async function api(path, opts = {}) {
  * open (docs 07 F-09, review WP-21).
  *
  * The server now replays what a reconnecting client missed
- * (`archive/old-documentation/design/backend/09-event-contract.md`): it emits an SSE `id:`
+ * (`docs/contracts/event-stream.md`): it emits an SSE `id:`
  * field per event, which EventSource remembers and sends back as
  * `Last-Event-ID` on automatic reconnection. So the authoritative
  * refetch belongs on the `stream_opened` frame and its

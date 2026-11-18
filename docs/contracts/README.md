@@ -9,7 +9,8 @@ is a bug: fix the contract first (`../developing.md`, "Changing a public contrac
 | `graph-json.md` | the saved graph document |
 | `catalog.md` | what the server tells the editor about node classes, settings and families |
 | `resolve.md` | editing-time shape resolution (dynamic ports) |
-| `events.md` | the event plane and its mirroring |
+| `events.md` | the event plane between nodes and its mirroring |
+| `event-stream.md` | the server's browser stream (`/api/v1/events`): sequence, epoch, replay, delivery classes |
 | `runs.md` | run lifecycle, node states, progress and results |
 | `settings.md` | graph settings: specs, resolution order, core keys |
 | `errors.md` | the HTTP error envelope and every error code with its status |

@@ -114,8 +114,6 @@ CORE_SETTINGS: tuple[SettingSpec, ...] = (
                 doc="'auto' keeps the file's own dtype."),
     SettingSpec("precision.autocast", "Compute precision", "choice", "bf16", choices=("bf16", "fp16", "off"),
                 group="Device", advanced=True, doc="Dtype used for the arithmetic of a training step."),
-    SettingSpec("runtime.graph_capture", "Graph capture", "bool", False, group="Runtime", advanced=True,
-                doc="Capture the step as a device graph (static shapes only)."),
     SettingSpec("runtime.deterministic", "Deterministic run", "bool", False, group="Reproducibility", advanced=True,
                 doc="Same graph, data and settings give the same numbers: deterministic kernels (slower where they differ), "
                     "the global generator seeded from the base seed (0 when unset), and batches never split by predicted "
@@ -124,8 +122,6 @@ CORE_SETTINGS: tuple[SettingSpec, ...] = (
                 group="Runtime", advanced=True, doc="Steps spent measuring memory before residency is settled."),
     SettingSpec("runtime.empty_cache_every_n_steps", "Empty cache every N steps", "int", 1, minimum=0,
                 group="Runtime", advanced=True, doc="0 never empties the allocator cache."),
-    SettingSpec("runtime.block_swap", "Blocks held on the host", "int", 0, minimum=0, group="Runtime",
-                advanced=True, doc="Denoiser blocks kept in host memory and brought in per block."),
     SettingSpec("runtime.profile", "Profile steps", "bool", False, group="Runtime", advanced=True,
                 doc="Time each phase of the step (the trainer's timing port starts from it)."),
     SettingSpec("perf.dir", "Performance report folder", "str", "", group="Performance", advanced=True,

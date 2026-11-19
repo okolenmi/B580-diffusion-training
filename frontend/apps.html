@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apps</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="/ui/css/style.css">
+    <link rel="stylesheet" href="/ui/css/shell.css">
+    <link rel="stylesheet" href="/ui/css/board.css">
+    <link rel="stylesheet" href="/ui/css/apps.css">
+</head>
+<body class="layout-fixed app-body">
+    <main class="content-area" id="app-main">
+        <header class="page-topbar">
+            <a class="btn btn-secondary btn-small" id="btn-back" href="/apps" hidden>&larr; Apps</a>
+            <h1 id="app-title">Apps</h1>
+            <span class="page-sub" id="app-sub">Simple pages built on your graphs, to run and follow without the node canvas</span>
+        </header>
+
+        <!-- ================= LIST VIEW ================= -->
+        <div class="page-body" id="view-list">
+            <section class="card" id="new-card">
+                <div class="card-header"><span>New from a graph</span></div>
+                <div class="app-new">
+                    <label class="app-field">
+                        <span>Graph</span>
+                        <select id="new-graph" aria-label="Saved graph"></select>
+                    </label>
+                    <label class="app-field app-field-grow">
+                        <span>Name</span>
+                        <input id="new-name" type="text" maxlength="120" autocomplete="off"
+                               spellcheck="false" placeholder="e.g. Quick LoRA" aria-label="App name">
+                    </label>
+                    <button id="btn-new" class="btn btn-start">Create</button>
+                </div>
+                <div class="app-new-hint" id="new-hint">
+                    An app is a frozen copy of the graph with a page of cards over it. It starts with the settings the
+                    graph's author already filled in and the live views its nodes offer; everything else is one click
+                    away in Edit mode. Later changes to the graph reach the app only when you ask it to update.
+                </div>
+                <div class="error-box" id="new-error" role="alert" hidden></div>
+            </section>
+
+            <div class="state-box" id="list-state">Loading&hellip;</div>
+            <section id="list-apps" hidden>
+                <div class="app-grid" id="grid-apps"></div>
+            </section>
+        </div>
+
+        <!-- ================= PAGE VIEW ================= -->
+        <div class="app-page" id="view-page" hidden>
+            <div class="app-toolbar" id="toolbar">
+                <div class="bd-seg" role="group" aria-label="Mode">
+                    <button id="mode-use" class="bd-seg-btn active" aria-pressed="true">Use</button>
+                    <button id="mode-edit" class="bd-seg-btn" aria-pressed="false">Edit</button>
+                </div>
+                <button id="btn-run" class="btn btn-start btn-small">&#9654; Run</button>
+                <button id="btn-stop" class="btn btn-danger btn-small" hidden>&#9632; Stop</button>
+                <span class="bd-state" id="bd-state"></span>
+                <span class="app-spacer"></span>
+                <button id="btn-update" class="btn btn-secondary btn-small" hidden
+                        title="Copy the source graph's current state into this app, after a review">Update from graph</button>
+                <button id="btn-save" class="btn btn-secondary btn-small"
+                        title="Saves the layout and the values as they are now; a changed graph makes a new version">Save</button>
+                <button id="btn-delete" class="btn btn-kill btn-small">Delete</button>
+            </div>
+            <div class="error-box" id="page-error" role="alert" hidden></div>
+            <details class="app-issues" id="issues" hidden>
+                <summary id="issues-summary"></summary>
+                <ul id="issues-list"></ul>
+            </details>
+
+            <div class="bd-work">
+                <div class="bd-main" id="board"></div>
+                <aside class="bd-tray" id="tray" hidden aria-label="Add cards">
+                    <div class="bd-tray-head">
+                        <strong>Add cards</strong>
+                        <label class="bd-adv"><input type="checkbox" id="tray-adv"> advanced</label>
+                    </div>
+                    <input id="tray-search" class="cfg-input" type="search" placeholder="Search&hellip;"
+                           aria-label="Search available cards">
+                    <div id="tray-list"></div>
+                    <div class="bd-tray-foot">
+                        Columns
+                        <input type="number" id="cols" min="1" max="24" aria-label="Grid columns">
+                    </div>
+                </aside>
+            </div>
+        </div>
+    </main>
+
+    <script type="module" src="/ui/js/shell.js"></script>
+    <script type="module" src="/ui/js/apps.js"></script>
+</body>
+</html>

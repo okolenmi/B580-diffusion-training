@@ -2,7 +2,7 @@
 
 Page routes, deliberately *not* a root mount:
 
-* ``/``, ``/monitor/{monitor_id}``, ``/graph``, ``/templates[/{name}]``,
+* ``/``, ``/monitor/{monitor_id}``, ``/graph``, ``/apps[/{name}]``,
   ``/datasets``, ``/datasets/{name}``, ``/help`` and ``/settings`` serve
   the page files (monitor/dataset ids live in the URL; the HTML is
   generic and the client script reads it, like the legacy dashboard);
@@ -75,11 +75,11 @@ class _UiStaticFiles(StaticFiles):
 
 
 # (route, html file) for the plain static pages. Path parameters are fine
-# (`/templates/{name}`) -- the handler ignores them and serves the one file.
+# (`/apps/{name}`) -- the handler ignores them and serves the one file.
 _STATIC_PAGES: tuple[tuple[str, str], ...] = (
     ("/graph", "graph.html"),
-    ("/templates", "templates.html"),
-    ("/templates/{name}", "templates.html"),
+    ("/apps", "apps.html"),
+    ("/apps/{name}", "apps.html"),
     ("/datasets", "datasets.html"),
     ("/datasets/{name}", "datasets.html"),
     ("/help", "help.html"),
@@ -99,7 +99,7 @@ def _register_static_page(app: FastAPI, static_dir: Path, route: str, filename: 
 
     The handler declares the route's own path parameters by name, because
     FastAPI resolves those from the signature: a `**kwargs` catch-all would
-    instead read them as query parameters and 422 every `/templates/{name}`.
+    instead read them as query parameters and 422 every `/apps/{name}`.
     Parameterless routes get a no-argument handler.
     """
     params = re.findall(r"{(\w+)}", route)

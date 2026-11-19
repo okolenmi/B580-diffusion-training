@@ -118,20 +118,21 @@ from backend.infrastructure.persistence.graph_execution_repository import (
     SqliteGraphExecutionRepository,
 )
 from backend.infrastructure.persistence.graph_library import SqliteGraphLibrary
-from backend.infrastructure.persistence.template_library import SqliteTemplateLibrary
-from backend.application.services import LibraryServices, TemplateServices
+from backend.infrastructure.persistence.app_library import SqliteAppLibrary
+from backend.application.services import AppServices, LibraryServices
 from backend.application.use_cases.image_libraries import (
     AddToSet, CreateLibrary, DeleteCache, DeleteLibrary, DeleteSet, EditCaptions, LibraryReport, ListImageIds, ListImages, ListImports, ListLibraries, ReadImage,
     RemoveImages, StartImport,
 )
 from backend.infrastructure.image_libraries import FsImageLibraries
-from backend.application.use_cases.graph_modules import DescribeGraphModules, ResolveTemplate
-from backend.application.use_cases.run_template import RunTemplate
-from backend.application.use_cases.template_crud import (
-    DeleteTemplate,
-    GetTemplate,
-    ListTemplates,
-    SaveTemplate,
+from backend.application.use_cases.graph_modules import DescribeGraphModules, ResolveBoard
+from backend.application.use_cases.run_app import RunApp
+from backend.application.use_cases.app_crud import (
+    DeleteApp,
+    DiffApp,
+    GetApp,
+    ListApps,
+    SaveApp,
 )
 from backend.infrastructure.persistence.sqlite import SqliteDatabase
 from backend.infrastructure.settings_store import SqliteSettingsStore
@@ -680,10 +681,10 @@ def build_services(
     install_jobs: dict = {}
     refusing_installer = RefusingPackageInstaller()
     inspect_environment = InspectEnvironment(venv_inspector or FakeVenvInspector(), project_root)
-    template_db = SqliteDatabase(project_root / "test-templates.db")
-    template_db.initialize()
-    template_library = SqliteTemplateLibrary(template_db)
-    # One instance for the editor's Run and for running a template, as in
+    app_db = SqliteDatabase(project_root / "test-apps.db")
+    app_db.initialize()
+    app_library = SqliteAppLibrary(app_db)
+    # One instance for the editor's Run and for running an app, as in
     # bootstrap: the single-active check lives under its lock.
     start_execution = StartGraphExecution(
         executions=graph_executions,
@@ -698,6 +699,7 @@ def build_services(
         peak_source=fixture_peak_source.observed,
     )
     describe_modules = DescribeGraphModules(catalog=contract_catalog)
+    resolve_board = ResolveBoard(describe=describe_modules, runtime=graph_runtime)
     return ApplicationServices(
         installer=InstallerServices(
             device_probe=shared_probe,
@@ -725,14 +727,15 @@ def build_services(
             upload=UploadAsset(assets=assets),
             inspect=InspectAsset(assets=assets),
         ),
-        templates=TemplateServices(
+        apps=AppServices(
             describe=describe_modules,
-            resolve=ResolveTemplate(describe=describe_modules, runtime=graph_runtime),
-            save=SaveTemplate(library=template_library),
-            get=GetTemplate(library=template_library),
-            list=ListTemplates(library=template_library),
-            delete=DeleteTemplate(library=template_library),
-            run=RunTemplate(library=template_library, start=start_execution),
+            resolve=resolve_board,
+            save=SaveApp(library=app_library),
+            get=GetApp(library=app_library),
+            list=ListApps(library=app_library),
+            delete=DeleteApp(library=app_library),
+            diff=DiffApp(library=app_library, resolve=resolve_board),
+            run=RunApp(library=app_library, start=start_execution),
         ),
         libraries=LibraryServices(
             list=ListLibraries(image_libraries), create=CreateLibrary(image_libraries), delete=DeleteLibrary(image_libraries),

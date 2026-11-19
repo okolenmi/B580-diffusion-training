@@ -51,7 +51,7 @@ class SaveGraph:
 def normalize_graph_payload(graph: dict) -> dict:
     """Stamp the format version, keep everything else verbatim.
 
-    Module-level so a template saving its graph snapshot applies exactly
+    Module-level so an app saving its graph snapshot applies exactly
     the rules the library does (same memory-settings checks, same stamp)."""
     if not isinstance(graph, dict):
         raise InvalidQueryError("graph must be an object")

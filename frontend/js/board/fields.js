@@ -103,7 +103,7 @@ function autoNumberControl(descriptor, get, set) {
  *
  * @param {object} args
  * @param {object} args.block       the block ({ref, ...})
- * @param {object} args.descriptor  the field as /templates/modules describes it
+ * @param {object} args.descriptor  the field as /boards/modules describes it
  * @param {object} args.siblings    the node's fields (for visible_when gates)
  * @param {object} args.doc         the draft template document
  * @param {(origin: string) => void} args.onChange  called after a value commit

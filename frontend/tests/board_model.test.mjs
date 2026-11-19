@@ -3,9 +3,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  addBlock, addNoteBlock, autoFill, buildAvailable, defaultSize, docKey, emptyDoc, findTarget,
+  addBlock, addNoteBlock, autoFill, buildAvailable, defaultSize, emptyDoc, findTarget,
   getFieldValue, graphRef, layoutKey, newBlockId, nodeRef, refKey, removeBlock,
-  setFieldValue, statusByBlock, titleFor, toSaveDoc, valuesPayload,
+  setFieldValue, statusByBlock, titleFor, valuesPayload,
 } from "../js/board/model.js";
 import { collides } from "../js/board/layout.js";
 
@@ -117,7 +117,7 @@ test("tray: placed items are flagged, and an advanced placed item stays findable
 
 test("addBlock: lands without overlap, twice is a no-op, remove closes the gap", () => {
   const m = modules();
-  let doc = emptyDoc("template", graph());
+  let doc = emptyDoc(graph());
   doc = addBlock(doc, nodeRef("n1", "field", "steps"), m);
   doc = addBlock(doc, nodeRef("n1", "display", "loss"), m);
   doc = addBlock(doc, nodeRef("n1", "field", "lr"), m);
@@ -170,7 +170,7 @@ test("autoFill honours maxFields and copes with an empty graph", () => {
 });
 
 test("field values live in the draft graph; clearing deletes the key", () => {
-  const doc = { ...emptyDoc("template", graph()) };
+  const doc = { ...emptyDoc(graph()) };
   const steps = nodeRef("n1", "field", "steps");
   assert.equal(getFieldValue(doc, steps), 100);
   assert.equal(setFieldValue(doc, steps, 250), true);
@@ -190,7 +190,7 @@ test("field values live in the draft graph; clearing deletes the key", () => {
 
 test("valuesPayload: exposed fields only; cleared => null; unset memory omitted; refused statuses skipped", () => {
   const m = modules();
-  let doc = emptyDoc("template", graph());
+  let doc = emptyDoc(graph());
   doc = addBlock(doc, nodeRef("n1", "field", "steps"), m);
   doc = addBlock(doc, nodeRef("n1", "field", "seed"), m);   // exposed but unset
   doc = addBlock(doc, graphRef("field", "memory.vram_max_mb"), m);
@@ -201,32 +201,28 @@ test("valuesPayload: exposed fields only; cleared => null; unset memory omitted;
   });
   const wiredBlock = doc.blocks.find((b) => b.ref.name === "seed");
   assert.deepEqual(valuesPayload(doc, { [wiredBlock.id]: "wired" }).nodes, { n1: { steps: 100 } });
-  assert.deepEqual(valuesPayload(emptyDoc("monitor")), {});
+  assert.deepEqual(valuesPayload(emptyDoc()), {});
 });
 
-test("dirty keys: layout changes layoutKey, a value changes only graphKey, live data neither", () => {
+test("layoutKey changes with layout and titles, not with values or live data", () => {
   const m = modules();
-  let doc = addBlock(emptyDoc("template", graph()), nodeRef("n1", "field", "steps"), m);
-  const l0 = layoutKey(doc), k0 = docKey(doc);
+  let doc = addBlock(emptyDoc(graph()), nodeRef("n1", "field", "steps"), m);
+  const l0 = layoutKey(doc);
   setFieldValue(doc, nodeRef("n1", "field", "steps"), 7);
   assert.equal(layoutKey(doc), l0);
-  assert.notEqual(docKey(doc), k0);
   const moved = { ...doc, blocks: doc.blocks.map((b) => ({ ...b, x: b.x + 1 })) };
   assert.notEqual(layoutKey(moved), l0);
   const renamed = { ...doc, blocks: doc.blocks.map((b) => ({ ...b, title: "T" })) };
   assert.notEqual(layoutKey(renamed), l0);
 });
 
-test("toSaveDoc stamps format and normalises optional block fields; statusByBlock maps ids", () => {
-  const doc = toSaveDoc({ ...emptyDoc("monitor"), blocks: [{ id: "b1", ref: graphRef("display", "run"), x: 0, y: 0, w: 1, h: 1 }] });
-  assert.equal(doc.format, 1);
-  assert.deepEqual([doc.blocks[0].collapsed, doc.blocks[0].title, doc.blocks[0].options], [false, null, {}]);
+test("statusByBlock maps card ids to their status", () => {
   assert.deepEqual(statusByBlock({ blocks: [{ id: "b1", status: "wired" }] }), { b1: "wired" });
   assert.deepEqual(statusByBlock(null), {});
 });
 
 test("a note is a block of its own: no target to lose, a free name each time, text kept in options", () => {
-  let doc = emptyDoc("monitor");
+  let doc = emptyDoc();
   doc = addNoteBlock(doc);
   doc = addNoteBlock(doc);
   assert.deepEqual(doc.blocks.map((b) => b.ref.name), ["note1", "note2"]);

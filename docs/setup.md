@@ -71,7 +71,7 @@ environment; `transformers` is optional (auto-captioning). The manifest the setu
 
 | What | Command |
 |---|---|
-| Server and UI (editor at `/graph`, Templates, Datasets, Settings) | `./run_server_linux.sh`, on Windows `run_server_windows.bat` (port 8766 by default) |
+| Server and UI (editor at `/graph`, Apps, Datasets, Settings) | `./run_server_linux.sh`, on Windows `run_server_windows.bat` (port 8766 by default) |
 | One run from the command line | `python -m run sdxl-lora --help`, then see `MANUAL.md` |
 | Everything the sandbox can check | `python run_tests.py` |
 

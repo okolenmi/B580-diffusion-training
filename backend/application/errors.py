@@ -206,28 +206,35 @@ class GraphNotFoundError(ApplicationError):
     code = "graph_not_found"
     status_code = 404
 
-class TemplateNotFoundError(ApplicationError):
-    """No saved template exists under the requested name."""
+class AppNotFoundError(ApplicationError):
+    """No saved app exists under the requested name."""
 
-    code = "template_not_found"
+    code = "app_not_found"
     status_code = 404
 
 
-class TemplateInvalidError(ApplicationError):
-    """A template document or the values submitted to run one are wrong.
+class AppInvalidError(ApplicationError):
+    """An app document or the values submitted to run one are wrong.
 
     422 with every problem in ``details`` -- the same posture as
     ``graph_invalid``: one round trip names everything to fix.
     """
 
-    code = "template_invalid"
+    code = "app_invalid"
     status_code = 422
 
 
-class TemplatesUnavailableError(ApplicationError):
-    """The container was built without the template services."""
+class BoardInvalidError(ApplicationError):
+    """A board document (a view of a graph) has the wrong shape; ``details`` lists every problem."""
 
-    code = "templates_unavailable"
+    code = "board_invalid"
+    status_code = 422
+
+
+class AppsUnavailableError(ApplicationError):
+    """The container was built without the app services."""
+
+    code = "apps_unavailable"
     status_code = 503
 
 

@@ -1,19 +1,18 @@
 /* ---------------------------------------------------------------------------
-   board/model.js -- the template document, as pure functions.
+   board/model.js -- a board's document rules, as pure functions.
 
-   A template document (backend/domain/template.py) is a board of *blocks*
-   plus a snapshot of the graph they belong to:
+   A board is `{columns, blocks, graph}`: a grid of *blocks* (cards) that point at modules of a graph, and the "draft graph"
+   whose parameter objects the field blocks edit (an App's snapshot, or a stand-in over the open graph document). The stored
+   shapes are backend/domain/board.py (a view) and backend/domain/app.py (an app); a block is
 
-     {format, kind: "template"|"monitor", columns, source_graph, graph,
-      blocks: [{id, ref: {scope: "node"|"graph", node?, kind: "field"|
-                "display", name}, x, y, w, h, collapsed, title, options}]}
+     {id, ref: {scope: "node"|"graph"|"note", node?, kind: "field"|"display"|"note", name}, x, y, w, h, collapsed, title, options}
 
    Nothing in this file touches the DOM, the network or a clock, so every
    rule a person relies on -- "what can I add", "which fields does the
    starter page expose", "what exactly will Run send" -- is checked by
    number in frontend/tests/board_model.test.mjs.
 
-   The *modules* argument is what the backend's POST /templates/modules
+   The *modules* argument is what the backend's POST /boards/modules
    returns: {nodes: [{id, class_name, display_name, known, fields,
    displays, stream}], graph_fields, graph_displays}. The backend, not this
    file, decides what a node offers; this file only arranges it.
@@ -45,12 +44,8 @@ export function newBlockId(blocks) {
   return `b${n}`;
 }
 
-export function emptyDoc(kind, graph = null, columns = 12) {
-  return {
-    format: 1, kind, columns, source_graph: null,
-    graph: kind === "template" ? (graph || { nodes: [], edges: [] }) : graph,
-    blocks: [],
-  };
+export function emptyDoc(graph = null, columns = 12) {
+  return { columns, graph, blocks: [] };
 }
 
 /* ---- finding what a block points at ------------------------------------- */
@@ -304,7 +299,7 @@ export function setFieldValue(doc, ref, value) {
 }
 
 /**
- * The `values` body of POST /templates/{name}/run: the current value of
+ * The `values` body of POST /apps/{name}/run: the current value of
  * every field block the page places. A cleared field is sent as null so the
  * server clears it too (the saved graph may hold a value the person just
  * emptied); a graph-memory field that is unset is left out, because the
@@ -345,23 +340,6 @@ export function layoutKey(doc) {
       b.options || {},
     ]),
   });
-}
-
-export function graphKey(doc) {
-  return JSON.stringify(doc.graph || null);
-}
-
-export const docKey = (doc) => `${layoutKey(doc)}|${graphKey(doc)}`;
-
-/** The document as it should be PUT: format stamped, nothing live in it. */
-export function toSaveDoc(doc) {
-  return {
-    ...doc,
-    format: 1,
-    blocks: doc.blocks.map((b) => ({
-      ...b, collapsed: !!b.collapsed, title: b.title || null, options: b.options || {},
-    })),
-  };
 }
 
 /** block id -> status string from a /resolve answer. */

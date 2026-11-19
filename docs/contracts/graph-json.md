@@ -72,7 +72,7 @@ no target, so it cannot be orphaned; allowed in both kinds of view). A monitor v
 
 * One truth: a field block edits the node parameter (or setting) of the open graph itself, so the canvas and the page show the
   same value; Run on a page is the editor's Run. No snapshot of the graph is stored in a view.
-* Whether a block's target still exists is answered by `POST /templates/resolve` (a draft document whose `graph` is the open
+* Whether a block's target still exists is answered by `POST /boards/resolve` (a draft document whose `graph` is the open
   graph); a block that lost its node is kept and shown as orphaned.
 * The runtime ignores views and a run payload strips them. Views are saved with the graph in the library and in the browser's draft.
 * Buttons other than Run/Stop (triggering an event input) wait for a control channel into the running process.

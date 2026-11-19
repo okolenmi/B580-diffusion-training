@@ -72,7 +72,8 @@ def issue_to_dict(issue: GraphIssue) -> dict:
     """JSON-safe form of an issue (one converter for the API's validate
     response *and* the run-rejection ``details`` -- same shape twice)."""
     return {
-        "severity": str(issue.severity),
+        # `str()` of a str-valued Enum is "IssueSeverity.ERROR" from Python 3.11; the wire value is the member's value.
+        "severity": issue.severity.value if isinstance(issue.severity, Enum) else str(issue.severity),
         "code": issue.code,
         "message": issue.message,
         "node_id": issue.node_id,

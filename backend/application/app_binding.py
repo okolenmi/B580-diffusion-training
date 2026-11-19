@@ -1,33 +1,29 @@
-"""Applying a page's values to its graph -- the rule that makes a template safe.
+"""Applying an app's values to its graph -- the rule that makes an app safe.
 
-A template page exposes some fields and hides the rest. Running it submits
-*values for the exposed fields only*: a request that sets a field the page
-does not show is refused, not applied. That is the whole point of a
-template for someone who should not have to meet the graph -- the graph's
-other knobs hold the values the template's author saved, and a stale tab or
-a hand-built request cannot reach past the page.
+An app exposes some fields and hides the rest. Running it submits *values for the exposed fields only*: a request that sets a field
+the app does not show is refused, not applied. That is the point of an app for someone who should not have to meet the graph -- the
+graph's other knobs hold the values the author saved, and a stale tab or a hand-built request cannot reach past the page.
 
-Pure functions over domain objects (no I/O, no catalog): ``exposed_fields``
-reads the document's blocks, ``apply_values`` returns a new
-``GraphDefinition``.
+Pure functions over domain objects (no I/O, no catalog): ``exposed_fields`` reads the document's cards at any depth,
+``apply_values`` returns a new ``GraphDefinition``.
 """
 
 from __future__ import annotations
 
-
+from ..domain.board import iter_cards
 from ..domain.graph import GraphDefinition
 from ..domain.memory_settings import MemorySettings
 from ..domain.modules import GRAPH_FIELD_BY_NAME, wired_ports
 
 
 def exposed_fields(doc: dict) -> tuple[set[tuple[str, str]], set[str]]:
-    """``({(node_id, port), ...}, {memory_key, ...})`` for the field blocks
+    """``({(node_id, port), ...}, {memory_key, ...})`` for the field cards
     a document places. ``memory_key`` is the setting without its
     ``memory.`` prefix (``vram_max_mb``)."""
     node_fields: set[tuple[str, str]] = set()
     graph_fields: set[str] = set()
-    for block in doc.get("blocks", []):
-        ref = block["ref"]
+    for card in iter_cards(doc):
+        ref = card["ref"]
         if ref["kind"] != "field":
             continue
         if ref["scope"] == "node":
@@ -71,7 +67,7 @@ def _apply_node_values(
     for port, value in ports.items():
         if (node_id, port) not in allowed_nodes:
             problems.append(
-                f"values.nodes.{node_id}.{port}: this page does not expose that field"
+                f"values.nodes.{node_id}.{port}: this app does not expose that field"
             )
         elif port in wired:
             problems.append(
@@ -91,7 +87,7 @@ def _apply_memory_values(
     settings = dict(graph.doc.settings)
     for key in memory_values:
         if key not in allowed:
-            problems.append(f"values.memory.{key}: this page does not expose that setting")
+            problems.append(f"values.memory.{key}: this app does not expose that setting")
     if not memory_values or problems:
         return settings
     for key, value in memory_values.items():

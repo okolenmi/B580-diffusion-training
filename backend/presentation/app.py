@@ -25,7 +25,8 @@ from .api import (
     libraries,
     monitor,
     settings,
-    templates,
+    apps,
+    boards,
 )
 from .errors import register_error_handlers
 from .frontend import register_frontend
@@ -58,7 +59,8 @@ def create_app(
     app.include_router(libraries.router)
     app.include_router(catalog.router)
     app.include_router(graphs.router)
-    app.include_router(templates.router)
+    app.include_router(apps.router)
+    app.include_router(boards.router)
     app.include_router(events.router)
     app.include_router(monitor.router)
     # Page/asset routes last: they never shadow the API, and API misses

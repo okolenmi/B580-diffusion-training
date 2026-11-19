@@ -117,6 +117,21 @@ class WorkspaceLayout:
         return path_tiers.comfy_dir(self._root, self._setting)
 
     @property
+    def comfy_dir_or_none(self) -> Path | None:
+        """The ComfyUI directory, or None when nothing identifies one.
+
+        Consumers that merely benefit from a ComfyUI checkout -- passing
+        its path to a child as an optional tokenizer fallback, say -- must
+        not fail an otherwise valid run when none is configured. They ask
+        here; code that genuinely needs the directory keeps asking
+        :attr:`comfy_dir` and gets the loud error.
+        """
+        try:
+            return self.comfy_dir
+        except RuntimeError:
+            return None
+
+    @property
     def venv_python(self) -> str:
         return path_tiers.venv_python(self._root, self._setting)
 

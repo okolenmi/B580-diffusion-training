@@ -111,9 +111,15 @@ class SubprocessGraphTaskGateway(GraphTaskGateway):
         env["LORAS_DIR"] = str(self._layout.loras_dir)
         env["DATASETS_DIR"] = str(self._layout.datasets_dir)
         env["ARTIFACTS_DIR"] = str(self._layout.artifacts_dir)
-        comfy = self._layout.comfy_dir
-        if comfy:
+        # A ComfyUI checkout is optional: its only use here is as a
+        # tokenizer-file fallback in the child. A machine set up through
+        # the wizard has none, so pass the path when there is one and
+        # drop any stale inherited value when there is not.
+        comfy = self._layout.comfy_dir_or_none
+        if comfy is not None:
             env["COMFY_DIR"] = str(comfy)
+        else:
+            env.pop("COMFY_DIR", None)
         return env
 
     # -- stop --------------------------------------------------------------

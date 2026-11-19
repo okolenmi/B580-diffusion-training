@@ -30,14 +30,9 @@ from .application.lifecycle_writer import ExecutionLifecycleWriter
 from .application.memory_admission import LedgerProvider
 from .application.ports.clock import Clock
 from .application.event_publisher import EventPublisher
-from .application.use_cases.graph_modules import DescribeGraphModules, ResolveTemplate
-from .application.use_cases.run_template import RunTemplate
-from .application.use_cases.template_crud import (
-    DeleteTemplate,
-    GetTemplate,
-    ListTemplates,
-    SaveTemplate,
-)
+from .application.use_cases.app_crud import DeleteApp, DiffApp, GetApp, ListApps, SaveApp
+from .application.use_cases.graph_modules import DescribeGraphModules, ResolveBoard
+from .application.use_cases.run_app import RunApp
 from .application.services import (
     ApplicationServices,
     AssetServices,
@@ -46,7 +41,7 @@ from .application.services import (
     InstallerServices,
     MonitorServices,
     SettingsServices,
-    TemplateServices,
+    AppServices,
 )
 from .application.use_cases import (
     ApplyInstallation,
@@ -111,7 +106,7 @@ from .infrastructure.persistence.graph_execution_repository import (
     SqliteGraphExecutionRepository,
 )
 from .infrastructure.persistence.graph_library import SqliteGraphLibrary
-from .infrastructure.persistence.template_library import SqliteTemplateLibrary
+from .infrastructure.persistence.app_library import SqliteAppLibrary
 from .infrastructure.persistence.sqlite import SqliteDatabase
 from .application.limits import (
     DEVICE_REFRESH_MIN_SECONDS,
@@ -224,7 +219,7 @@ def build_container(settings: Settings) -> Container:
         process_overhead_mb=settings.memory_process_overhead_mb,
     )
     graph_library = SqliteGraphLibrary(database)
-    template_library = SqliteTemplateLibrary(database)
+    app_library = SqliteAppLibrary(database)
     execution_writer = ExecutionLifecycleWriter(
         clock=clock,
         repository=graph_executions, events=publisher
@@ -282,7 +277,7 @@ def build_container(settings: Settings) -> Container:
         resolve_memory_fields=memory_fields_resolver(graph_registry),
     )
 
-    # One instance, shared by the editor's Run and by running a template:
+    # One instance, shared by the editor's Run and by running an app:
     # the single-active check lives under this object's lock, so a second
     # instance would be a second lock and a window in which two graphs
     # could both pass it.
@@ -300,6 +295,7 @@ def build_container(settings: Settings) -> Container:
         peak_source=graph_peak_source.observed,
     )
     describe_modules = DescribeGraphModules(catalog=node_catalog)
+    resolve_board = ResolveBoard(describe=describe_modules, runtime=graph_runtime)
 
     image_libraries = FsImageLibraries(layout)
     inspect_environment = InspectEnvironment(LocalVenvInspector(), settings.project_root)
@@ -383,14 +379,15 @@ def build_container(settings: Settings) -> Container:
         event_bus=event_bus,
         memory_ledger=memory_ledger,
         monitor=MonitorServices(subscribe=SubscribeMonitor(bus=monitor_bus)),
-        templates=TemplateServices(
+        apps=AppServices(
             describe=describe_modules,
-            resolve=ResolveTemplate(describe=describe_modules, runtime=graph_runtime),
-            save=SaveTemplate(library=template_library),
-            get=GetTemplate(library=template_library),
-            list=ListTemplates(library=template_library),
-            delete=DeleteTemplate(library=template_library),
-            run=RunTemplate(library=template_library, start=start_execution),
+            resolve=resolve_board,
+            save=SaveApp(library=app_library),
+            get=GetApp(library=app_library),
+            list=ListApps(library=app_library),
+            delete=DeleteApp(library=app_library),
+            diff=DiffApp(library=app_library, resolve=resolve_board),
+            run=RunApp(library=app_library, start=start_execution),
         ),
     )
 

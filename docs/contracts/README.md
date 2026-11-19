@@ -11,6 +11,7 @@ is a bug: fix the contract first (`../developing.md`, "Changing a public contrac
 | `resolve.md` | editing-time shape resolution (dynamic ports) |
 | `events.md` | the event plane and its mirroring |
 | `runs.md` | run lifecycle, node states, progress and results |
+| `apps.md` | apps (frozen, versioned pages over a graph) and the boards they share with graph views |
 | `settings.md` | graph settings: specs, resolution order, core keys |
 | `errors.md` | the HTTP error envelope and every error code with its status |
 

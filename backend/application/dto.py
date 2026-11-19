@@ -15,7 +15,7 @@ from ..domain.graph import NodeResult
 from ..domain.value_objects import GraphStatus
 from .ports.graph_runtime import GraphIssue
 from .ports.graph_library import SavedGraph
-from .ports.template_library import SavedTemplate
+from .ports.app_library import SavedApp
 
 # --------------------------------------------------------------------------
 # Use-case inputs / outputs
@@ -71,6 +71,8 @@ class GraphExecutionDTO:
     #: What admission decided for this run (effective settings, demand and where it came from) and what it holds in
     #: the ledger; None for a row that predates the columns.
     memory: dict | None = None
+    #: What started the run when it was not the editor's Run: ``{app, version, values}``.
+    origin: dict | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +87,7 @@ class GraphExecutionSummaryDTO:
     updated_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+    origin: dict | None = None
 
 
 def to_execution_dto(execution: GraphExecution) -> GraphExecutionDTO:
@@ -103,6 +106,7 @@ def to_execution_dto(execution: GraphExecution) -> GraphExecutionDTO:
         started_at=execution.started_at,
         finished_at=execution.finished_at,
         memory=None if execution.memory is None else {**execution.memory.as_dict(), "reserved_mb": execution.reserved_mb},
+        origin=execution.origin,
     )
 
 
@@ -118,6 +122,7 @@ def to_execution_summary_dto(execution: GraphExecution) -> GraphExecutionSummary
         updated_at=execution.updated_at,
         started_at=execution.started_at,
         finished_at=execution.finished_at,
+        origin=execution.origin,
     )
 
 
@@ -238,54 +243,56 @@ class DeleteGraphResult:
 
 
 # --------------------------------------------------------------------------
-# Templates (saved pages / monitor windows)
+# Apps (published pages over a frozen graph)
 
 @dataclass(frozen=True, slots=True)
-class SavedTemplateDTO:
-    """One template row on the wire (``doc`` verbatim as stored)."""
+class SavedAppDTO:
+    """One app row on the wire (``doc`` verbatim as stored)."""
 
     name: str
     description: str
-    kind: str
+    version: int
+    graph_hash: str
     doc: dict
-    block_count: int
+    card_count: int
     node_count: int
     created_at: datetime
     updated_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
-class SavedTemplateSummaryDTO:
+class SavedAppSummaryDTO:
     """List projection (no document)."""
 
     name: str
     description: str
-    kind: str
-    block_count: int
+    version: int
+    card_count: int
     node_count: int
     created_at: datetime
     updated_at: datetime
 
 
-def to_saved_template_dto(saved: SavedTemplate) -> SavedTemplateDTO:
-    return SavedTemplateDTO(
+def to_saved_app_dto(saved: SavedApp) -> SavedAppDTO:
+    return SavedAppDTO(
         name=saved.name,
         description=saved.description,
-        kind=saved.kind,
+        version=saved.version,
+        graph_hash=saved.graph_hash,
         doc=dict(saved.doc),
-        block_count=saved.block_count,
+        card_count=saved.card_count,
         node_count=saved.node_count,
         created_at=saved.created_at,
         updated_at=saved.updated_at,
     )
 
 
-def to_saved_template_summary(saved: SavedTemplate) -> SavedTemplateSummaryDTO:
-    return SavedTemplateSummaryDTO(
+def to_saved_app_summary(saved: SavedApp) -> SavedAppSummaryDTO:
+    return SavedAppSummaryDTO(
         name=saved.name,
         description=saved.description,
-        kind=saved.kind,
-        block_count=saved.block_count,
+        version=saved.version,
+        card_count=saved.card_count,
         node_count=saved.node_count,
         created_at=saved.created_at,
         updated_at=saved.updated_at,
@@ -293,17 +300,28 @@ def to_saved_template_summary(saved: SavedTemplate) -> SavedTemplateSummaryDTO:
 
 
 @dataclass(frozen=True, slots=True)
-class SavedTemplateListResult:
-    templates: tuple[SavedTemplateSummaryDTO, ...]
+class SavedAppListResult:
+    apps: tuple[SavedAppSummaryDTO, ...]
     count: int
 
 
 @dataclass(frozen=True, slots=True)
-class SaveTemplateResult:
-    template: SavedTemplateDTO
+class SaveAppResult:
+    app: SavedAppDTO
     created: bool  # True on first save (201), False on replace (200)
 
 
 @dataclass(frozen=True, slots=True)
-class DeleteTemplateResult:
+class DeleteAppResult:
     deleted: bool
+
+
+@dataclass(frozen=True, slots=True)
+class AppDiffResult:
+    added: tuple[str, ...]
+    removed: tuple[str, ...]
+    changed: tuple[str, ...]
+    wiring_changed: bool
+    settings_changed: bool
+    orphaned_cards: tuple[str, ...]
+    new_version: bool

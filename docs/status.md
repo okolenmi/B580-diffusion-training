@@ -1,6 +1,6 @@
 # Status
 
-The single place that says what exists. Last checked against the code on 2026-11-15, after the rework tree was swapped into the repository root.
+The single place that says what exists. Last checked against the code on 2026-11-19.
 Hardware results are not guessed here: `TESTING.md` (root) lists what still has to run on the B580, and every lever in `manual/` carries
 `verified` or `untested`.
 
@@ -18,17 +18,17 @@ Hardware results are not guessed here: `TESTING.md` (root) lists what still has 
 | Backend: validate and run graphs in a child process, memory admission, parallel runs (`auto`, `parallel`, `queue`), planned runs, run history and per-run curves, image libraries, settings, installer (graphics card, new or existing virtualenv with pinned install of torch from the Intel XPU index, tokenizer files, models folder; the server restarts into the chosen environment and setup reopens when that environment is deleted; ComfyUI optional) | built; the backend suite needs Python 3.14 |
 | Frontend: `/graph` editor with views and monitor, run mode switch, instance view; `/datasets`; start page (`/`: server, card, PyTorch and node-library status, a getting-started list, latest runs, card memory); settings (sections: folders, Python environment with a live check and prompt-file downloads, interface, housekeeping, server); setup (locks the rest of the app until finished, reopens when the chosen environment is gone); help (searchable guide with troubleshooting entries) | built; browser-checked against the real backend |
 | Labs: `perf` (profile, matrix, micro-benchmarks, hardware bundle), `accept` (automatic verdicts for hardware runs), `lab` (train variants, render, measure) | built, CPU-tested |
+| Apps (`/apps`, `contracts/apps.md`): frozen, versioned snapshot of a graph plus a page of cards over it (cards bind to fields and live views, one page, edit and use modes, run with typed values, "update from graph" with a reviewed diff; runs record their origin). The old `/templates` page and its saved templates are gone | built, CPU-tested (`test_apps.py`), browser-checked against fixture nodes; tabs, nested sections and more card kinds are not built yet |
 | Command line: `python -m run sdxl-lora` and `anima-lora` | built |
 
 ## Declared but not working
 
 - Graph settings `runtime.graph_capture`, `runtime.block_swap` and `memory.ram_max_mb` are in the registry and the editor but nothing reads them
   (`manual/persistence-and-unbuilt.md`). Block swap is therefore not available for Anima or anything else.
-- The old `/templates` page still exists beside the editor's views; it is to be retired.
 
 ## Not built
 
-- Event-trigger buttons in views (they need a control channel), image blocks in views, the `/apps/<name>` use mode.
+- Event-trigger buttons in views (they need a control channel), image blocks in views.
 - Weights shared between processes: measured not possible with plain torch (`internals/parallel-runs.md`); every run holds its own copy.
 - Custom kernels for the frozen-weight path beyond what `xpu-kernels` provides (`internals/kernels.md`, `internals/capturable-attention.md`).
 

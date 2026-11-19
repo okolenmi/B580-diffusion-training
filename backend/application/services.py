@@ -29,14 +29,9 @@ from .use_cases.browse_assets import BrowseAssets
 from .use_cases.install_packages import GetInstall, StartInstall
 from .use_cases.inspect_environment import DescribeRequirements, InspectEnvironment, TokenizerSetup
 from .use_cases.delete_graph import DeleteGraph
-from .use_cases.graph_modules import DescribeGraphModules, ResolveTemplate
-from .use_cases.run_template import RunTemplate
-from .use_cases.template_crud import (
-    DeleteTemplate,
-    GetTemplate,
-    ListTemplates,
-    SaveTemplate,
-)
+from .use_cases.app_crud import DeleteApp, DiffApp, GetApp, ListApps, SaveApp
+from .use_cases.graph_modules import DescribeGraphModules, ResolveBoard
+from .use_cases.run_app import RunApp
 from .use_cases.delete_graph_executions import DeleteGraphExecutions
 from .use_cases.get_graph import GetGraph
 from .use_cases.get_execution_metrics import GetExecutionMetrics
@@ -153,21 +148,20 @@ class GraphServices:
 
 
 @dataclass(frozen=True, slots=True)
-class TemplateServices:
-    """Saved pages and monitor windows built on a graph, and what they can
-    bind to (docs/design/15). Separate from ``GraphServices`` so the
-    template feature lands -- and can be removed -- without touching it."""
+class AppServices:
+    """Apps (published, frozen pages over a graph) and what a board can bind to. Separate from ``GraphServices`` so the app feature
+    lands -- and can be removed -- without touching it."""
 
-    #: What a graph offers a page: per-node fields + live views, plus the
-    #: graph's own modules.
+    #: What a graph offers a board: per-node fields + live displays, plus the graph's own modules.
     describe: DescribeGraphModules
-    #: Does a (possibly unsaved) page still bind to its graph, block by block.
-    resolve: ResolveTemplate
-    save: SaveTemplate
-    get: GetTemplate
-    list: ListTemplates
-    delete: DeleteTemplate
-    run: RunTemplate
+    #: Does a (possibly unsaved) board still bind to its graph, card by card.
+    resolve: ResolveBoard
+    save: SaveApp
+    get: GetApp
+    list: ListApps
+    delete: DeleteApp
+    diff: DiffApp
+    run: RunApp
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,7 +200,6 @@ class ApplicationServices:
     # explicitly. Exposed on the aggregate so `/health` can show the
     # snapshot (holders, free) without reaching into a use case.
     memory_ledger: LedgerSource
-    # Templates (docs/design/15). Last, with a default, so every container
-    # built before templates existed stays valid; the templates router
-    # answers 503 ``templates_unavailable`` while this is None.
-    templates: TemplateServices | None = None
+    # Apps. Last, with a default, so every container built before apps existed stays valid; the apps and boards routers answer 503
+    # ``apps_unavailable`` while this is None.
+    apps: AppServices | None = None

@@ -5,9 +5,9 @@
    also holds fields, so it is the interface a person uses without meeting the canvas. Blocks point at nodes by uid.
 
    One truth: a field block edits the graph's own node parameter or setting through the document (the canvas and the
-   page show the same value at once), and Run is the editor's Run. The board itself is the one the templates page uses
+   page show the same value at once), and Run is the editor's Run. The board itself is the one the apps page uses
    (board/board.js); this file only binds it to the open document: a stand-in "draft graph" whose parameter objects
-   write through `GraphDoc`, and a resolve call (`POST /templates/resolve`) that says which blocks still have a target.
+   write through `GraphDoc`, and a resolve call (`POST /boards/resolve`) that says which blocks still have a target.
    --------------------------------------------------------------------------- */
 
 import { api } from "../api.js";
@@ -37,30 +37,30 @@ export class Views {
     this._active = false;
 
     this.pick = h("select", { class: "vw-pick", "aria-label": "View", onchange: () => this.open(this.pick.value) });
-    this.useBtn = h("button", { class: "tpl-seg-btn active", type: "button", text: "Use", onclick: () => this.setMode("use") });
-    this.editBtn = h("button", { class: "tpl-seg-btn", type: "button", text: "Edit", onclick: () => this.setMode("edit") });
+    this.useBtn = h("button", { class: "bd-seg-btn active", type: "button", text: "Use", onclick: () => this.setMode("use") });
+    this.editBtn = h("button", { class: "bd-seg-btn", type: "button", text: "Edit", onclick: () => this.setMode("edit") });
     this.runBtn = h("button", { class: "btn btn-start btn-small", type: "button", text: "▶ Run", onclick: () => hooks.onRun() });
     this.stopBtn = h("button", { class: "btn btn-danger btn-small", type: "button", text: "■ Stop", onclick: () => hooks.onStop() });
-    this.state = h("span", { class: "tpl-state" });
+    this.state = h("span", { class: "bd-state" });
     this.bar = h("div", { class: "vw-bar" },
       this.pick,
       h("button", { class: "btn btn-secondary btn-small", type: "button", text: "New monitor", onclick: () => this.create("monitor") }),
       h("button", { class: "btn btn-secondary btn-small", type: "button", text: "New page", onclick: () => this.create("page") }),
       h("button", { class: "btn btn-secondary btn-small", type: "button", text: "Rename", onclick: () => this.rename() }),
       h("button", { class: "btn btn-kill btn-small", type: "button", text: "Delete", onclick: () => this.remove() }),
-      h("span", { class: "tpl-seg", role: "group", "aria-label": "Mode" }, this.useBtn, this.editBtn),
+      h("span", { class: "bd-seg", role: "group", "aria-label": "Mode" }, this.useBtn, this.editBtn),
       this.runBtn, this.stopBtn, this.state);
     this.issues = h("div", { class: "error-box", role: "alert", hidden: true });
     this.search = h("input", { class: "cfg-input", type: "search", placeholder: "Search…", "aria-label": "Search available blocks", oninput: () => this.renderTray() });
     this.advanced = h("input", { type: "checkbox", onchange: () => this.renderTray() });
     this.trayList = h("div");
     this.columns = h("input", { type: "number", min: "1", max: "24", "aria-label": "Grid columns", onchange: () => this.setColumns() });
-    this.tray = h("aside", { class: "tpl-tray", hidden: true, "aria-label": "Add blocks" },
-      h("div", { class: "tpl-tray-head" }, h("strong", { text: "Add blocks" }), h("label", { class: "tpl-adv" }, this.advanced, " advanced")),
-      this.search, this.trayList, h("div", { class: "tpl-tray-foot" }, "Columns ", this.columns));
-    this.boardEl = h("div", { class: "tpl-board" });
+    this.tray = h("aside", { class: "bd-tray", hidden: true, "aria-label": "Add blocks" },
+      h("div", { class: "bd-tray-head" }, h("strong", { text: "Add blocks" }), h("label", { class: "bd-adv" }, this.advanced, " advanced")),
+      this.search, this.trayList, h("div", { class: "bd-tray-foot" }, "Columns ", this.columns));
+    this.boardEl = h("div", { class: "bd-main" });
     this.empty = h("div", { class: "console-line info", text: "No views yet. A monitor view watches the live displays of your nodes; a page view also edits their values." });
-    this.work = h("div", { class: "tpl-work" }, this.boardEl, this.tray);
+    this.work = h("div", { class: "bd-work" }, this.boardEl, this.tray);
     root.append(this.bar, this.issues, this.empty, this.work);
 
     this.board = new Board(this.boardEl, {
@@ -216,9 +216,9 @@ export class Views {
     if (!view) return;
     const seq = ++this._seq;
     try {
-      const res = await api("/templates/resolve", {
+      const res = await api("/boards/resolve", {
         method: "POST",
-        body: { doc: { format: 1, kind: view.mode === "page" ? "template" : "monitor", columns: view.columns, source_graph: null, graph: this.doc.runPayload(), blocks: view.blocks } },
+        body: { doc: { mode: view.mode, columns: view.columns, blocks: view.blocks }, graph: this.doc.runPayload() },
       });
       if (seq !== this._seq) return;
       this.modules = res.modules;
@@ -253,9 +253,9 @@ export class Views {
       .map((g) => ({ ...g, items: needle ? g.items.filter((i) => `${i.label} ${g.title} ${i.sub}`.toLowerCase().includes(needle)) : g.items }))
       .filter((g) => g.items.length);
     const open = new Map([...this.trayList.querySelectorAll("details")].map((d) => [d.dataset.key, d.open]));
-    const note = h("button", { class: "tpl-tray-item", type: "button", title: "Free text on the page, for whoever uses it", onclick: () => this.board.addNote() },
-      h("span", { text: "Note" }), h("span", { class: "tpl-tray-tag", text: "+" }));
-    this.trayList.replaceChildren(note, ...(groups.length ? groups.map((g) => this.trayGroup(g, open, groups.length, !!needle)) : [h("div", { class: "tpl-tray-empty", text: needle ? "Nothing matches." : "Nothing more to add." })]));
+    const note = h("button", { class: "bd-tray-item", type: "button", title: "Free text on the page, for whoever uses it", onclick: () => this.board.addNote() },
+      h("span", { text: "Note" }), h("span", { class: "bd-tray-tag", text: "+" }));
+    this.trayList.replaceChildren(note, ...(groups.length ? groups.map((g) => this.trayGroup(g, open, groups.length, !!needle)) : [h("div", { class: "bd-tray-empty", text: needle ? "Nothing matches." : "Nothing more to add." })]));
   }
 
   trayGroup(g, open, count, searching) {
@@ -265,10 +265,10 @@ export class Views {
     for (const kind of ["display", "field"]) {
       const items = g.items.filter((i) => i.kind === kind);
       if (!items.length) continue;
-      details.append(h("div", { class: "tpl-tray-cap", text: kind === "display" ? "Live views" : "Settings" }));
+      details.append(h("div", { class: "bd-tray-cap", text: kind === "display" ? "Live views" : "Settings" }));
       for (const it of items) {
-        details.append(h("button", { class: "tpl-tray-item", type: "button", disabled: it.placed, title: it.sub || it.label, onclick: () => this.board.addRef(it.ref) },
-          h("span", { text: it.label }), h("span", { class: "tpl-tray-tag", text: it.placed ? "added" : it.advanced ? "advanced" : "+" })));
+        details.append(h("button", { class: "bd-tray-item", type: "button", disabled: it.placed, title: it.sub || it.label, onclick: () => this.board.addRef(it.ref) },
+          h("span", { text: it.label }), h("span", { class: "bd-tray-tag", text: it.placed ? "added" : it.advanced ? "advanced" : "+" })));
       }
     }
     return details;

@@ -67,13 +67,13 @@ MAX_GRAPH_NAME = 120
 MAX_GRAPH_DESCRIPTION = 1000
 """Ceiling on a saved graph's description."""
 
-# --- templates ------------------------------------------------------------
+# --- apps -----------------------------------------------------------------
 
-MAX_TEMPLATE_NAME = 120
-"""Ceiling on a saved template's name."""
+MAX_APP_NAME = 120
+"""Ceiling on a saved app's name."""
 
-MAX_TEMPLATE_DESCRIPTION = 1000
-"""Ceiling on a saved template's description."""
+MAX_APP_DESCRIPTION = 1000
+"""Ceiling on a saved app's description."""
 
 
 # --- internal defaults, not part of the API contract ----------------------

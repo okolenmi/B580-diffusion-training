@@ -138,13 +138,13 @@ def test_pages_and_assets() -> None:
 
         status, _, body = asgi_request(app, "/help")
         check(
-            status == 200 and isinstance(body, str) and "help-where" in body,
+            status == 200 and isinstance(body, str) and "<title>Help</title>" in body,
             f"/help serves the help page (got {status})",
         )
 
         status, _, body = asgi_request(app, "/settings")
         check(
-            status == 200 and isinstance(body, str) and "theme-group" in body,
+            status == 200 and isinstance(body, str) and "<title>Settings</title>" in body,
             f"/settings serves the settings page (got {status})",
         )
 

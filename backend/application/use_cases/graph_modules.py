@@ -1,5 +1,5 @@
-"""DescribeGraphModules / ResolveTemplate -- what a page can bind to, and
-whether a saved page still binds to it.
+"""DescribeGraphModules / ResolveBoard -- what a board can bind to, and
+whether a board (a view, or an app) still binds to it.
 
 Both answer from the node tree's own catalog and resolve, never from a
 second description:
@@ -9,14 +9,14 @@ second description:
   values and whether an edge already feeds them) and the **displays** it can
   show (its declared live views, each on the stream ``node:<uid>``), plus
   the graph's own modules (memory settings, run status, memory chart). It
-  is the template editor's "what is available" tray, and the monitor
+  is the board editor's "what is available" tray, and the monitor
   composer's "what can I watch".
 
-* ``ResolveTemplate`` takes a *draft* document (the editor's unsaved state --
-  hence a body, not a name) and says, block by block, whether its target
-  still exists. A block whose node was deleted, whose class vanished, or
-  whose port was renamed is reported ``missing_*`` and **kept**: the page
-  still loads, the block shows as orphaned and can be removed or repointed.
+* ``ResolveBoard`` takes a *draft* document (the editor's unsaved state --
+  hence a body, not a name) and says, card by card, whether its target
+  still exists. A card whose node was deleted, whose class vanished, or
+  whose port was renamed is reported ``missing_*`` and **kept**: the board
+  still loads, the card shows as orphaned and can be removed or repointed.
   A field the graph now wires from upstream is ``wired`` (shown read-only,
   because its value no longer comes from the page).
 
@@ -28,9 +28,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from ..errors import TemplateInvalidError
+from ..errors import BoardInvalidError
 from ..ports.graph_runtime import GraphRuntime, issue_to_dict
 from ..ports.node_catalog import NodeCatalog
+from ...domain.app import validate_app_doc
+from ...domain.board import iter_cards, validate_board_doc
 from ...domain.graph import GraphDefinition
 from ...domain.modules import (
     GRAPH_DISPLAY_BY_NAME,
@@ -39,12 +41,11 @@ from ...domain.modules import (
     GRAPH_FIELDS,
     node_stream_id,
 )
-from ...domain.template import validate_template_doc
 from .save_graph import normalize_graph_payload
 
 
 def _field_dict(port: dict, params: dict, wired: bool) -> dict[str, Any]:
-    """A catalog port as the template editor's field: the port's own description plus this node's current state."""
+    """A catalog port as a board's field: the port's own description plus this node's current state."""
     name = port["name"]
     return {
         **{key: port.get(key) for key in (
@@ -118,9 +119,9 @@ class DescribeGraphModules:
 
 
 @dataclass(frozen=True, slots=True)
-class TemplateResolution:
+class BoardResolution:
     modules: GraphModules
-    #: One entry per block, in order: ``{"id", "status", "detail"}``.
+    #: One entry per card that points at something, in document order: ``{"id", "status", "detail"}``.
     blocks: tuple[dict, ...]
     #: Graph validation issues (errors + warnings) -- "would this run".
     issues: tuple[dict, ...]
@@ -135,17 +136,17 @@ STATUS_UNKNOWN_CLASS = "unknown_class"
 STATUS_MISSING_MODULE = "missing_module"
 
 
-class ResolveTemplate:
+class ResolveBoard:
     def __init__(self, *, describe: DescribeGraphModules, runtime: GraphRuntime) -> None:
         self._describe = describe
         self._runtime = runtime
 
-    def execute(self, doc: dict, *, graph: dict | None = None) -> TemplateResolution:
-        problems = validate_template_doc(doc)
+    def execute(self, doc: dict, *, graph: dict | None = None) -> BoardResolution:
+        # An app carries its own snapshot and root; a view is the flat board a graph document holds.
+        is_app = isinstance(doc, dict) and ("root" in doc or "graph" in doc)
+        problems = validate_app_doc(doc) if is_app else validate_board_doc(doc)
         if problems:
-            raise TemplateInvalidError(
-                f"template has {len(problems)} problem(s)", details=problems
-            )
+            raise BoardInvalidError(f"board has {len(problems)} problem(s)", details=problems)
         source = graph if graph is not None else doc.get("graph")
         if source is None:
             definition = GraphDefinition()
@@ -153,22 +154,20 @@ class ResolveTemplate:
             try:
                 definition = GraphDefinition.from_dict(normalize_graph_payload(source))
             except ValueError as exc:  # not a document this version reads, or a bad memory setting
-                raise TemplateInvalidError(f"graph: {exc}", details=[str(exc)]) from exc
+                raise BoardInvalidError(f"graph: {exc}", details=[str(exc)]) from exc
         modules = self._describe.execute(definition)
         nodes = {n["id"]: n for n in modules.nodes}
 
-        blocks = tuple(
-            self._status(block, nodes) for block in doc.get("blocks", [])
-        )
+        blocks = tuple(self._status(card, nodes) for card in iter_cards(doc))
         issues: tuple[dict, ...] = ()
-        if doc.get("kind", "template") == "template" and definition.nodes:
+        if doc.get("mode", "page") == "page" and definition.nodes:
             issues = tuple(issue_to_dict(i) for i in self._runtime.validate(definition))
-        return TemplateResolution(modules=modules, blocks=blocks, issues=issues)
+        return BoardResolution(modules=modules, blocks=blocks, issues=issues)
 
     @staticmethod
-    def _status(block: dict, nodes: dict[str, dict]) -> dict:
-        ref = block["ref"]
-        out = {"id": block["id"], "status": STATUS_OK, "detail": ""}
+    def _status(card: dict, nodes: dict[str, dict]) -> dict:
+        ref = card["ref"]
+        out = {"id": card["id"], "status": STATUS_OK, "detail": ""}
         kind, name = ref["kind"], ref["name"]
         if ref["scope"] == "note":
             return out  # text of its own: nothing it could lose

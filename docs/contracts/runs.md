@@ -103,6 +103,6 @@ programs are not subtracted from it a second time.
 
 ## Display streams
 
-A node with `MODULES` reports its frames on `node:<uid>`; the monitor boards and the template editor read them there.
+A node with `MODULES` reports its frames on `node:<uid>`; the monitor boards and the app editor read them there.
 `graph:run` carries the run's own frames (node states, memory). The child writes every stream frame to the run's event
 file and the server republishes it.

@@ -360,7 +360,7 @@ const KINDS = {
 
 export const KNOWN_KINDS = Object.keys(KINDS);
 
-/** A display for `module` (a descriptor from /templates/modules), reading
+/** A display for `module` (a descriptor from /boards/modules), reading
     `state`. An unknown kind gets a placeholder that says so. */
 export function createDisplay({ module, state, ctx }) {
   const make = KINDS[module.kind];

@@ -500,6 +500,8 @@ class ExecutionSummaryOut(BaseModel):
     updated_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    #: ``{app, version, values}`` when an app started the run, None for the editor's Run.
+    origin: dict[str, Any] | None = None
 
 
 class ExecutionOut(ExecutionSummaryOut):
@@ -598,6 +600,7 @@ def execution_summary_out(dto: GraphExecutionSummaryDTO) -> ExecutionSummaryOut:
         updated_at=dto.updated_at,
         started_at=dto.started_at,
         finished_at=dto.finished_at,
+        origin=None if dto.origin is None else dict(dto.origin),
     )
 
 
@@ -658,53 +661,79 @@ def saved_graph_list_out(result) -> SavedGraphListOut:
 
 
 # --------------------------------------------------------------------------
-# Templates (saved pages / monitor windows) -- docs/design/15
+# Apps (published pages over a frozen graph)
 
-class TemplateIn(BaseModel):
-    """``PUT /templates/{name}``: the page document plus a description.
+class AppIn(BaseModel):
+    """``PUT /apps/{name}``: the app document plus a description.
 
-    ``doc`` is deliberately an open object here: its shape is checked by
-    ``domain/template.validate_template_doc`` (which reports *every*
-    problem with a path), not by a pydantic model that would stop at the
-    first and could not carry the keys a newer frontend adds.
+    ``doc`` is deliberately an open object here: its shape is checked by ``domain/app.validate_app_doc`` (which reports *every* problem
+    with a path), not by a pydantic model that would stop at the first and could not carry the keys a newer frontend adds.
     """
 
     description: str = ""
     doc: dict[str, Any]
 
 
-class SavedTemplateOut(BaseModel):
+class SavedAppOut(BaseModel):
     name: str
     description: str = ""
-    kind: str
+    version: int
+    graph_hash: str
     doc: dict[str, Any]
-    block_count: int
+    card_count: int
     node_count: int
     created_at: datetime
     updated_at: datetime
 
 
-class SavedTemplateSummaryOut(BaseModel):
+class SavedAppSummaryOut(BaseModel):
     name: str
     description: str = ""
-    kind: str
-    block_count: int
+    version: int
+    card_count: int
     node_count: int
     created_at: datetime
     updated_at: datetime
 
 
-class SavedTemplateListOut(BaseModel):
-    templates: list[SavedTemplateSummaryOut]
+class SavedAppListOut(BaseModel):
+    apps: list[SavedAppSummaryOut]
     count: int
 
 
-class DeleteTemplateOut(BaseModel):
+class DeleteAppOut(BaseModel):
     deleted: bool
 
 
+class AppDiffIn(BaseModel):
+    """``POST /apps/{name}/diff``: the graph the app would be updated from."""
+
+    graph: dict[str, Any]
+
+
+class AppDiffOut(BaseModel):
+    """What publishing that graph over the app's snapshot would change, by node uid, and which cards would lose their target."""
+
+    added: list[str]
+    removed: list[str]
+    changed: list[str]
+    wiring_changed: bool
+    settings_changed: bool
+    orphaned_cards: list[str]
+    new_version: bool
+
+
+class AppRunIn(BaseModel):
+    """``POST /apps/{name}/run``.
+
+    ``values`` is ``{"nodes": {node_id: {port: value}}, "memory": {key: value}}`` and may only name fields the app exposes."""
+
+    values: dict[str, Any] = Field(default_factory=dict)
+    memory_overrides: MemoryOverridesIn | None = None
+
+
 class ModulesIn(BaseModel):
-    """``POST /templates/modules``: a graph document (the editor's payload shape)."""
+    """``POST /boards/modules``: a graph document (the editor's payload shape)."""
 
     graph: dict[str, Any]
 
@@ -723,8 +752,7 @@ class GraphModulesOut(BaseModel):
 
 
 class ResolveIn(BaseModel):
-    """``POST /templates/resolve``: a draft document, optionally with the
-    graph to resolve a monitor window against."""
+    """``POST /boards/resolve``: a draft board (a view, or an app's document), optionally with the graph to resolve it against."""
 
     doc: dict[str, Any]
     graph: dict[str, Any] | None = None
@@ -742,33 +770,21 @@ class ResolveOut(BaseModel):
     issues: list[dict[str, Any]]
 
 
-class TemplateRunIn(BaseModel):
-    """``POST /templates/{name}/run``.
-
-    ``values`` is ``{"nodes": {node_id: {port: value}}, "memory": {key:
-    value}}`` and may only name fields the page exposes."""
-
-    values: dict[str, Any] = Field(default_factory=dict)
-    memory_overrides: MemoryOverridesIn | None = None
-
-
-def saved_template_out(dto) -> SavedTemplateOut:
-    return SavedTemplateOut(
-        name=dto.name, description=dto.description, kind=dto.kind, doc=dto.doc,
-        block_count=dto.block_count, node_count=dto.node_count,
-        created_at=dto.created_at, updated_at=dto.updated_at,
+def saved_app_out(dto) -> SavedAppOut:
+    return SavedAppOut(
+        name=dto.name, description=dto.description, version=dto.version, graph_hash=dto.graph_hash, doc=dto.doc,
+        card_count=dto.card_count, node_count=dto.node_count, created_at=dto.created_at, updated_at=dto.updated_at,
     )
 
 
-def saved_template_list_out(result) -> SavedTemplateListOut:
-    return SavedTemplateListOut(
-        templates=[
-            SavedTemplateSummaryOut(
-                name=t.name, description=t.description, kind=t.kind,
-                block_count=t.block_count, node_count=t.node_count,
-                created_at=t.created_at, updated_at=t.updated_at,
+def saved_app_list_out(result) -> SavedAppListOut:
+    return SavedAppListOut(
+        apps=[
+            SavedAppSummaryOut(
+                name=a.name, description=a.description, version=a.version, card_count=a.card_count,
+                node_count=a.node_count, created_at=a.created_at, updated_at=a.updated_at,
             )
-            for t in result.templates
+            for a in result.apps
         ],
         count=result.count,
     )

@@ -1,36 +1,35 @@
 /* ---------------------------------------------------------------------------
-   templates.js -- the Templates page (templates.html).
+   apps.js -- the Apps page (apps.html).
 
    Two routes, one module:
-     /templates          the library: pages and monitor windows, and "new
-                         from a graph";
-     /templates/<name>   one page. Mode **use** (default) is the interface a
-                         beginner sees: change the exposed values, press Run,
-                         watch the live blocks. Mode **edit** unlocks the
-                         layout and a tray of everything the graph offers.
+     /apps           the library of apps, and "new from a graph";
+     /apps/<name>    one app. Mode **use** (default) is the interface a person
+                     meets: change the exposed values, press Run, watch the live
+                     cards. Mode **edit** unlocks the layout and a tray of
+                     everything the app's graph offers.
 
-   A *page* (kind "template") edits and runs a graph; a *monitor window*
-   (kind "monitor") only watches one. Same document, same board engine.
+   An app is a frozen snapshot of a graph plus a page of cards over it
+   (docs/contracts/apps.md). The graph editor keeps authoring graphs; "Update
+   from graph" is the explicit, reviewed step that copies a newer graph in.
 
    Where each piece of truth lives (so nothing here is a second copy):
-     * the document and its draft graph -- `S.doc`, saved with PUT;
-     * what a block can bind to, and whether it still does -- the backend
-       (`POST /templates/resolve`), re-asked after edits, never guessed here;
+     * the document -- `S.app`, saved with PUT. Its graph snapshot is what the
+       field cards edit (the board's stand-in "draft graph" writes through to it);
+     * what a card can bind to, and whether it still does -- the backend
+       (`POST /boards/resolve`), re-asked after edits, never guessed here;
      * run state -- the executions API, polled; live numbers -- the monitor
        streams, one connection per stream (board/live.js).
 
    Run is refused client-side only for one reason the server would also
-   refuse: the page shows a field the *saved* page does not expose. Everything
+   refuse: the page shows a field the *saved* app does not expose. Everything
    else is the server's answer, shown as it came.
    --------------------------------------------------------------------------- */
 
 import { api, ApiError } from "./api.js";
-import { Board } from "./board/board.js";
+import { Board, settleLayout } from "./board/board.js";
 import { LiveStreams } from "./board/live.js";
-import { settleLayout } from "./board/board.js";
 import {
-  autoFill, buildAvailable, emptyDoc, graphKey, layoutKey, refKey, statusByBlock, toSaveDoc,
-  valuesPayload,
+  autoFill, buildAvailable, layoutKey, refKey, statusByBlock, valuesPayload,
 } from "./board/model.js";
 import { el, showMessage } from "./lib/dom.js";
 import { errText } from "./lib/errors.js";
@@ -41,10 +40,8 @@ const enc = encodeURIComponent;
 
 const url = new URL(location.href);
 const route = url.pathname.replace(/\/+$/, "");
-const pageName = route.startsWith("/templates/") ? decodeURIComponent(route.slice("/templates/".length)) : null;
+const pageName = route.startsWith("/apps/") ? decodeURIComponent(route.slice("/apps/".length)) : null;
 const query = url.searchParams;
-const WINDOW_MODE = query.has("window");
-if (WINDOW_MODE) document.body.classList.add("tpl-window");
 
 const live = new LiveStreams();
 
@@ -56,13 +53,13 @@ async function showList() {
   el("view-list").hidden = false;
   el("view-page").hidden = true;
   try {
-    const [templates, library] = await Promise.all([api("/templates"), api("/graphs/library")]);
-    renderNewForm(library.graphs || [], new Set((templates.templates || []).map((t) => t.name)));
-    renderCards(templates.templates || []);
+    const [apps, library] = await Promise.all([api("/apps"), api("/graphs/library")]);
+    renderNewForm(library.graphs || [], new Set((apps.apps || []).map((t) => t.name)));
+    renderCards(apps.apps || []);
   } catch (err) {
     const box = el("list-state");
     box.hidden = false;
-    box.textContent = `Could not load templates: ${errText(err)}`;
+    box.textContent = `Could not load apps: ${errText(err)}`;
   }
 }
 
@@ -78,15 +75,10 @@ function renderNewForm(graphs, taken) {
   const create = el("btn-new");
   const none = graphs.length === 0;
   create.disabled = none;
-  el("new-hint").textContent = none
-    ? "There is no saved graph yet. Build one in the Graph Editor and save it to the library; a page is built on a saved graph."
-    : el("new-hint").textContent;
-  const kindSel = el("new-kind");
-  const hint = {
-    template: "A page starts with the settings the graph's author already filled in and the live views its nodes offer. Everything else is one click away in Edit mode.",
-    monitor: "A monitor window starts empty: choose which live views of the graph's nodes to show, and arrange them.",
-  };
-  kindSel.onchange = () => { if (!none) el("new-hint").textContent = hint[kindSel.value]; };
+  if (none) {
+    el("new-hint").textContent =
+      "There is no saved graph yet. Build one in the Graph Editor and save it to the library; an app is built on a saved graph.";
+  }
 
   const go = () => {
     const nm = el("new-name").value.trim();
@@ -94,7 +86,7 @@ function renderNewForm(graphs, taken) {
     if (taken.has(nm)) return showMessage("new-error", `"${nm}" already exists — pick another name or open the existing one.`);
     if (!select.value) return showMessage("new-error", "Choose a graph.");
     showMessage("new-error", "");
-    location.href = `/templates/${enc(nm)}?new=1&kind=${enc(kindSel.value)}&graph=${enc(select.value)}`;
+    location.href = `/apps/${enc(nm)}?new=1&graph=${enc(select.value)}`;
   };
   create.onclick = go;
   el("new-name").onkeydown = (e) => { if (e.key === "Enter") go(); };
@@ -102,30 +94,25 @@ function renderNewForm(graphs, taken) {
 
 function renderCards(items) {
   el("list-state").hidden = items.length > 0;
-  el("list-state").textContent = "Nothing here yet — create a page from one of your graphs above.";
-  for (const [gridId, sectionId, kind] of [
-    ["grid-pages", "list-pages", "template"], ["grid-monitors", "list-monitors", "monitor"],
-  ]) {
-    const mine = items.filter((t) => t.kind === kind);
-    el(sectionId).hidden = mine.length === 0;
-    const grid = el(gridId);
-    grid.replaceChildren();
-    for (const t of mine) {
-      const card = document.createElement("a");
-      card.className = "tpl-card";
-      card.href = `/templates/${enc(t.name)}`;
-      const name = document.createElement("div");
-      name.className = "tpl-card-name";
-      name.textContent = t.name;
-      const desc = document.createElement("div");
-      desc.className = "tpl-card-desc";
-      desc.textContent = t.description || "";
-      const meta = document.createElement("div");
-      meta.className = "tpl-card-meta";
-      meta.textContent = `${t.block_count} block${t.block_count === 1 ? "" : "s"} · ${t.node_count} node${t.node_count === 1 ? "" : "s"} · ${new Date(t.updated_at).toLocaleDateString()}`;
-      card.append(name, desc, meta);
-      grid.append(card);
-    }
+  el("list-state").textContent = "Nothing here yet — create an app from one of your graphs above.";
+  el("list-apps").hidden = items.length === 0;
+  const grid = el("grid-apps");
+  grid.replaceChildren();
+  for (const t of items) {
+    const card = document.createElement("a");
+    card.className = "app-card";
+    card.href = `/apps/${enc(t.name)}`;
+    const name = document.createElement("div");
+    name.className = "app-card-name";
+    name.textContent = t.name;
+    const desc = document.createElement("div");
+    desc.className = "app-card-desc";
+    desc.textContent = t.description || "";
+    const meta = document.createElement("div");
+    meta.className = "app-card-meta";
+    meta.textContent = `v${t.version} · ${t.card_count} card${t.card_count === 1 ? "" : "s"} · ${t.node_count} node${t.node_count === 1 ? "" : "s"} · ${new Date(t.updated_at).toLocaleDateString()}`;
+    card.append(name, desc, meta);
+    grid.append(card);
   }
 }
 
@@ -134,49 +121,82 @@ function renderCards(items) {
 /* ======================================================================== */
 
 /** Everything the page view holds. One object so it can be inspected in the
-    console (`window.__tpl`) when something looks wrong. */
+    console (`window.__app`) when something looks wrong. */
 const S = {
   name: pageName,
   isNew: false,
   description: "",
-  doc: null,
+  version: 0,
+  app: null,           // the document: {graph, root, style, source_graph, ...}
+  view: null,          // what the board edits: {columns, blocks, graph: draft}
   saved: null,         // {layout, graph, exposed} as last saved; null = never
   mode: "use",
   resolution: null,
-  statuses: {},        // block id -> {status, detail}
+  statuses: {},        // card id -> {status, detail}
   execution: null,     // {execution_id, status, started_at, finished_at, error, done, total}
   resolveSeq: 0,
   resolveTimer: 0,
   pollTimer: 0,
   board: null,
 };
-window.__tpl = S;
+window.__app = S;
 
-const snapshotGraph = (g) => ({
-  nodes: (g.nodes || []).map((n) => ({ id: n.id, class_name: n.class_name, params: { ...(n.params || {}) } })),
-  edges: (g.edges || []).map((e) => ({ ...e })),
-  ...(g.memory ? { memory: { ...g.memory } } : {}),
-});
-
-const exposedKey = (doc) =>
-  JSON.stringify(doc.blocks.filter((b) => b.ref.kind === "field").map((b) => refKey(b.ref)).sort());
-
-function markSaved() {
-  S.saved = { layout: layoutKey(S.doc), graph: graphKey(S.doc), exposed: exposedKey(S.doc) };
+/** The graph as an app stores it: what a run reads, without the editor's layout and views. */
+function snapshotGraph(graph) {
+  const copy = structuredClone(graph);
+  delete copy.views;
+  for (const node of copy.nodes || []) { delete node.layout; node.params = node.params || {}; }
+  copy.settings = copy.settings || {};
+  return copy;
 }
 
-const layoutDirty = () => !S.saved || S.saved.layout !== layoutKey(S.doc);
-const valuesDirty = () => !S.saved || S.saved.graph !== graphKey(S.doc);
+/**
+ * What the board edits. Phase one of the editor is one page: the root's first tab. The "draft graph" is a stand-in whose
+ * parameter objects *are* the snapshot's, so a field card writes straight into what gets saved and run.
+ */
+function makeView(app) {
+  const graph = app.graph;
+  const tab = app.root.tabs[0];
+  const memory = new Proxy({}, {
+    get: (_t, key) => graph.settings[`memory.${String(key)}`],
+    set: (_t, key, value) => { graph.settings[`memory.${String(key)}`] = value; return true; },
+    deleteProperty: (_t, key) => { delete graph.settings[`memory.${String(key)}`]; return true; },
+    has: (_t, key) => `memory.${String(key)}` in graph.settings,
+  });
+  return {
+    columns: app.root.columns,
+    blocks: tab.blocks,
+    graph: { get nodes() { return graph.nodes.map((n) => ({ id: n.uid, params: n.params })); }, memory },
+  };
+}
+
+/** The document as it should be PUT: the board's current cards folded back into the page. */
+function appDoc() {
+  const tab = S.app.root.tabs[0];
+  const blocks = S.view.blocks.map((b) => ({ ...b, collapsed: !!b.collapsed, title: b.title || null, options: b.options || {} }));
+  return { ...S.app, format: 1, root: { ...S.app.root, columns: S.view.columns, tabs: [{ ...tab, blocks }] } };
+}
+
+const exposedKey = () =>
+  JSON.stringify(S.view.blocks.filter((b) => b.ref && b.ref.kind === "field").map((b) => refKey(b.ref)).sort());
+const graphKey = () => JSON.stringify(S.app.graph);
+
+function markSaved() {
+  S.saved = { layout: layoutKey(S.view), graph: graphKey(), exposed: exposedKey() };
+}
+
+const layoutDirty = () => !S.saved || S.saved.layout !== layoutKey(S.view);
+const valuesDirty = () => !S.saved || S.saved.graph !== graphKey();
 const isDirty = () => layoutDirty() || valuesDirty();
-const exposureChanged = () => !S.saved || S.saved.exposed !== exposedKey(S.doc);
+const exposureChanged = () => !S.saved || S.saved.exposed !== exposedKey();
 const executionActive = () => !!S.execution && ACTIVE.has(S.execution.status);
 
 async function showPage() {
   el("view-list").hidden = true;
   el("view-page").hidden = false;
   el("btn-back").hidden = false;
-  el("tpl-title").textContent = S.name;
-  document.title = `${S.name} · Templates`;
+  el("app-title").textContent = S.name;
+  document.title = `${S.name} · Apps`;
   try {
     await loadDoc();
   } catch (err) {
@@ -191,13 +211,12 @@ async function showPage() {
     onChange: onBoardChange,
     onNote: (msg, kind) => log(msg, kind || "info"),
   });
-  S.board.setDoc(S.doc);
+  S.board.setDoc(S.view);
   S.board.setModules(S.resolution.modules);
   applyResolution();
-  setMode(S.isNew && S.doc.kind === "monitor" ? "edit" : "use");
+  setMode(S.isNew ? "edit" : "use");
   wireToolbar();
-  el("btn-popout").hidden = S.doc.kind !== "monitor" || S.isNew;
-  el("cols").value = String(S.doc.columns);
+  el("cols").value = String(S.view.columns);
   describePage();
   await adoptActiveExecution();
   updateState();
@@ -205,46 +224,48 @@ async function showPage() {
 
 async function loadDoc() {
   if (query.get("new")) {
-    const kind = query.get("kind") === "monitor" ? "monitor" : "template";
     const graphName = query.get("graph") || "";
-    const taken = (await api("/templates")).templates || [];
-    if (taken.some((t) => t.name === S.name)) {
-      throw new Error(`a page called "${S.name}" already exists`);
-    }
+    const taken = (await api("/apps")).apps || [];
+    if (taken.some((t) => t.name === S.name)) throw new Error(`an app called "${S.name}" already exists`);
     const lib = await api(`/graphs/library/${enc(graphName)}`);
     S.isNew = true;
     S.description = `Built on the graph "${graphName}".`;
-    S.doc = emptyDoc(kind, snapshotGraph(lib.graph));
-    S.doc.source_graph = graphName;
+    S.app = {
+      format: 1, source_graph: graphName, style: { accent: "blue", density: "comfortable" },
+      graph: snapshotGraph(lib.graph),
+      root: { columns: 12, tabs: [{ id: "main", title: "Main", blocks: [] }] },
+    };
+    S.view = makeView(S.app);
     S.resolution = await resolveNow();
-    if (kind === "template") S.doc.blocks = autoFill(S.resolution.modules, S.doc.columns);
+    S.view.blocks = autoFill(S.resolution.modules, S.view.columns);
     S.resolution = await resolveNow();
     S.saved = null;
   } else {
-    const t = await api(`/templates/${enc(S.name)}`);
+    const t = await api(`/apps/${enc(S.name)}`);
     S.description = t.description || "";
-    S.doc = t.doc;
-    S.doc.blocks = S.doc.blocks || [];
+    S.version = t.version;
+    S.app = t.doc;
+    S.app.graph = snapshotGraph(S.app.graph);
+    S.view = makeView(S.app);
     S.resolution = await resolveNow();
     markSaved();
   }
 }
 
 function describePage() {
-  const d = S.doc;
-  const kind = d.kind === "monitor" ? "Monitor window" : "Page";
-  const bits = [kind];
-  if (d.source_graph) bits.push(`built on graph “${d.source_graph}”`);
-  bits.push(`${d.blocks.length} block${d.blocks.length === 1 ? "" : "s"}`);
-  el("tpl-sub").textContent = bits.join(" · ");
-  el("btn-run").hidden = d.kind === "monitor";
-  if (d.kind === "monitor") el("btn-stop").hidden = true;
+  const bits = [];
+  if (S.version) bits.push(`version ${S.version}`);
+  if (S.app.source_graph) bits.push(`built on graph “${S.app.source_graph}”`);
+  const n = S.view.blocks.length;
+  bits.push(`${n} card${n === 1 ? "" : "s"}`);
+  el("app-sub").textContent = bits.join(" · ");
+  el("btn-update").hidden = !S.app.source_graph || S.isNew;
 }
 
 /* ---- resolving ------------------------------------------------------------ */
 
 function resolveNow() {
-  return api("/templates/resolve", { method: "POST", body: { doc: toSaveDoc(S.doc) } });
+  return api("/boards/resolve", { method: "POST", body: { doc: appDoc() } });
 }
 
 function scheduleResolve(delay = 300) {
@@ -259,7 +280,7 @@ function scheduleResolve(delay = 300) {
       applyResolution();
       renderTray();
     } catch (err) {
-      showMessage("page-error", `Could not check the page: ${errText(err)}`);
+      showMessage("page-error", `Could not check the app: ${errText(err)}`);
     }
   }, delay);
 }
@@ -278,12 +299,12 @@ function renderIssues(issues, heading) {
   const box = el("issues");
   const list = el("issues-list");
   list.replaceChildren();
-  box.hidden = issues.length === 0 || S.doc.kind === "monitor";
+  box.hidden = issues.length === 0;
   if (box.hidden) return;
   const errors = issues.filter((i) => i.severity === "error").length;
   el("issues-summary").textContent = heading
     || (errors
-      ? `${errors} problem${errors === 1 ? "" : "s"} — this page cannot run yet`
+      ? `${errors} problem${errors === 1 ? "" : "s"} — this app cannot run yet`
       : `${issues.length} note${issues.length === 1 ? "" : "s"} about this graph`);
   box.classList.toggle("has-errors", errors > 0);
   box.open = errors > 0;
@@ -313,7 +334,7 @@ function setMode(mode) {
   el("mode-use").setAttribute("aria-pressed", String(mode === "use"));
   el("mode-edit").setAttribute("aria-pressed", String(mode === "edit"));
   el("tray").hidden = mode !== "edit";
-  document.body.classList.toggle("tpl-editing", mode === "edit");
+  document.body.classList.toggle("app-editing", mode === "edit");
   S.board.setMode(mode);
   renderTray();
 }
@@ -325,58 +346,52 @@ function wireToolbar() {
   el("btn-run").onclick = run;
   el("btn-stop").onclick = stop;
   el("btn-delete").onclick = remove;
-  el("btn-popout").onclick = () =>
-    window.open(`/templates/${enc(S.name)}?window=1`, `tpl-${S.name}`, "popup,width=960,height=640");
+  el("btn-update").onclick = updateFromGraph;
   el("tray-adv").onchange = renderTray;
   el("tray-search").oninput = renderTray;
   el("cols").onchange = () => {
-    const n = Math.max(1, Math.min(24, parseInt(el("cols").value, 10) || S.doc.columns));
+    const n = Math.max(1, Math.min(24, parseInt(el("cols").value, 10) || S.view.columns));
     el("cols").value = String(n);
-    if (n === S.doc.columns) return;
-    S.doc.columns = n;
-    S.doc.blocks = settleLayout(S.doc.blocks, n);
+    if (n === S.view.columns) return;
+    S.view.columns = n;
+    S.view.blocks = settleLayout(S.view.blocks, n);
     S.board.applyLayout();
     onBoardChange("layout");
   };
   window.addEventListener("beforeunload", (e) => {
-    if (S.doc && isDirty() && !WINDOW_MODE) { e.preventDefault(); e.returnValue = ""; }
+    if (S.view && isDirty()) { e.preventDefault(); e.returnValue = ""; }
   });
 }
 
 function updateState() {
-  if (!S.doc) return;
+  if (!S.view) return;
   const save = el("btn-save");
   save.textContent = isDirty() ? "Save •" : "Save";
   save.classList.toggle("is-dirty", isDirty());
 
   const run = el("btn-run");
   const active = executionActive();
-  el("btn-stop").hidden = !active || S.doc.kind === "monitor";
+  el("btn-stop").hidden = !active;
   let why = "";
-  if (S.doc.kind === "template") {
-    if (S.isNew) why = "Save this page first.";
-    else if (exposureChanged()) why = "Save the page first — it now shows fields the saved page does not.";
-    else if (active) why = "A run is already in progress.";
-  }
+  if (S.isNew) why = "Save this app first.";
+  else if (exposureChanged()) why = "Save the app first — it now shows fields the saved app does not.";
+  else if (active) why = "A run is already in progress.";
   run.disabled = !!why;
   run.title = why || "Run the graph with the values on this page";
 
   const bits = [];
   if (S.isNew) bits.push("not saved yet");
   else if (isDirty()) bits.push(layoutDirty() && valuesDirty() ? "unsaved layout and values" : layoutDirty() ? "unsaved layout" : "unsaved values");
-  el("tpl-state").textContent = bits.join(" · ");
+  el("bd-state").textContent = bits.join(" · ");
 }
 
 /* ---- tray ------------------------------------------------------------------- */
 
 function renderTray() {
   const tray = el("tray-list");
-  if (!S.doc || !S.resolution || S.mode !== "edit") return;
+  if (!S.view || !S.resolution || S.mode !== "edit") return;
   const needle = el("tray-search").value.trim().toLowerCase();
-  let groups = buildAvailable(S.resolution.modules, S.doc.blocks, { showAdvanced: el("tray-adv").checked });
-  if (S.doc.kind === "monitor") {
-    groups = groups.map((g) => ({ ...g, items: g.items.filter((i) => i.kind === "display") }));
-  }
+  let groups = buildAvailable(S.resolution.modules, S.view.blocks, { showAdvanced: el("tray-adv").checked });
   groups = groups
     .map((g) => ({
       ...g,
@@ -391,7 +406,7 @@ function renderTray() {
   tray.replaceChildren();
   if (!groups.length) {
     const empty = document.createElement("div");
-    empty.className = "tpl-tray-empty";
+    empty.className = "bd-tray-empty";
     empty.textContent = needle ? "Nothing matches." : "Nothing more to add.";
     tray.append(empty);
     return;
@@ -407,19 +422,19 @@ function renderTray() {
       const items = g.items.filter((i) => i.kind === kind);
       if (!items.length) continue;
       const cap = document.createElement("div");
-      cap.className = "tpl-tray-cap";
+      cap.className = "bd-tray-cap";
       cap.textContent = kind === "display" ? "Live views" : "Settings";
       d.append(cap);
       for (const it of items) {
         const b = document.createElement("button");
         b.type = "button";
-        b.className = "tpl-tray-item";
+        b.className = "bd-tray-item";
         b.disabled = it.placed;
         b.title = it.sub || it.label;
         const label = document.createElement("span");
         label.textContent = it.label;
         const tag = document.createElement("span");
-        tag.className = "tpl-tray-tag";
+        tag.className = "bd-tray-tag";
         tag.textContent = it.placed ? "added" : it.advanced ? "advanced" : "+";
         b.append(label, tag);
         b.onclick = () => S.board.addRef(it.ref);
@@ -435,16 +450,17 @@ function renderTray() {
 async function save() {
   showMessage("page-error", "");
   try {
-    const out = await api(`/templates/${enc(S.name)}`, {
+    const out = await api(`/apps/${enc(S.name)}`, {
       method: "PUT",
-      body: { description: S.description, doc: toSaveDoc(S.doc) },
+      body: { description: S.description, doc: appDoc() },
     });
     S.isNew = false;
+    S.version = out.version;
     markSaved();
-    history.replaceState(null, "", `/templates/${enc(S.name)}`);
-    el("btn-popout").hidden = S.doc.kind !== "monitor";
+    history.replaceState(null, "", `/apps/${enc(S.name)}`);
+    describePage();
     updateState();
-    log(`Saved "${out.name}" (${out.block_count} blocks).`, "success");
+    log(`Saved "${out.name}" (version ${out.version}, ${out.card_count} cards).`, "success");
   } catch (err) {
     const details = err instanceof ApiError && Array.isArray(err.details) ? `\n${err.details.join("\n")}` : "";
     showMessage("page-error", `Could not save: ${errText(err)}${details}`);
@@ -452,22 +468,49 @@ async function save() {
 }
 
 async function remove() {
-  if (!window.confirm(`Delete "${S.name}"? This removes the page, not the graph it is built on.`)) return;
+  if (!window.confirm(`Delete "${S.name}"? This removes the app, not the graph it was built on.`)) return;
   if (!S.isNew) {
-    try { await api(`/templates/${enc(S.name)}`, { method: "DELETE" }); }
+    try { await api(`/apps/${enc(S.name)}`, { method: "DELETE" }); }
     catch (err) { return showMessage("page-error", `Could not delete: ${errText(err)}`); }
   }
-  S.saved = { layout: layoutKey(S.doc), graph: graphKey(S.doc), exposed: exposedKey(S.doc) }; // no unload prompt
-  location.href = "/templates";
+  markSaved(); // no unload prompt
+  location.href = "/apps";
+}
+
+/** Copy the source graph's current state into the app, after showing what that changes. */
+async function updateFromGraph() {
+  showMessage("page-error", "");
+  try {
+    const lib = await api(`/graphs/library/${enc(S.app.source_graph)}`);
+    const next = snapshotGraph(lib.graph);
+    const diff = await api(`/apps/${enc(S.name)}/diff`, { method: "POST", body: { graph: next } });
+    const nothing = !diff.added.length && !diff.removed.length && !diff.changed.length && !diff.wiring_changed && !diff.settings_changed;
+    if (nothing) return log("The app already matches its graph.", "info");
+    const lines = [];
+    if (diff.added.length) lines.push(`${diff.added.length} node(s) added`);
+    if (diff.removed.length) lines.push(`${diff.removed.length} node(s) removed`);
+    if (diff.changed.length) lines.push(`${diff.changed.length} node(s) changed`);
+    if (diff.wiring_changed) lines.push("wiring changed");
+    if (diff.settings_changed) lines.push("graph settings changed");
+    if (diff.orphaned_cards.length) lines.push(`${diff.orphaned_cards.length} card(s) would lose their target`);
+    if (!window.confirm(`Update "${S.name}" from graph "${S.app.source_graph}"?\n\n${lines.join("\n")}\n\nValues typed on this page are replaced by the graph's.`)) return;
+    S.app.graph = next;
+    S.view = makeView({ ...S.app, root: { ...S.app.root, columns: S.view.columns, tabs: [{ ...S.app.root.tabs[0], blocks: S.view.blocks }] } });
+    S.board.setDoc(S.view);
+    scheduleResolve(0);
+    updateState();
+  } catch (err) {
+    showMessage("page-error", `Could not update from the graph: ${errText(err)}`);
+  }
 }
 
 /* ---- run / stop --------------------------------------------------------------- */
 
 async function run() {
   showMessage("page-error", "");
-  const values = valuesPayload(S.doc, statusByBlock(S.resolution));
+  const values = valuesPayload(S.view, statusByBlock(S.resolution));
   try {
-    const exec = await api(`/templates/${enc(S.name)}/run`, { method: "POST", body: { values } });
+    const exec = await api(`/apps/${enc(S.name)}/run`, { method: "POST", body: { values } });
     log(`Run #${exec.execution_id} started from "${S.name}".`, "success");
     S.execution = { ...exec, done: 0, total: 0 };
     S.board.refreshDisplays();

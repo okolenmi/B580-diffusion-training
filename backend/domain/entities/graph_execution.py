@@ -54,6 +54,7 @@ class GraphExecution:
         memory: EffectiveMemory | None = None,
         reserved_mb: float | None = None,
         name: str | None = None,
+        origin: dict | None = None,
         updated_at: datetime | None = None,
         started_at: datetime | None = None,
         finished_at: datetime | None = None,
@@ -73,6 +74,7 @@ class GraphExecution:
         self._memory = memory
         self._reserved_mb = reserved_mb
         self._name = name
+        self._origin = origin
         self._created_at = created_at
         self._updated_at = updated_at if updated_at is not None else created_at
         self._started_at = started_at
@@ -91,6 +93,7 @@ class GraphExecution:
         memory: EffectiveMemory | None = None,
         reserved_mb: float | None = None,
         name: str | None = None,
+        origin: dict | None = None,
     ) -> GraphExecution:
         """Register a new execution in ``queued`` state (no id yet)."""
         return cls(
@@ -100,6 +103,7 @@ class GraphExecution:
             memory=memory,
             reserved_mb=reserved_mb,
             name=name,
+            origin=origin,
         )
 
     @classmethod
@@ -110,6 +114,7 @@ class GraphExecution:
         created_at: datetime,
         memory: EffectiveMemory,
         name: str | None = None,
+        origin: dict | None = None,
     ) -> GraphExecution:
         """Register an execution that waits for room: ``planned``, no claim."""
         return cls(
@@ -118,6 +123,7 @@ class GraphExecution:
             created_at=created_at,
             memory=memory,
             name=name,
+            origin=origin,
         )
 
     @classmethod
@@ -166,6 +172,11 @@ class GraphExecution:
         admitted (``memory_json``), or ``None`` for a row written before
         that column existed."""
         return self._memory
+
+    @property
+    def origin(self) -> dict | None:
+        """What started the run when it was not the editor's Run: ``{app, version, values}``; None otherwise."""
+        return self._origin
 
     @property
     def name(self) -> str | None:

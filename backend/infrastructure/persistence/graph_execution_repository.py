@@ -24,7 +24,7 @@ from .sqlite import SqliteDatabase, fits_in_sqlite_int
 
 _COLUMNS = (
     "id, status, graph, results, error, memory_json, reserved_mb, "
-    "created_at, updated_at, started_at, finished_at, name"
+    "created_at, updated_at, started_at, finished_at, name, origin_json"
 )
 
 # id is generated; graph is immutable (the submission snapshot).
@@ -70,6 +70,7 @@ def _row_to_execution(row) -> GraphExecution:
             float(row["reserved_mb"]) if row["reserved_mb"] is not None else None
         ),
         name=row["name"],
+        origin=json.loads(row["origin_json"]) if row["origin_json"] else None,
         created_at=_parse_dt(row["created_at"]),  # NOT NULL in schema
         updated_at=_parse_dt(row["updated_at"]),  # NOT NULL in schema
         started_at=_parse_dt(row["started_at"]),
@@ -88,8 +89,8 @@ class SqliteGraphExecutionRepository(GraphExecutionRepository):
             cursor = conn.execute(
                 "INSERT INTO graph_executions "
                 "(status, graph, results, error, memory_json, reserved_mb, "
-                " created_at, updated_at, started_at, finished_at, name) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " created_at, updated_at, started_at, finished_at, name, origin_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 self._insert_values(execution),
             )
             execution.assign_id(ExecutionId(cursor.lastrowid))
@@ -114,6 +115,7 @@ class SqliteGraphExecutionRepository(GraphExecutionRepository):
             execution.started_at.isoformat() if execution.started_at else None,
             execution.finished_at.isoformat() if execution.finished_at else None,
             execution.name,
+            json.dumps(execution.origin) if execution.origin is not None else None,
         )
 
     @staticmethod

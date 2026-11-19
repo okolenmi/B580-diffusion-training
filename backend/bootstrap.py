@@ -79,6 +79,7 @@ from .application.use_cases import (
 from .config import GRAPH_EXECUTION_CHILD, Settings
 from .infrastructure.server_restart import ExecServerRestarter
 from .infrastructure.clock import SystemClock
+from .infrastructure.file_artifact_store import FileArtifactStore
 from .infrastructure.image_libraries import FsImageLibraries
 from .infrastructure.events.callback_event_bus import CallbackEventBus
 from .infrastructure.file_asset_store import FileSystemAssetStore
@@ -379,6 +380,7 @@ def build_container(settings: Settings) -> Container:
         event_bus=event_bus,
         memory_ledger=memory_ledger,
         monitor=MonitorServices(subscribe=SubscribeMonitor(bus=monitor_bus)),
+        artifacts=FileArtifactStore(layout.artifacts_dir),
         apps=AppServices(
             describe=describe_modules,
             resolve=resolve_board,

@@ -2,7 +2,7 @@
    board/displays.js -- how each display *kind* is drawn.
 
    The backend says what a live view *is* (nodes/ui.py: kind chart | scalar |
-   bars | text | progress, plus the graph's own `status`); this file is the
+   bars | text | progress | image, plus the graph's own `status`); this file is the
    only place that knows what each looks like. A new module of an existing
    kind needs no change here; a new kind is one function below, and an
    unknown kind degrades to a labelled placeholder rather than a blank hole.
@@ -301,6 +301,42 @@ function progressDisplay({ module, state }) {
   };
 }
 
+/* ---- images -------------------------------------------------------------- */
+
+/** The pictures of the newest frame: `module.value_key` holds `[{path, seed, width, height}]`, paths relative to /api/v1/artifacts. */
+function imageDisplay({ module, state }) {
+  const root = div("bd-images");
+  let shown = null;
+  return {
+    el: root,
+    update() {
+      const list = state.latestFrame && state.latestFrame[module.value_key];
+      const items = Array.isArray(list) ? list.filter((i) => i && typeof i.path === "string") : [];
+      const key = items.map((i) => i.path).join("|");
+      if (key === shown) return;
+      shown = key;
+      root.replaceChildren();
+      if (!items.length) { root.append(div("bd-empty", "No pictures yet")); return; }
+      root.classList.toggle("is-single", items.length === 1);
+      for (const item of items) {
+        const link = document.createElement("a");
+        link.className = "bd-image";
+        link.href = `/api/v1/artifacts/${item.path.split("/").map(encodeURIComponent).join("/")}`;
+        link.target = "_blank";
+        link.rel = "noopener";
+        const img = document.createElement("img");
+        img.loading = "lazy";
+        img.src = link.href;
+        img.alt = `seed ${item.seed ?? ""}`;
+        const cap = div("bd-image-cap", `${item.seed !== undefined ? `seed ${item.seed} · ` : ""}${item.width}×${item.height}`);
+        link.append(img, cap);
+        root.append(link);
+      }
+    },
+    destroy() {},
+  };
+}
+
 /* ---- graph run status ---------------------------------------------------- */
 
 /* The run states the backend actually has (domain/value_objects.GraphStatus):
@@ -355,7 +391,7 @@ function statusDisplay({ ctx }) {
 
 const KINDS = {
   chart: chartDisplay, scalar: scalarDisplay, bars: barsDisplay,
-  text: textDisplay, progress: progressDisplay, status: statusDisplay,
+  text: textDisplay, progress: progressDisplay, image: imageDisplay, status: statusDisplay,
 };
 
 export const KNOWN_KINDS = Object.keys(KINDS);

@@ -23,11 +23,13 @@ def model_folders(checkpoints: Path, loras: Path) -> dict[str, list[Path]]:
     return {"checkpoints": [checkpoints], "loras": [loras], **tree.comfy_folders(checkpoints.parent)}
 
 
-def model_environment(checkpoints: Path, loras: Path, datasets: Path | None = None) -> tree.Environment:
-    """The machine as a node sees it: the model folders and, when given, the datasets folder."""
+def model_environment(checkpoints: Path, loras: Path, datasets: Path | None = None, artifacts: Path | None = None) -> tree.Environment:
+    """The machine as a node sees it: the model folders and, when given, the datasets and artifacts folders."""
     services: dict = {"models": tree.ModelLibrary(model_folders(checkpoints, loras))}
     if datasets is not None:
         services["datasets"] = tree.DatasetStore(datasets)
+    if artifacts is not None:
+        services["artifacts"] = tree.ArtifactFolder(artifacts)
     return tree.Environment(services=services)
 
 
@@ -37,8 +39,8 @@ def process_environment(environ: Mapping[str, str] | None = None) -> tree.Enviro
     checkpoints, loras = environ.get("CHECKPOINTS_DIR"), environ.get("LORAS_DIR")
     if not checkpoints or not loras:
         return tree.Environment()
-    datasets = environ.get("DATASETS_DIR")
-    return model_environment(Path(checkpoints), Path(loras), Path(datasets) if datasets else None)
+    datasets, artifacts = environ.get("DATASETS_DIR"), environ.get("ARTIFACTS_DIR")
+    return model_environment(Path(checkpoints), Path(loras), Path(datasets) if datasets else None, Path(artifacts) if artifacts else None)
 
 
 class ContractNodeCatalog(NodeCatalog):

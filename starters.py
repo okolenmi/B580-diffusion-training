@@ -355,7 +355,7 @@ class SdxlImageOptions:
 
 def sdxl_image(*, model: str, output: str, settings: dict | None = None, source: tuple[str, dict] | None = None,
                overrides: dict[str, dict] | None = None, **options) -> GraphDoc:
-    """SDXL text to image: model, adapter stack, prompt encoding, sampler, VAE decode, saved PNGs that carry their recipe.
+    """SDXL text to image: model, adapter stack, prompt encoding, sampler, VAE decode, a preview for pages and saved PNGs that carry their recipe.
 
     ``source`` and ``overrides`` as for ``sdxl_lora``."""
     o, b = SdxlImageOptions(**options), _Builder()
@@ -366,11 +366,12 @@ def sdxl_image(*, model: str, output: str, settings: dict | None = None, source:
     b.add("sampler", "SamplerNode", seed=o.seed, steps=o.steps, cfg=o.cfg, sampler=o.sampler, scheduler=o.scheduler,
           width=o.width, height=o.height, batch=o.batch)
     b.add("decode", "DecodeImageNode")
+    b.add("preview", "PreviewImageNode")
     b.add("save", "SaveImageNode", directory=output)
     b.wires += [("model", "denoiser", "adapters", "denoiser"), ("adapters", "denoiser", "sampler", "denoiser"),
                 ("model", "clip_l", "prompt", "encoders"), ("model", "clip_g", "prompt", "encoders"),
                 ("prompt", "encoding", "sampler", "encoding"), ("model", "vae", "decode", "vae"),
-                ("sampler", "latents", "decode", "latents"), ("decode", "images", "save", "images")]
+                ("sampler", "latents", "decode", "latents"), ("decode", "images", "preview", "images"), ("decode", "images", "save", "images")]
     for name, extra in (overrides or {}).items():
         b.nodes = [(n, c, {**ps, **extra} if n == name else ps) for n, c, ps in b.nodes]
     return b.doc(settings or {})

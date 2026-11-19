@@ -10,6 +10,7 @@ What this covers (all on fixture nodes; nothing here touches a GPU):
   G  the runtime hands a declaring node a stream handle (and a wired
      monitor still wins); the supervisor clears streams / republishes memory
   H  the HTTP API end to end: app CRUD and versions, diff, boards, run and the origin it records
+  I  artifacts: the pictures a run leaves for a page are served, nothing else is
 
 Run directly: python backend/tests/test_apps.py
 """
@@ -441,5 +442,19 @@ import dataclasses  # noqa: E402
 bare = dataclasses.replace(services, apps=None)
 status_, _, body = asgi_request(create_app(bare), API)
 check(status_ == 503 and body["error"]["code"] == "apps_unavailable", "no app services => 503")
+
+# ==========================================================================
+# I. artifacts
+# ==========================================================================
+print("-- I: artifacts --")
+(root / "artifacts" / "n_aaaaaa").mkdir(parents=True)
+(root / "artifacts" / "n_aaaaaa" / "p1.png").write_bytes(b"\x89PNG\r\n\x1a\nfake")
+(root / "artifacts" / "n_aaaaaa" / "note.txt").write_text("not a picture")
+(root / "secret.png").write_bytes(b"x")
+status_, headers, body = asgi_request(app, "/api/v1/artifacts/n_aaaaaa/p1.png")
+check(status_ == 200 and headers.get("content-type") == "image/png", f"a picture a node left is served (got {status_} {headers.get('content-type')})")
+for bad in ("n_aaaaaa/note.txt", "n_aaaaaa/missing.png", "../secret.png", "n_aaaaaa/../../secret.png"):
+    status_, _, body = asgi_request(app, f"/api/v1/artifacts/{bad}")
+    check(status_ == 404, f"{bad!r} is not served (got {status_})")
 
 finish()

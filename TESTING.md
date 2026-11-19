@@ -183,6 +183,7 @@ On a real run: the main loss line should fill the middle half of the chart (line
 3. Batch 4: image `i` must equal what seed + `i` gives alone. Then 1536x1536: the decode should fall back to tiles (a log line) instead of failing.
 4. Adapter Stack: put one trained LoRA in the *adapters* line (`name.safetensors=0.8`), run, then `=0`, then no line: the last two must equal the image without the node. Two lines should give a blend, in either order the same picture (up to rounding).
 5. Press Stop during sampling: the run ends within a step and no file is written.
+6. Save the starter graph to the library, make an app from it (Apps, new, pick the graph). The tray offers the *Images* view of Preview Image and the fields of Sampler and Encode Prompt: put the prompt, seed, steps and the images on the page, save, switch to use mode, change the prompt and Run. The picture must appear on the page when the run ends and stay until the next run; click it to open it full size.
 
 ## Reading a bundle automatically
 `python -m accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m perf hwcheck` without running anything.

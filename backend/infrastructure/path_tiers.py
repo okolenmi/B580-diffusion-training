@@ -171,6 +171,11 @@ def loras_dir(project_root: Path, get_setting: GetSetting) -> Path:
     return _comfy_or_store(project_root, get_setting) / "models" / "loras"
 
 
+def artifacts_dir(project_root: Path) -> Path:
+    """The pictures nodes leave for pages; beside the project, like the datasets."""
+    return project_root / "artifacts"
+
+
 def datasets_dir(project_root: Path) -> Path:
     """No override tier: managed datasets live beside the project."""
     return project_root / "datasets"

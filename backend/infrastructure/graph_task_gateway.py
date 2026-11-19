@@ -110,6 +110,7 @@ class SubprocessGraphTaskGateway(GraphTaskGateway):
         env["CHECKPOINTS_DIR"] = str(self._layout.checkpoints_dir)
         env["LORAS_DIR"] = str(self._layout.loras_dir)
         env["DATASETS_DIR"] = str(self._layout.datasets_dir)
+        env["ARTIFACTS_DIR"] = str(self._layout.artifacts_dir)
         comfy = self._layout.comfy_dir
         if comfy:
             env["COMFY_DIR"] = str(comfy)

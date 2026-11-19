@@ -13,7 +13,7 @@ Hardware results are not guessed here: `TESTING.md` (root) lists what still has 
 | Data: image libraries, per-VAE latent cache, prompts (tag shuffle and swap, caption pool, dropout, auto-caption), buckets, batcher with epoch barrier, conditioning cache and store | built, CPU-tested |
 | Training engine: step phases, optimizers (AdamW, Adafactor, CAME; int8 state), loss weighting, time balance, regional passes, EMA, resume, graph capture, activation checkpointing, profiler, memory budget and residency | built, CPU-tested; speed and memory behaviour checked on the card for the levers `manual/` marks `verified` |
 | Frozen base weights in int8 and NF4 | built; int8 measured on the card, NF4 CPU-tested (`internals/kernels.md`) |
-| Generation (SDXL text to image): Encode Prompt, Sampler (Euler, DPM++ 2M; normal, simple, karras; guidance, epsilon scaling), Decode Image (tiled when it does not fit), Save Image (PNGs with the recipe inside), Adapter Stack (several LoRA files with a strength each, baked in when the Sampler loads the denoiser); the `sdxl-image` starter. The sampler, tiling and recipe store live in `engine/generate` and the lab uses them from there | built, CPU-tested on tiny stand-ins (`check_generate`); not run on the card (`TESTING.md` 97); no image preview in views yet; Anima is not supported |
+| Generation (SDXL text to image): Encode Prompt, Sampler (Euler, DPM++ 2M; normal, simple, karras; guidance, epsilon scaling), Decode Image (tiled when it does not fit), Save Image (PNGs with the recipe inside), Adapter Stack (several LoRA files with a strength each, baked in when the Sampler loads the denoiser); the `sdxl-image` starter. The sampler, tiling and recipe store live in `engine/generate` and the lab uses them from there | built, CPU-tested on tiny stand-ins (`check_generate`); not run on the card (`TESTING.md` 97); Preview Image shows its pictures in an `image` view (served from `/api/v1/artifacts`, `contracts/apps.md`); Anima is not supported |
 | Nodes: Load Model, Inject/Load/Save/Merge Adapter, Adapter EMA, Conditioner, Blend Conditioning, optimizers, schedules, Resume, triggers, constants | built |
 | Addons on the trainer and noiser: anchor, cleaner, self-perceptual loss, aligned start, trend weighting, gradient policy, region ladder, batch ramp | built, CPU-tested |
 | Backend: validate and run graphs in a child process, memory admission, parallel runs (`auto`, `parallel`, `queue`), planned runs, run history and per-run curves, image libraries, settings, installer (graphics card, new or existing virtualenv with pinned install of torch from the Intel XPU index, tokenizer files, models folder; the server restarts into the chosen environment and setup reopens when that environment is deleted; ComfyUI optional) | built; the backend suite needs Python 3.14 |
@@ -29,7 +29,7 @@ Hardware results are not guessed here: `TESTING.md` (root) lists what still has 
 
 ## Not built
 
-- Event-trigger buttons in views (they need a control channel), image blocks in views.
+- Event-trigger buttons in views (they need a control channel).
 - Block swap (denoiser blocks held on the host; Anima may need it, SDXL does not): no setting, no family block layout, no engine code (`internals/memory.md`, "Open").
 - Weights shared between processes: measured not possible with plain torch (`internals/parallel-runs.md`); every run holds its own copy.
 - Custom kernels for the frozen-weight path beyond what `xpu-kernels` provides (`internals/kernels.md`, `internals/capturable-attention.md`).

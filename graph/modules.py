@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-KINDS = ("chart", "scalar", "bars", "text", "progress")
+KINDS = ("chart", "scalar", "bars", "text", "progress", "image")
 CADENCES = ("step", "run")
 SCALES = ("linear", "symlog")
 X_KEYS = ("step", "t")
@@ -61,6 +61,8 @@ class DisplayModule:
             raise ValueError(f"DisplayModule {self.name!r}: a {self.kind} module needs a Series or a pattern")
         if self.kind == "progress" and not (self.value_key and self.total_key):
             raise ValueError(f"DisplayModule {self.name!r}: progress needs value_key and total_key")
+        if self.kind == "image" and not self.value_key:
+            raise ValueError(f"DisplayModule {self.name!r}: image needs value_key, the report key that holds the list of pictures")
         if len(self.size) != 2 or any(not isinstance(v, int) or v < 1 for v in self.size):
             raise ValueError(f"DisplayModule {self.name!r}: size must be two positive ints")
 

@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 from .event_publisher import EventPublisher
 from .memory_admission import LedgerSource
+from .ports.artifact_store import ArtifactStore
 from .ports.environment import DeviceProbe
 from .ports.event_bus import EventBus
 from .use_cases.apply_installation import ApplyInstallation
@@ -203,3 +204,5 @@ class ApplicationServices:
     # Apps. Last, with a default, so every container built before apps existed stays valid; the apps and boards routers answer 503
     # ``apps_unavailable`` while this is None.
     apps: AppServices | None = None
+    # The pictures nodes leave for pages. None answers every artifact request with 404.
+    artifacts: ArtifactStore | None = None

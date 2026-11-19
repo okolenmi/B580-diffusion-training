@@ -138,6 +138,10 @@ class WorkspaceLayout:
             return self._dirs.datasets
         return path_tiers.datasets_dir(self._root)
 
+    @property
+    def artifacts_dir(self) -> Path:
+        return path_tiers.artifacts_dir(self._root)
+
     # -- run artifacts -------------------------------------------------
 
     @property

@@ -7,7 +7,7 @@ from typing import Any
 
 from engine.generate.recipe import Image, ImageStore
 from engine.handles import Images
-from graph import Node, Port
+from graph import DisplayModule, Node, Port
 
 
 def as_images(images: Images) -> list[Image]:
@@ -31,3 +31,23 @@ class SaveImageNode(Node):
         paths = [store.save(image) for image in as_images(inputs["images"])]
         self.context.report("saved_images", {"node": self.uid, "files": [str(p) for p in paths]})
         return {"saved": len(paths)}
+
+
+class PreviewImageNode(Node):
+    DISPLAY_NAME = "Preview Image"
+    CATEGORY = "Output"
+    INPUTS = {"images": Port("images", Images)}
+    OUTPUTS = {"images": Port("images", Images, doc="The images, unchanged, so a preview can sit in front of Save Image.")}
+    MODULES = (DisplayModule("images", "image", "Images", value_key="images", size=(6, 6),
+                             doc="The images of the latest run, newest first."),)
+
+    def build(self, **inputs) -> dict[str, Any]:
+        self.validate_inputs(inputs)
+        if not self.context.env.has("artifacts"):
+            self.context.report("warning", {"node": self.uid, "message": "Preview Image: this run has no folder for pictures, nothing is shown"})
+            return {"images": inputs["images"]}
+        images = as_images(inputs["images"])
+        paths = self.context.env.service("artifacts").put(self.uid, images)
+        shown = [{"path": path, "seed": i.recipe.seed, "width": i.pixels.shape[-1], "height": i.pixels.shape[-2]} for path, i in zip(paths, images)]
+        self.context.report(f"node:{self.uid}", {"step": 1, "images": shown})
+        return {"images": inputs["images"]}

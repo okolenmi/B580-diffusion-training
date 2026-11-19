@@ -35,6 +35,7 @@ and a state-changing method carrying an `Origin` must match this server's origin
 | `app_invalid` | 422 | apps (the app document's shape, or a value submitted to run one that the app does not expose / that is fed by another node — `details` lists every problem) |
 | `board_invalid` | 422 | boards (the shape of a draft view or app sent to `/boards/resolve`; `details` lists every problem) |
 | `app_not_found` | 404 | apps |
+| `artifact_not_found` | 404 | artifacts (a picture a node left for the page is not there, or the path leaves the folder) |
 | `apps_unavailable` | 503 | apps, boards (the server was started without app support) |
 | `memory_unavailable` | 409 | graphs, datasets (memory admission: this start cannot fit on the device — either the device total is unknown (`details.reason = device_total_unknown`, and `details.holders` names what the unfinished rows still claim) or the ledger's refusal is in `details`: capacity, foreign reserve, every holder and its size, free, asked. A refused start writes no row and holds nothing) |
 | `node_diagnostics_failed` | 400 | graphs |

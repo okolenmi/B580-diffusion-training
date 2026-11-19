@@ -118,6 +118,7 @@ from backend.infrastructure.persistence.graph_execution_repository import (
     SqliteGraphExecutionRepository,
 )
 from backend.infrastructure.persistence.graph_library import SqliteGraphLibrary
+from backend.infrastructure.file_artifact_store import FileArtifactStore
 from backend.infrastructure.persistence.app_library import SqliteAppLibrary
 from backend.application.services import AppServices, LibraryServices
 from backend.application.use_cases.image_libraries import (
@@ -727,6 +728,7 @@ def build_services(
             upload=UploadAsset(assets=assets),
             inspect=InspectAsset(assets=assets),
         ),
+        artifacts=FileArtifactStore(project_root / "artifacts"),
         apps=AppServices(
             describe=describe_modules,
             resolve=resolve_board,

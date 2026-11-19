@@ -2,7 +2,7 @@
 
     python -m tests.check_generate
 
-Covers the adapter list syntax, the starter graph (every wire resolves), the run from prompt to PNG files (shape, seeds,
+Covers the adapter list syntax, the preview pictures a page shows, the starter graph (every wire resolves), the run from prompt to PNG files (shape, seeds,
 the recipe inside each file, stopping), and that the same recipe gives the same pixels alone or in a batch.
 """
 
@@ -16,6 +16,7 @@ from unittest import mock
 
 import starters
 from engine.devices import Accelerator
+from engine.generate.artifacts import ArtifactFolder
 from engine.generate.recipe import ImageStore
 from engine.runtime.factory import make_runtime
 from graph import GraphRunner, NodeRegistry
@@ -47,10 +48,11 @@ class Trace:
             self.cancel.set()
 
 
-def execute(doc, stop_after: int | None = None):
+def execute(doc, stop_after: int | None = None, artifacts: Path | None = None):
     cancel = threading.Event()
     trace = Trace(stop_after, cancel)
-    runner = GraphRunner(REGISTRY, reporter=trace, env=Environment(), runtime_factory=make_runtime, observer=NodeTrace(doc, Accelerator("cpu"), None))
+    env = Environment(services={"artifacts": ArtifactFolder(artifacts)} if artifacts else {})
+    runner = GraphRunner(REGISTRY, reporter=trace, env=env, runtime_factory=make_runtime, observer=NodeTrace(doc, Accelerator("cpu"), None))
     with ExitStack() as stack:
         for module in (encode, sampler, decode):
             stack.enter_context(mock.patch.object(module, "get_family", lambda _id: FAMILY))
@@ -74,7 +76,7 @@ def run_graph() -> None:
     with tempfile.TemporaryDirectory() as raw:
         tmp = Path(raw)
         doc = graph(tmp, prompt="a red fox", negative="blurry", seed=7, batch=2)
-        validation, outcome, trace = execute(doc)
+        validation, outcome, trace = execute(doc, artifacts=tmp / "art")
         check(validation.ok, f"the starter graph validates ({[i.message for i in validation.errors][:2]})")
         check(outcome.ok and not outcome.stopped, f"the run finishes ({outcome.error})")
         files = sorted((tmp / "out").glob("*.png"))
@@ -88,6 +90,12 @@ def run_graph() -> None:
         check(steps and steps[-1] == 4 and steps == sorted(steps), f"the sampler reports its steps on its own stream ({steps})")
 
         (tmp / "single").mkdir()
+        shown = [f for s, f in trace.frames if s.startswith("node:") and "images" in f]
+        listed = shown[-1]["images"] if shown else []
+        check(len(listed) == 2 and all((tmp / "art" / i["path"]).is_file() and i["path"].startswith("n_") for i in listed)
+              and [i["seed"] for i in listed] == [7, 8],
+              f"Preview Image reports its pictures by path under its own node folder ({listed})")
+
         single = graph(tmp / "single", prompt="a red fox", negative="blurry", seed=8, batch=1)
         _, again, _ = execute(single)
         alone = sorted((tmp / "single" / "out").glob("*.png"))
@@ -101,6 +109,18 @@ def run_graph() -> None:
         check(stopped.stopped and not list(shutil_out.glob("*.png")), f"a stop request ends sampling and writes nothing ({stopped.error})")
 
 
+def preview_housekeeping() -> None:
+    with tempfile.TemporaryDirectory() as raw:
+        from engine.generate.recipe import Image, Recipe
+        import torch
+        folder = ArtifactFolder(raw)
+        folder.KEEP = 3
+        for seed in range(6):
+            folder.put("n_aaaaaa", [Image(Recipe(prompt="p", seed=seed), torch.zeros(3, 8, 8, dtype=torch.uint8), {})])
+        left = len(list((Path(raw) / "n_aaaaaa").glob("*.png")))
+        check(left == 3, f"only the newest few pictures of a node are kept ({left})")
+
+
 def refusals() -> None:
     with tempfile.TemporaryDirectory() as raw:
         tmp = Path(raw)
@@ -111,5 +131,6 @@ def refusals() -> None:
 if __name__ == "__main__":
     adapter_list()
     run_graph()
+    preview_housekeeping()
     refusals()
     print("\ndone")

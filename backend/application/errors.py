@@ -206,6 +206,13 @@ class GraphNotFoundError(ApplicationError):
     code = "graph_not_found"
     status_code = 404
 
+class ArtifactNotFoundError(ApplicationError):
+    """No such file among the pictures a run left for the page."""
+
+    code = "artifact_not_found"
+    status_code = 404
+
+
 class AppNotFoundError(ApplicationError):
     """No saved app exists under the requested name."""
 

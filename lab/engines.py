@@ -12,7 +12,7 @@ from PIL import Image
 
 from accept.visual import ImageSheet
 from .metrics import Change, Detail
-from .render import Recipe
+from engine.generate.recipe import Recipe
 from .report import read_pixels
 
 

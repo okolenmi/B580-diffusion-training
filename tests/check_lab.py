@@ -11,8 +11,9 @@ from pathlib import Path
 import torch
 
 from lab.metrics import Change, Detail
-from lab.render import Grid, ImageStore, Recipe, Renderer
-from lab.sampling import SAMPLERS, GuidedDenoiser, NoiseTable, SigmaSchedule, initial_noise
+from engine.generate.recipe import ImageStore, Recipe
+from lab.render import Grid, Renderer
+from engine.generate.sampling import SAMPLERS, GuidedDenoiser, NoiseTable, SigmaSchedule, initial_noise
 from .support import check, run
 
 
@@ -97,7 +98,7 @@ def texture(size: int = 256) -> torch.Tensor:
 
 
 def tiled_decoding() -> None:
-    from lab.tiling import TiledDecoder
+    from engine.generate.tiling import TiledDecoder
 
     def decode(latents):
         """Position-wise, so tiles must reassemble to exactly what one pass gives."""

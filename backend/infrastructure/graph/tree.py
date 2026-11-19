@@ -13,10 +13,10 @@ from graph.node import Environment
 from graph.registry import NodeRegistry
 from graph.resolve import diagnose_node, resolve_node
 from graph.runtime import GraphRunner
-from starters import AnimaLoraOptions, SdxlLoraOptions, anima_lora, sdxl_lora
+from starters import AnimaLoraOptions, SdxlImageOptions, SdxlLoraOptions, anima_lora, sdxl_image, sdxl_lora
 
-__all__ = ["AnimaLoraOptions", "DatasetStore", "Environment", "GraphRunner", "ModelLibrary", "NodeRegistry", "SdxlLoraOptions", "anima_lora",
-           "build_catalog", "comfy_folders", "diagnose_node", "library_report", "list_families", "make_runtime", "resolve_node", "sdxl_lora"]
+__all__ = ["AnimaLoraOptions", "DatasetStore", "Environment", "GraphRunner", "ModelLibrary", "NodeRegistry", "SdxlImageOptions", "SdxlLoraOptions", "anima_lora",
+           "build_catalog", "comfy_folders", "diagnose_node", "library_report", "list_families", "make_runtime", "resolve_node", "sdxl_image", "sdxl_lora"]
 
 
 def make_runtime(context):

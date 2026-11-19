@@ -14,7 +14,7 @@ from PIL import Image
 from accept.visual import ImageSheet
 from .experiment import Experiment
 from .metrics import Change, Detail, mean
-from .render import Recipe
+from engine.generate.recipe import Recipe
 from .runner import newest_adapter
 from families.general.adapters.schemes import read_adapter
 

@@ -334,3 +334,43 @@ def anima_lora(*, model: str, dataset: str, output: str, settings: dict | None =
 
     ``model`` is the DiT file; ``options`` (``text_encoder``, ``vae`` and the rest of ``AnimaLoraOptions``) as for ``sdxl_lora``."""
     return _AnimaLora(model, dataset, output, AnimaLoraOptions(**options), source).build(settings, overrides)
+
+
+@dataclass(frozen=True)
+class SdxlImageOptions:
+    """The choices of the SDXL image starter."""
+
+    prompt: str = ""
+    negative: str = ""
+    adapters: str = ""
+    seed: int = 0
+    steps: int = 25
+    cfg: float = 6.0
+    sampler: str = "dpmpp_2m"
+    scheduler: str = "normal"
+    width: int = 1024
+    height: int = 1024
+    batch: int = 1
+
+
+def sdxl_image(*, model: str, output: str, settings: dict | None = None, source: tuple[str, dict] | None = None,
+               overrides: dict[str, dict] | None = None, **options) -> GraphDoc:
+    """SDXL text to image: model, adapter stack, prompt encoding, sampler, VAE decode, saved PNGs that carry their recipe.
+
+    ``source`` and ``overrides`` as for ``sdxl_lora``."""
+    o, b = SdxlImageOptions(**options), _Builder()
+    src_class, src_params = source or ("LoadModelNode", {"file": model})
+    b.add("model", src_class, **src_params)
+    b.add("adapters", "AdapterStackNode", adapters=o.adapters)
+    b.add("prompt", "EncodePromptNode", prompt=o.prompt, negative=o.negative)
+    b.add("sampler", "SamplerNode", seed=o.seed, steps=o.steps, cfg=o.cfg, sampler=o.sampler, scheduler=o.scheduler,
+          width=o.width, height=o.height, batch=o.batch)
+    b.add("decode", "DecodeImageNode")
+    b.add("save", "SaveImageNode", directory=output)
+    b.wires += [("model", "denoiser", "adapters", "denoiser"), ("adapters", "denoiser", "sampler", "denoiser"),
+                ("model", "clip_l", "prompt", "encoders"), ("model", "clip_g", "prompt", "encoders"),
+                ("prompt", "encoding", "sampler", "encoding"), ("model", "vae", "decode", "vae"),
+                ("sampler", "latents", "decode", "latents"), ("decode", "images", "save", "images")]
+    for name, extra in (overrides or {}).items():
+        b.nodes = [(n, c, {**ps, **extra} if n == name else ps) for n, c, ps in b.nodes]
+    return b.doc(settings or {})

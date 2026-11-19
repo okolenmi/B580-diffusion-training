@@ -61,3 +61,38 @@ class TrainableDenoiser(DeviceResident):
 
     def release(self) -> None:
         self.denoiser = self.adapted = None
+
+
+@dataclass(frozen=True)
+class PromptEncoding:
+    """A positive and a negative prompt, encoded: the size-independent text part of each, and the kit that joins it with an image size."""
+
+    family: Any
+    kit: Any
+    positive: Any
+    negative: Any
+    prompt: str
+    negative_prompt: str
+
+    def condition(self, size: tuple[int, int], batch: int, negative: bool = False):
+        """The conditioning of ``batch`` images of ``size`` (height, width) for one of the two prompts."""
+        one = self.kit.assemble(self.negative if negative else self.positive, size)
+        return self.kit.stack([one] * batch)
+
+
+@dataclass(frozen=True)
+class Latents:
+    """Sampled latents, one per recipe, on the host."""
+
+    tensor: Any  # (B, C, H/8, W/8) float32
+    recipes: tuple[Any, ...]
+    meta: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Images:
+    """Decoded images, one per recipe, on the host."""
+
+    pixels: Any  # (B, 3, H, W) uint8
+    recipes: tuple[Any, ...]
+    meta: dict = field(default_factory=dict)

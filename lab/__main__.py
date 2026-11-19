@@ -17,7 +17,8 @@ from pathlib import Path
 from .experiment import Experiment
 from . import setup as lab_setup
 from .templates import TEMPLATES
-from .render import Grid, ImageStore, Renderer
+from engine.generate.recipe import ImageStore
+from .render import Grid, Renderer
 from .report import Report
 from .runner import REPO_ROOT, Lab
 

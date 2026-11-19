@@ -36,6 +36,11 @@ class TinyCodec(FakeEncoder):
     def release(self) -> None:
         pass
 
+    def decode(self, latents: torch.Tensor) -> torch.Tensor:
+        """Eight pixels per latent cell, the first latent channel as grey: pixels that follow the latent."""
+        grey = torch.nn.functional.interpolate(latents[:, :1].float(), scale_factor=8, mode="nearest")
+        return ((grey.tanh() * 0.5 + 0.5) * 255).round().to(torch.uint8).repeat(1, 3, 1, 1)
+
 
 class TinyText:
     """Stands in for the loaded text encoders; remembers where it was moved."""

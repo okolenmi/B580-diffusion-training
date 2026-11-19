@@ -27,7 +27,8 @@ from pathlib import Path
 from engine.devices import Accelerator
 from families.general.adapters.schemes import read_adapter
 from .experiment import Arm, Experiment
-from .render import ImageStore, Renderer
+from engine.generate.recipe import ImageStore
+from .render import Renderer
 
 LOSS_LINE = re.compile(r"^step (\d+)/(\d+)\s+loss ([0-9.eE+-]+)(?:\s+(\d+) ms)?")
 THIRDS_LINE = re.compile(r"by t((?: (?:low|mid|high) [0-9.eE+-]+)+)")

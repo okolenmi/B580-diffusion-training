@@ -13,9 +13,10 @@ from engine.devices import Accelerator, resolve_device, resolve_dtype
 from engine.handles import TrainableDenoiser
 from engine.runtime.checkpointing import ActivationCheckpointer
 from families.api.adapters import GateWindow, TrainableSelection
-from families.api.parts import AdapterMerge, DenoiserPart
+from families.api.parts import DenoiserPart
 from families.registry import get_family
 from graph import Group, Node, Port
+from .merges import apply_merges
 
 SCALING = ("classic", "rank_stabilized")
 BASE_PRECISIONS = ("native", "int8", "nf4")
@@ -122,16 +123,6 @@ class InjectAdapterNode(Node):
     }
     OUTPUTS = {"model": Port("model", TrainableDenoiser, doc="Denoiser with adapters; only the adapters train.")}
 
-    def _merge(self, family, denoiser, merge: AdapterMerge) -> None:
-        scheme = family.schemes.get(merge.format)
-        if scheme is None or not hasattr(scheme, "key"):
-            raise ValueError(f"Merge Adapter: {family.id} cannot merge the {merge.format!r} format; choose from kohya")
-        path = self.context.env.service("models").resolve("loras", merge.file)
-        state, _ = family.read_adapter(str(path))
-        report = family.merge_adapter(denoiser.module(), scheme, state, merge.strength)
-        if report.merged == 0:
-            raise ValueError(f"Merge Adapter: nothing in {merge.file} matches this network (wrong family or key format?)")
-
     def _start_from(self, family, adapted, name: str) -> dict | None:
         """Loads the adapter file the run continues from; None when it starts fresh."""
         if not name:
@@ -168,9 +159,7 @@ class InjectAdapterNode(Node):
         staged = precision in ("int8", "nf4") and (inputs.get("kind") or "lora") == "lora" and not part.merges and torch.device(device).type != "cpu"
         with self.context.task("Loading the denoiser"):
             denoiser = family.load_denoiser(part, device="cpu" if staged else device, dtype=dtype)
-        for merge in part.merges:
-            with self.context.task(f"Merging {merge.file}"):
-                self._merge(family, denoiser, merge)
+        apply_merges(family, denoiser, part.merges, lambda: self.context.env.service("models"), self.context.task)
         kind = inputs.get("kind") or "lora"
         compute = (inputs.get("lora_compute") or "activation") if kind == "lora" else "float32"
         with self.context.task("Injecting the adapter"):

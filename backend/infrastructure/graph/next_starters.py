@@ -57,9 +57,26 @@ _ANIMA = _Starter(
     ("model", "text_encoder", "vae", "dataset", "output"), tree.AnimaLoraOptions, lambda values: tree.anima_lora(**values).as_dict())
 
 
+_IMAGE = _Starter(
+    "sdxl-image", "SDXL image generation",
+    "Model, adapter stack, prompt, sampler, VAE decode and saved PNGs, ready to run. Make an app from it to use it without the graph.",
+    (("model", "Checkpoint", "string", {"picker": "model_file", "scope": "checkpoints"}, "The SDXL checkpoint to generate with."),
+     ("output", "Output folder", "string", {}, "Where the PNGs are written."),
+     ("prompt", "Prompt", "string", {}, "What to draw."),
+     ("negative", "Negative prompt", "string", {}, "What to move away from."),
+     ("adapters", "Adapters", "string", {}, "One per line under the loras folder: file.safetensors=0.8."),
+     ("seed", "Seed", "int", {}, "The first image's seed."),
+     ("steps", "Steps", "int", {}, "Denoising steps."),
+     ("cfg", "Guidance", "float", {}, "How hard the image follows the prompt."),
+     ("width", "Width", "int", {}, "Pixels, a multiple of 8."),
+     ("height", "Height", "int", {}, "Pixels, a multiple of 8."),
+     ("batch", "Images", "int", {}, "How many images, seeds counting up from the first.")),
+    ("model", "output"), tree.SdxlImageOptions, lambda values: tree.sdxl_image(**values).as_dict())
+
+
 class NextStarters(GraphStarters):
     def __init__(self) -> None:
-        self._starters = {starter.name: starter for starter in (_SDXL, _ANIMA)}
+        self._starters = {starter.name: starter for starter in (_SDXL, _ANIMA, _IMAGE)}
 
     def starters(self) -> list[dict]:
         listed = []

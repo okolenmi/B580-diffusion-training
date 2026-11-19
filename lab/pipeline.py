@@ -13,7 +13,7 @@ from families.api.adapters import TrainableSelection
 from families.general.adapters.schemes import read_adapter
 from families.sdxl.adapters import inject_denoiser
 from families.sdxl.conditioning import SDXLConditioning
-from .tiling import TiledDecoder
+from engine.generate.tiling import TiledDecoder
 
 
 class SDXLBackend:

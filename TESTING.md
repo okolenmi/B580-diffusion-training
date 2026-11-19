@@ -177,5 +177,12 @@ On a real run: the main loss line should fill the middle half of the chart (line
 2. `/settings`: *Python environment* shows the card, PyTorch, `same environment` for the server, and the prompt files you downloaded. Start the server from another environment (or with `VENV_PYTHON` set to one) and the row must say `different environment`. A refused path (for example a ComfyUI folder that does not exist) is marked on its own field. *Delete run history* is disabled while a run is active and asks twice.
 3. `/help`: search for `memory` and `tokenize` narrows the page; `/help#nodes-red` opens that entry; the sidebar of Help and Settings follows the scroll.
 
+## 97. Image generation on the card (about 15 minutes)
+1. Graph editor, new graph from the starter *SDXL image generation* with your checkpoint, a prompt and 1024x1024, 25 steps, batch 1. Run it. A PNG appears in the output folder; its PNG text chunk holds the recipe. Note the time of each node (Sampler, Decode Image) and the peak device memory: the denoiser must be gone from the card before the VAE loads (the Sampler frees it).
+2. The same recipe through `python -m lab engines` (or ComfyUI with the same seed, sampler, scheduler and guidance): the pictures should agree as they did before the code moved into `engine/generate`.
+3. Batch 4: image `i` must equal what seed + `i` gives alone. Then 1536x1536: the decode should fall back to tiles (a log line) instead of failing.
+4. Adapter Stack: put one trained LoRA in the *adapters* line (`name.safetensors=0.8`), run, then `=0`, then no line: the last two must equal the image without the node. Two lines should give a blend, in either order the same picture (up to rounding).
+5. Press Stop during sampling: the run ends within a step and no file is written.
+
 ## Reading a bundle automatically
 `python -m accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m perf hwcheck` without running anything.

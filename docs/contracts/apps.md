@@ -18,6 +18,15 @@ Limits: columns 1..24 (default 12); at most 200 cards in a document, containers 
 unique across the whole document (tab ids unique within their container); a card must fit its container's grid (`x + w <= columns`); `options` at most
 4 KB. Every problem is collected with a path, so one round trip tells the editor everything to fix. Unknown keys survive a round trip.
 
+Card kinds the editor writes (all inside the shapes above, so the backend stores them as they are): a **note** is `ref` scope/kind `note` with
+`options.text`; with `options.look: "heading"` it is a one-line heading (the editor adds it with `style: "bare"`, which hides the frame in use mode).
+A **section** is a card with a `container` of one tab; a **node form** is a section holding one field card per free, non-advanced field of a node
+(ordinary cards: binding and exposure are unchanged). Moving a card into another tab keeps its id, so the document stays valid. The page's own
+tabs are `root.tabs`.
+
+Editor-only state is not stored: the selected card, the active tab of each container, undo history (snapshots of `root`, so a value typed into a
+field is not undone) and the phone preview.
+
 ## App document
 
 ```

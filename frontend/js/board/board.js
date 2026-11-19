@@ -24,14 +24,25 @@
 
    On a narrow screen (< NARROW_PX) the grid collapses to one column in
    reading order and drag is disabled -- a phone is for *using* a page.
+   Only the outermost board measures the screen; boards inside a section
+   are told, because a section is narrow on a desktop too.
+
+   A card may be a *section* (`block.container`): its content is a
+   ContainerView -- tabs, each tab a Board of its own. The cards of every
+   board are one document, so ids are minted from `ids()` (all of them),
+   and a click on a card in edit mode is reported through `onSelect` so the
+   page can show an inspector and know where "add" should land.
    --------------------------------------------------------------------------- */
 
+import { ContainerView } from "./container.js";
 import { createDisplay } from "./displays.js";
 import { buildFieldControl } from "./fields.js";
 import {
   cellDelta, columnWidth, effH, flowOrder, keyNudge, moveTo, resizeTo, resolve, setCollapsed,
 } from "./layout.js";
-import { addBlock, addNoteBlock, findTarget, patchBlock, removeBlock, titleFor } from "./model.js";
+import {
+  addBlock, addContainerBlock, addNodeSection, addNoteBlock, collectIds, findTarget, patchBlock, removeBlock, titleFor,
+} from "./model.js";
 
 export const ROW_PX = 48;
 export const GAP_PX = 10;
@@ -67,13 +78,20 @@ export class Board {
    * @param {object} [opts.ctx]       passed to displays (`ctx.execution()`)
    * @param {(reason: string) => void} [opts.onChange]  "layout" | "blocks" | "value" | "title"
    * @param {(msg: string, kind?: string) => void} [opts.onNote]
+   * @param {() => Set<string>} [opts.ids]  every card id of the document (default: this board's own)
+   * @param {(sel: {board: Board, id: string|null, view?: object}) => void} [opts.onSelect]
+   * @param {boolean} [opts.nested]  sized by its parent, not by its own width
    */
-  constructor(container, { live, ctx = {}, onChange = () => {}, onNote = () => {} }) {
+  constructor(container, { live, ctx = {}, onChange = () => {}, onNote = () => {}, ids = null, onSelect = null, nested = false }) {
     this.container = container;
     this.live = live;
     this.ctx = ctx;
     this.onChange = onChange;
     this.onNote = onNote;
+    this.ids = ids || (() => collectIds(this.doc ? this.doc.blocks : []));
+    this.onSelect = onSelect;
+    this.nested = nested;
+    this.alive = true;
     this.doc = null;
     this.modules = null;
     this.statuses = {};
@@ -87,12 +105,18 @@ export class Board {
     this.empty = h("div", "bd-grid-empty");
     container.append(this.root, this.empty);
 
-    this._ro = new ResizeObserver(() => {
-      const narrow = container.clientWidth < NARROW_PX;
-      if (narrow !== this.narrow) { this.narrow = narrow; this.applyLayout(); }
+    this.root.addEventListener("pointerdown", (ev) => {
+      if (ev.target !== this.root || this.mode !== "edit" || !this.onSelect || ev.bdSelected) return;
+      ev.bdSelected = true;
+      this.onSelect({ board: this, id: null });
     });
-    this._ro.observe(container);
-    this.narrow = container.clientWidth > 0 && container.clientWidth < NARROW_PX;
+    this._ro = null;
+    this._tick = 0;
+    if (!nested) {
+      this._ro = new ResizeObserver(() => this.setNarrow(container.clientWidth < NARROW_PX));
+      this._ro.observe(container);
+      this.narrow = container.clientWidth > 0 && container.clientWidth < NARROW_PX;
+    }
 
     // Elapsed-time readouts (run status) tick without any stream frame.
     this._tick = setInterval(() => {
@@ -101,9 +125,10 @@ export class Board {
   }
 
   destroy() {
+    this.alive = false;
     clearInterval(this._tick);
     cancelAnimationFrame(this._raf);
-    this._ro.disconnect();
+    if (this._ro) this._ro.disconnect();
     for (const e of this.entries.values()) this._disposeContent(e);
     this.entries.clear();
     this.container.replaceChildren();
@@ -118,35 +143,108 @@ export class Board {
     this.sync();
   }
 
-  setModules(modules) { this.modules = modules; this.sync(); }
+  setModules(modules) {
+    this.modules = modules;
+    for (const v of this._views()) v.setModules(modules);
+    this.sync();
+  }
 
   /** @param {Record<string, {status: string, detail: string}>} statuses */
-  setStatuses(statuses) { this.statuses = statuses || {}; this.sync(); }
+  setStatuses(statuses) {
+    this.statuses = statuses || {};
+    for (const v of this._views()) v.setStatuses(this.statuses);
+    this.sync();
+  }
 
   setMode(mode) {
     this.mode = mode;
     this.root.classList.toggle("bd-edit", mode === "edit");
+    for (const v of this._views()) v.setMode(mode);
     if (this.doc) this.sync(); // a note is drawn differently in each mode
     this.applyLayout();
     this._updateEmpty();
   }
 
+  /** The phone layout, as decided by the outermost board. */
+  setNarrow(narrow) {
+    if (narrow === this.narrow) return;
+    this.narrow = narrow;
+    this.applyLayout();
+  }
+
   /** Redraw every display now (e.g. after the run state changed). */
   refreshDisplays() {
-    for (const e of this.entries.values()) if (e.display) e.display.update();
+    for (const e of this.entries.values()) {
+      if (e.display) e.display.update();
+      if (e.view) e.view.refreshDisplays();
+    }
   }
 
   /** Re-evaluate field gating (a value elsewhere may have moved a gate). */
   refreshFields() {
-    for (const e of this.entries.values()) if (e.field) e.field.refresh();
+    for (const e of this.entries.values()) {
+      if (e.field) e.field.refresh();
+      if (e.view) e.view.refreshFields();
+    }
+  }
+
+  *_views() {
+    for (const e of this.entries.values()) if (e.view) yield e.view;
+  }
+
+  /** This board and every board inside its sections (those showing a tab), outermost first. */
+  *boards() {
+    yield this;
+    for (const v of this._views()) yield* v.boards();
+  }
+
+  /** `{board, block}` of the card `id` in this board or any inside it, or null. */
+  find(id) {
+    for (const b of this.boards()) {
+      const block = b.doc && b.doc.blocks.find((x) => x.id === id);
+      if (block) return { board: b, block };
+    }
+    return null;
+  }
+
+  /** Mark one card as the selected one and one board as where new cards land (edit mode's visual cues). */
+  mark(selectedId, targetBoard) {
+    for (const b of this.boards()) {
+      b.root.classList.toggle("bd-target", b === targetBoard && b.nested);
+      for (const [id, e] of b.entries) e.el.classList.toggle("is-selected", id === selectedId);
+    }
   }
 
   /* ---- document operations the page calls ------------------------------ */
 
-  addRef(ref) {
-    const before = new Set(this.doc.blocks.map((b) => b.id));
-    const next = addBlock(this.doc, ref, this.modules);
+  addRef(ref) { return this._commit(addBlock(this.doc, ref, this.modules, this.ids())); }
+
+  /** A free-text note, or (`look: "heading"`) a one-line heading that stands without a frame. */
+  addNote(look = "text") { return this._commit(addNoteBlock(this.doc, this.ids(), look)); }
+
+  /** An empty section card. */
+  addSection() { return this._commit(addContainerBlock(this.doc, this.ids())); }
+
+  /** A section with every field of a node as cards: its settings as one form. */
+  addNodeSection(nodeId) { return this._commit(addNodeSection(this.doc, nodeId, this.modules, this.ids())); }
+
+  removeId(id) {
+    this.doc.blocks = removeBlock(this.doc, id).blocks;
+    this.sync();
+    this.onChange("blocks");
+  }
+
+  /** Change a card's own fields (title, style, options, collapsed). `reason` is what `onChange` reports. */
+  update(id, patch, reason = "title") {
+    if (!this.doc.blocks.some((b) => b.id === id)) return;
+    this.doc.blocks = patchBlock(this.doc, id, patch).blocks;
+    this.sync();
+    this.onChange(reason);
+  }
+
+  _commit(next) {
     if (next === this.doc) return null;
+    const before = new Set(this.doc.blocks.map((b) => b.id));
     this.doc.blocks = next.blocks;
     this.sync();
     this.onChange("blocks");
@@ -154,23 +252,6 @@ export class Board {
     const entry = added && this.entries.get(added.id);
     if (entry) entry.el.scrollIntoView({ block: "nearest", behavior: "smooth" });
     return added;
-  }
-
-  addNote() {
-    const before = new Set(this.doc.blocks.map((b) => b.id));
-    this.doc.blocks = addNoteBlock(this.doc).blocks;
-    this.sync();
-    this.onChange("blocks");
-    const added = this.doc.blocks.find((b) => !before.has(b.id)) || null;
-    const entry = added && this.entries.get(added.id);
-    if (entry) entry.el.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    return added;
-  }
-
-  removeId(id) {
-    this.doc.blocks = removeBlock(this.doc, id).blocks;
-    this.sync();
-    this.onChange("blocks");
   }
 
   /* ---- build / sync ---------------------------------------------------- */
@@ -200,7 +281,8 @@ export class Board {
   }
 
   _contentKey(block) {
-    if (block.ref.scope === "note") return `note|${this.mode}`;
+    if (block.container) return "container";
+    if (block.ref.scope === "note") return `note|${this.mode}|${(block.options && block.options.look) || "text"}`;
     const st = this.statuses[block.id];
     const { node, descriptor } = findTarget(block.ref, this.modules);
     // value/has_value change with every keystroke; they must not rebuild a
@@ -214,7 +296,7 @@ export class Board {
   _createEntry(block) {
     const el = h("article", "bd-block");
     el.dataset.id = block.id;
-    el.dataset.kind = block.ref.kind;
+    el.dataset.kind = block.container ? "container" : block.ref.kind;
     const head = h("header", "bd-head");
     const grip = h("span", "bd-grip", "⋮⋮");
     grip.setAttribute("aria-hidden", "true");
@@ -237,7 +319,7 @@ export class Board {
 
     const entry = {
       el, head, title, sub, badge, body, block, contentKey: null,
-      display: null, field: null, release: null, tick: false, lastUpdate: 0,
+      display: null, field: null, view: null, release: null, tick: false, lastUpdate: 0,
     };
 
     collapse.addEventListener("click", () => this._toggleCollapse(entry.block.id));
@@ -248,6 +330,12 @@ export class Board {
     resizer.addEventListener("pointerdown", (ev) => this._startDrag(ev, entry, "resize"));
     head.tabIndex = 0;
     head.addEventListener("keydown", (ev) => this._onKey(ev, entry));
+    // Innermost card wins: the event reaches the section's card afterwards.
+    el.addEventListener("pointerdown", (ev) => {
+      if (this.mode !== "edit" || !this.onSelect || ev.bdSelected) return;
+      ev.bdSelected = true;
+      this.onSelect({ board: this, id: entry.block.id, view: entry.view });
+    });
     return entry;
   }
 
@@ -263,6 +351,7 @@ export class Board {
     entry.badge.title = st ? st.detail : "";
     entry.badge.dataset.status = st ? st.status : "";
     entry.el.dataset.status = st ? st.status : "ok";
+    entry.el.dataset.style = block.style || "plain";
     entry.el.classList.toggle("is-collapsed", !!block.collapsed);
     entry.body.hidden = !!block.collapsed;
   }
@@ -270,6 +359,7 @@ export class Board {
   _disposeContent(entry) {
     if (entry.display) { entry.display.destroy(); entry.display = null; }
     if (entry.release) { entry.release(); entry.release = null; }
+    if (entry.view) { entry.view.destroy(); entry.view = null; }
     entry.field = null;
     entry.tick = false;
     entry.body.replaceChildren();
@@ -279,6 +369,7 @@ export class Board {
     this._disposeContent(entry);
     entry.contentKey = key;
     const { block } = entry;
+    if (block.container) { this._buildSection(entry); return; }
     if (block.ref.scope === "note") { this._buildNote(entry); return; }
     const st = this.statuses[block.id];
     const status = st ? st.status : "ok";
@@ -330,23 +421,37 @@ export class Board {
     entry.display.update();
   }
 
+  _buildSection(entry) {
+    const view = new ContainerView(entry.body, {
+      live: this.live, ctx: this.ctx, onNote: this.onNote, ids: this.ids, onSelect: this.onSelect,
+    }, { nested: true, onChange: (reason) => this.onChange(reason) });
+    view.modules = this.modules;
+    view.statuses = this.statuses;
+    view.mode = this.mode;
+    view.narrow = this.narrow;
+    view.setContainer(entry.block.container, this.doc.graph);
+    entry.view = view;
+  }
+
   /** A note is text the person wrote: a textarea while editing the page, plain text (line breaks kept) in use. */
   _buildNote(entry) {
     const { block } = entry;
     const text = (block.options && block.options.text) || "";
+    const heading = (block.options && block.options.look) === "heading";
     if (this.mode !== "edit") {
-      entry.body.append(h("div", "bd-note-text", text || " "));
+      entry.body.append(h("div", heading ? "bd-heading-text" : "bd-note-text", text || " "));
       return;
     }
-    const area = h("textarea", "cfg-input bd-note-edit");
+    const area = h(heading ? "input" : "textarea", `cfg-input bd-note-edit${heading ? " bd-heading-edit" : ""}`);
+    if (heading) area.type = "text";
     area.value = text;
-    area.placeholder = "Write a note for whoever uses this page";
-    area.maxLength = 2000;
+    area.placeholder = heading ? "Heading" : "Write a note for whoever uses this page";
+    area.maxLength = heading ? 120 : 2000;
     area.addEventListener("input", () => {
       const current = entry.block;
       this.doc.blocks = patchBlock(this.doc, current.id, { options: { ...(current.options || {}), text: area.value } }).blocks;
       entry.block = this.doc.blocks.find((b) => b.id === current.id) || current;
-      this.onChange("blocks");
+      this.onChange("text");
     });
     entry.body.append(area);
   }
@@ -397,6 +502,7 @@ export class Board {
       }
       e.el.classList.toggle("is-collapsed", !!b.collapsed);
       e.body.hidden = !!b.collapsed;
+      if (e.view) e.view.setNarrow(this.narrow);
     }
   }
 

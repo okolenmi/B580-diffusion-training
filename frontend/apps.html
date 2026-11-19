@@ -55,6 +55,12 @@
                     <button id="mode-use" class="bd-seg-btn active" aria-pressed="true">Use</button>
                     <button id="mode-edit" class="bd-seg-btn" aria-pressed="false">Edit</button>
                 </div>
+                <span class="bd-edit-group" role="group" aria-label="History and preview">
+                    <button id="btn-undo" class="btn btn-secondary btn-small" title="Undo (Ctrl+Z)" disabled>&#8630; Undo</button>
+                    <button id="btn-redo" class="btn btn-secondary btn-small" title="Redo (Ctrl+Y)" disabled>Redo &#8631;</button>
+                </span>
+                <button id="btn-phone" class="btn btn-secondary btn-small" aria-pressed="false"
+                        title="Preview the phone layout (one column)">Phone view</button>
                 <button id="btn-run" class="btn btn-start btn-small">&#9654; Run</button>
                 <button id="btn-stop" class="btn btn-danger btn-small" hidden>&#9632; Stop</button>
                 <span class="bd-state" id="bd-state"></span>
@@ -78,11 +84,18 @@
                         <strong>Add cards</strong>
                         <label class="bd-adv"><input type="checkbox" id="tray-adv"> advanced</label>
                     </div>
+                    <div class="bd-inspector" id="inspector" hidden></div>
+                    <div class="bd-tray-add" role="group" aria-label="Add other cards">
+                        <button id="add-heading" type="button" class="bd-tray-item">+ Heading</button>
+                        <button id="add-note" type="button" class="bd-tray-item">+ Note</button>
+                        <button id="add-section" type="button" class="bd-tray-item"
+                                title="A titled box that can hold cards and several tabs">+ Section</button>
+                    </div>
                     <input id="tray-search" class="cfg-input" type="search" placeholder="Search&hellip;"
                            aria-label="Search available cards">
                     <div id="tray-list"></div>
                     <div class="bd-tray-foot">
-                        Columns
+                        Columns here
                         <input type="number" id="cols" min="1" max="24" aria-label="Grid columns">
                     </div>
                 </aside>

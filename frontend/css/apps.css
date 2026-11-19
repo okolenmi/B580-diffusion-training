@@ -81,3 +81,9 @@
     .app-toolbar { position: static; }
 }
 .bd-narrow .bd-head { cursor: default; }
+
+/* ---- 4. edit-only toolbar bits, phone preview ---- */
+
+.bd-edit-group { display: none; gap: 6px; }
+.app-editing .bd-edit-group { display: inline-flex; }
+#board.bd-phone { max-width: 390px; margin: 0 auto; border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 10px; }

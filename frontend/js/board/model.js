@@ -5,7 +5,10 @@
    whose parameter objects the field blocks edit (an App's snapshot, or a stand-in over the open graph document). The stored
    shapes are backend/domain/board.py (a view) and backend/domain/app.py (an app); a block is
 
-     {id, ref: {scope: "node"|"graph"|"note", node?, kind: "field"|"display"|"note", name}, x, y, w, h, collapsed, title, options}
+     {id, ref: {scope: "node"|"graph"|"note", node?, kind: "field"|"display"|"note", name}, x, y, w, h, collapsed, title, style, options}
+
+   or, for a section / tabbed card, `container: {columns, tabs: [{id, title, blocks}]}` in place of `ref`. Ids are unique across the whole
+   document, containers included, so every id-minting function takes the set of ids in use.
 
    Nothing in this file touches the DOM, the network or a clock, so every
    rule a person relies on -- "what can I add", "which fields does the
@@ -37,11 +40,40 @@ export const noteRef = (name) => ({ scope: "note", kind: "note", name });
 export const graphRef = (kind, name) => ({ scope: "graph", kind, name });
 
 /** A block id not used in `blocks` (ids are [A-Za-z0-9_-]{1,40}). */
-export function newBlockId(blocks) {
-  const used = new Set(blocks.map((b) => b.id));
-  let n = blocks.length + 1;
-  while (used.has(`b${n}`)) n++;
+export function newBlockId(blocks, used = null) {
+  const taken = used || collectIds(blocks);
+  let n = taken.size + 1;
+  while (taken.has(`b${n}`)) n++;
   return `b${n}`;
+}
+
+/* ---- walking a tree of cards -------------------------------------------- */
+
+export const isContainer = (block) => !!block.container;
+
+/** Every card at any depth, containers included, parents before children. */
+export function* walkCards(blocks) {
+  for (const b of blocks) {
+    yield b;
+    if (b.container) for (const tab of b.container.tabs) yield* walkCards(tab.blocks);
+  }
+}
+
+/** The cards that point at something (`ref`), at any depth. */
+export function* leafCards(blocks) {
+  for (const b of walkCards(blocks)) if (b.ref) yield b;
+}
+
+export const collectIds = (blocks) => new Set([...walkCards(blocks)].map((b) => b.id));
+
+/** How many containers deep `blocks` go (0 = no container). */
+export function depthOf(blocks) {
+  let deepest = 0;
+  for (const b of blocks) {
+    if (!b.container) continue;
+    for (const tab of b.container.tabs) deepest = Math.max(deepest, 1 + depthOf(tab.blocks));
+  }
+  return deepest;
 }
 
 export function emptyDoc(graph = null, columns = 12) {
@@ -67,6 +99,10 @@ export function findTarget(ref, modules) {
 
 /** Heading and sub-heading of a block. A saved custom title wins. */
 export function titleFor(block, modules) {
+  if (block.container) {
+    const n = block.container.tabs.length;
+    return { title: block.title || "Section", subtitle: n > 1 ? `${n} tabs` : "Section", defaultTitle: "Section" };
+  }
   if (block.ref.scope === "note") return { title: block.title || "Note", subtitle: "Note", defaultTitle: "Note" };
   const { node, descriptor } = findTarget(block.ref, modules);
   const base = descriptor
@@ -112,7 +148,7 @@ export function defaultSize(ref, modules, columns) {
  */
 export function buildAvailable(modules, blocks, { showAdvanced = false } = {}) {
   if (!modules) return [];
-  const placed = new Set(blocks.map((b) => refKey(b.ref)));
+  const placed = new Set([...leafCards(blocks)].map((b) => refKey(b.ref)));
   const item = (ref, label, sub, extra = {}) => ({
     ref, key: refKey(ref), label, sub, placed: placed.has(refKey(ref)),
     kind: ref.kind, advanced: false, ...extra,
@@ -157,30 +193,183 @@ export function buildAvailable(modules, blocks, { showAdvanced = false } = {}) {
 
 /** The document with a new block for `ref` at the first free slot
     (a no-op, returning the same doc, when the ref is already placed). */
-export function addBlock(doc, ref, modules) {
+export function addBlock(doc, ref, modules, used = null) {
   const key = refKey(ref);
-  if (doc.blocks.some((b) => refKey(b.ref) === key)) return doc;
+  const taken = used || collectIds(doc.blocks);
+  if ([...leafCards(doc.blocks)].some((b) => refKey(b.ref) === key)) return doc;
   const [w, h] = defaultSize(ref, modules, doc.columns);
   const block = {
-    id: newBlockId(doc.blocks), ref, x: 0, y: 0, w, h,
+    id: newBlockId(doc.blocks, taken), ref, x: 0, y: 0, w, h,
     collapsed: false, title: null, options: {},
   };
   return { ...doc, blocks: addAt(doc.blocks, block, doc.columns) };
 }
 
 /** A new empty note: free text on the board (instructions, a reminder), not tied to the graph. */
-export function addNoteBlock(doc) {
+export function addNoteBlock(doc, used = null, look = "text") {
+  const names = new Set([...leafCards(doc.blocks)].filter((b) => b.ref.scope === "note").map((b) => b.ref.name));
   let n = 1;
-  while (doc.blocks.some((b) => b.ref.scope === "note" && b.ref.name === `note${n}`)) n++;
+  while (names.has(`note${n}`)) n++;
+  const heading = look === "heading";
   const block = {
-    id: newBlockId(doc.blocks), ref: noteRef(`note${n}`), x: 0, y: 0, w: Math.min(6, doc.columns), h: 2,
-    collapsed: false, title: null, options: { text: "" },
+    id: newBlockId(doc.blocks, used), ref: noteRef(`note${n}`), x: 0, y: 0,
+    w: heading ? doc.columns : Math.min(6, doc.columns), h: heading ? 1 : 2,
+    collapsed: false, title: null, style: heading ? "bare" : undefined, options: { text: "", look },
   };
   return { ...doc, blocks: addAt(doc.blocks, block, doc.columns) };
 }
 
 export function removeBlock(doc, id) {
   return { ...doc, blocks: resolve(doc.blocks.filter((b) => b.id !== id), doc.columns) };
+}
+
+/* ---- sections and tabs ---------------------------------------------------- */
+
+export const MAX_TABS = 12;
+export const MAX_DEPTH = 3;
+
+/** A new section card: a titled box with one empty tab. `blocks` (already laid out for `columns`) fill that tab. */
+export function addContainerBlock(doc, used = null, { title = null, tabTitle = "Tab 1", blocks = [], columns = 12, w = null, h = 4 } = {}) {
+  const taken = used || collectIds(doc.blocks);
+  const block = {
+    id: newBlockId(doc.blocks, taken), container: { columns, tabs: [{ id: "t1", title: tabTitle, blocks }] },
+    x: 0, y: 0, w: Math.min(w || doc.columns, doc.columns), h,
+    collapsed: false, title, style: "outlined", options: {},
+  };
+  return { ...doc, blocks: addAt(doc.blocks, block, doc.columns) };
+}
+
+/**
+ * A section holding every field a node offers (the ones the graph does not feed and that are not advanced): "give me this node's
+ * settings as one form". Nothing new is bound -- they are ordinary field cards -- so Run and the exposure rules are unchanged.
+ * Fields already placed elsewhere are skipped. Returns `doc` unchanged when nothing is left to add.
+ */
+export function addNodeSection(doc, nodeId, modules, used = null) {
+  const node = ((modules && modules.nodes) || []).find((n) => n.id === nodeId);
+  if (!node) return doc;
+  const taken = new Set(used || collectIds(doc.blocks));
+  const placed = new Set([...leafCards(doc.blocks)].map((b) => refKey(b.ref)));
+  const columns = 6;
+  const inner = [];
+  for (const f of node.fields) {
+    const ref = nodeRef(nodeId, "field", f.name);
+    if (f.wired || f.advanced || placed.has(refKey(ref))) continue;
+    const id = newBlockId(inner, taken);
+    taken.add(id);
+    const [, h] = defaultSize(ref, modules, columns);
+    inner.push({ id, ref, x: 0, y: 0, w: columns, h, collapsed: false, title: null, options: {} });
+  }
+  if (!inner.length) return doc;
+  const laid = resolve(inner, columns);
+  const rows = Math.max(...laid.map((b) => b.y + b.h));
+  return addContainerBlock(doc, taken, { title: node.display_name, tabTitle: "Settings", blocks: laid, columns, w: Math.min(6, doc.columns), h: rows + 2 });
+}
+
+/** The container with every tab re-laid for `columns`: cards narrowed to fit and pushed apart where they now collide. */
+export function withColumns(container, columns) {
+  const fit = (b) => ({ ...b, w: Math.min(b.w, columns), x: Math.max(0, Math.min(b.x, columns - Math.min(b.w, columns))) });
+  return {
+    ...container, columns,
+    tabs: container.tabs.map((t) => ({ ...t, blocks: resolve(t.blocks.map(fit), columns) })),
+  };
+}
+
+const slug = (n) => `t${n}`;
+
+export function addTab(tabs, title = null) {
+  if (tabs.length >= MAX_TABS) return tabs;
+  const used = new Set(tabs.map((t) => t.id));
+  let n = tabs.length + 1;
+  while (used.has(slug(n))) n++;
+  return [...tabs, { id: slug(n), title: title || `Tab ${tabs.length + 1}`, blocks: [] }];
+}
+
+export function removeTab(tabs, id) {
+  return tabs.length <= 1 ? tabs : tabs.filter((t) => t.id !== id);
+}
+
+export function renameTab(tabs, id, title) {
+  const text = (title || "").trim();
+  return text ? tabs.map((t) => (t.id === id ? { ...t, title: text.slice(0, 120) } : t)) : tabs;
+}
+
+export function moveTab(tabs, id, delta) {
+  const i = tabs.findIndex((t) => t.id === id);
+  const j = i + delta;
+  if (i < 0 || j < 0 || j >= tabs.length) return tabs;
+  const out = [...tabs];
+  [out[i], out[j]] = [out[j], out[i]];
+  return out;
+}
+
+/** Every tab a card can be moved into, as `{tabId, owner, label, columns, depth}`; `owner` is the container card id ("" for the
+    page). A card never goes into itself or its own descendants, and not past MAX_DEPTH. */
+export function moveTargets(root, id) {
+  const moving = [...walkCards(root.tabs.flatMap((t) => t.blocks))].find((b) => b.id === id);
+  if (!moving) return [];
+  const height = moving.container ? 1 + depthOf(moving.container.tabs.flatMap((t) => t.blocks)) : 0;
+  const out = [];
+  const visit = (container, owner, trail, depth) => {
+    for (const tab of container.tabs) {
+      const label = [...trail, tab.title].join(" \u203a ");
+      if (depth + height <= MAX_DEPTH) out.push({ tabId: tab.id, owner, label, columns: container.columns, depth });
+      for (const b of tab.blocks) {
+        if (b.container && b.id !== id) visit(b.container, b.id, [...trail, tab.title, b.title || "Section"], depth + 1);
+      }
+    }
+  };
+  visit(root, "", [], 0);
+  return out;
+}
+
+/** `{owner, tabId}` of the tab holding card `id` (owner "" = the page), or null. */
+export function locateCard(root, id) {
+  const visit = (container, owner) => {
+    for (const tab of container.tabs) {
+      for (const b of tab.blocks) {
+        if (b.id === id) return { owner, tabId: tab.id };
+        if (b.container) { const hit = visit(b.container, b.id); if (hit) return hit; }
+      }
+    }
+    return null;
+  };
+  return visit(root, "");
+}
+
+/** The root with card `id` taken out of wherever it is and placed in tab `tabId` of container `owner` ("" = the page). A new tree;
+    the root itself when the move is not allowed. */
+export function moveCard(root, id, owner, tabId) {
+  if (!moveTargets(root, id).some((t) => t.owner === owner && t.tabId === tabId)) return root;
+  const tree = JSON.parse(JSON.stringify(root));
+  let moving = null;
+  const strip = (container) => {
+    for (const tab of container.tabs) {
+      const keep = [];
+      for (const b of tab.blocks) {
+        if (b.id === id) { moving = b; continue; }
+        if (b.container) strip(b.container);
+        keep.push(b);
+      }
+      tab.blocks = keep;
+    }
+  };
+  strip(tree);
+  if (!moving) return root;
+  const find = (container) => {
+    for (const tab of container.tabs) {
+      for (const b of tab.blocks) {
+        if (b.id === owner) return b.container;
+        if (b.container) { const hit = find(b.container); if (hit) return hit; }
+      }
+    }
+    return null;
+  };
+  const dest = owner ? find(tree) : tree;
+  const tab = dest && dest.tabs.find((t) => t.id === tabId);
+  if (!tab) return root;
+  const w = Math.min(moving.w, dest.columns);
+  tab.blocks = addAt(tab.blocks, { ...moving, x: 0, y: 0, w }, dest.columns);
+  return tree;
 }
 
 export function patchBlock(doc, id, patch) {
@@ -311,7 +500,7 @@ export function setFieldValue(doc, ref, value) {
 export function valuesPayload(doc, statuses = {}) {
   const nodes = {};
   const memory = {};
-  for (const b of doc.blocks) {
+  for (const b of leafCards(doc.blocks)) {
     if (b.ref.kind !== "field") continue;
     const st = statuses[b.id];
     if (st && st !== "ok") continue;
@@ -333,14 +522,19 @@ export function valuesPayload(doc, statuses = {}) {
 /** What "layout" means for unsaved-changes purposes: where blocks are and
     how they are labelled -- not their live data. */
 export function layoutKey(doc) {
-  return JSON.stringify({
-    c: doc.columns,
-    b: doc.blocks.map((b) => [
-      b.id, refKey(b.ref), b.x, b.y, b.w, b.h, !!b.collapsed, b.title || null,
-      b.options || {},
-    ]),
-  });
+  return JSON.stringify({ c: doc.columns, b: doc.blocks.map(blockKey) });
 }
+
+/** The same for a whole container (an App's page): its columns, tabs and every card in them. */
+export function containerKey(container) {
+  return JSON.stringify(containerParts(container));
+}
+
+const blockKey = (b) => [
+  b.id, b.ref ? refKey(b.ref) : null, b.x, b.y, b.w, b.h, !!b.collapsed, b.title || null, b.style || null, b.options || {},
+  b.container ? containerParts(b.container) : null,
+];
+const containerParts = (c) => [c.columns, c.tabs.map((t) => [t.id, t.title, t.blocks.map(blockKey)])];
 
 /** block id -> status string from a /resolve answer. */
 export function statusByBlock(resolution) {

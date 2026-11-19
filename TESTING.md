@@ -185,5 +185,8 @@ On a real run: the main loss line should fill the middle half of the chart (line
 5. Press Stop during sampling: the run ends within a step and no file is written.
 6. Save the starter graph to the library, make an app from it (Apps, new, pick the graph). The tray offers the *Images* view of Preview Image and the fields of Sampler and Encode Prompt: put the prompt, seed, steps and the images on the page, save, switch to use mode, change the prompt and Run. The picture must appear on the page when the run ends and stay until the next run; click it to open it full size.
 
+## 98. Apps editor on a real page (about 10 minutes)
+Open an app made from the image starter (item 97) in `/apps/<name>`, *Edit*: add a *Section*, click it (a dashed outline marks where new cards land) and add the prompt and seed from the tray; add a second tab with `+`, put the Preview Image *Images* view on it; drag and resize cards inside the section; use *Place in* on a card to move it to another tab and *Undo* (Ctrl+Z) to bring it back. Add a heading. Save, reload, *Use*: tabs switch, a run fills the picture on its tab, *Phone view* shows one column. Report anything that jumps, loses a typed value on tab change, or looks wrong in your theme.
+
 ## Reading a bundle automatically
 `python -m accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m perf hwcheck` without running anything.

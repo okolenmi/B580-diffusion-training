@@ -26,10 +26,13 @@
    --------------------------------------------------------------------------- */
 
 import { api, ApiError } from "./api.js";
-import { Board, settleLayout } from "./board/board.js";
+import { ContainerView } from "./board/container.js";
+import { History } from "./board/history.js";
+import { Inspector } from "./board/inspector.js";
 import { LiveStreams } from "./board/live.js";
 import {
-  autoFill, buildAvailable, layoutKey, refKey, statusByBlock, valuesPayload,
+  autoFill, buildAvailable, collectIds, containerKey, leafCards, locateCard, moveCard, moveTargets, refKey, statusByBlock,
+  titleFor, valuesPayload, walkCards,
 } from "./board/model.js";
 import { el, showMessage } from "./lib/dom.js";
 import { errText } from "./lib/errors.js";
@@ -128,7 +131,10 @@ const S = {
   description: "",
   version: 0,
   app: null,           // the document: {graph, root, style, source_graph, ...}
-  view: null,          // what the board edits: {columns, blocks, graph: draft}
+  draft: null,         // stand-in graph the field cards write into: {nodes, memory}
+  sel: null,           // selected card id (edit mode)
+  target: null,        // the Board "add" lands in
+  history: new History(),
   saved: null,         // {layout, graph, exposed} as last saved; null = never
   mode: "use",
   resolution: null,
@@ -137,7 +143,8 @@ const S = {
   resolveSeq: 0,
   resolveTimer: 0,
   pollTimer: 0,
-  board: null,
+  page: null,          // the ContainerView over app.root
+  inspector: null,
 };
 window.__app = S;
 
@@ -150,42 +157,34 @@ function snapshotGraph(graph) {
   return copy;
 }
 
-/**
- * What the board edits. Phase one of the editor is one page: the root's first tab. The "draft graph" is a stand-in whose
- * parameter objects *are* the snapshot's, so a field card writes straight into what gets saved and run.
- */
-function makeView(app) {
+/** The "draft graph" the cards edit: a stand-in whose parameter objects *are* the snapshot's, so a field card writes straight into
+    what gets saved and run. */
+function makeDraft(app) {
   const graph = app.graph;
-  const tab = app.root.tabs[0];
   const memory = new Proxy({}, {
     get: (_t, key) => graph.settings[`memory.${String(key)}`],
     set: (_t, key, value) => { graph.settings[`memory.${String(key)}`] = value; return true; },
     deleteProperty: (_t, key) => { delete graph.settings[`memory.${String(key)}`]; return true; },
     has: (_t, key) => `memory.${String(key)}` in graph.settings,
   });
-  return {
-    columns: app.root.columns,
-    blocks: tab.blocks,
-    graph: { get nodes() { return graph.nodes.map((n) => ({ id: n.uid, params: n.params })); }, memory },
-  };
+  return { get nodes() { return graph.nodes.map((n) => ({ id: n.uid, params: n.params })); }, memory };
 }
 
-/** The document as it should be PUT: the board's current cards folded back into the page. */
-function appDoc() {
-  const tab = S.app.root.tabs[0];
-  const blocks = S.view.blocks.map((b) => ({ ...b, collapsed: !!b.collapsed, title: b.title || null, options: b.options || {} }));
-  return { ...S.app, format: 1, root: { ...S.app.root, columns: S.view.columns, tabs: [{ ...tab, blocks }] } };
-}
+/** Every card of the page, at any depth (the page edits `S.app.root` in place, so this is always current). */
+const rootBlocks = () => S.app.root.tabs.flatMap((t) => t.blocks);
+
+/** The document as it should be PUT. */
+const appDoc = () => ({ ...S.app, format: 1 });
 
 const exposedKey = () =>
-  JSON.stringify(S.view.blocks.filter((b) => b.ref && b.ref.kind === "field").map((b) => refKey(b.ref)).sort());
+  JSON.stringify([...leafCards(rootBlocks())].filter((b) => b.ref.kind === "field").map((b) => refKey(b.ref)).sort());
 const graphKey = () => JSON.stringify(S.app.graph);
 
 function markSaved() {
-  S.saved = { layout: layoutKey(S.view), graph: graphKey(), exposed: exposedKey() };
+  S.saved = { layout: containerKey(S.app.root), graph: graphKey(), exposed: exposedKey() };
 }
 
-const layoutDirty = () => !S.saved || S.saved.layout !== layoutKey(S.view);
+const layoutDirty = () => !S.saved || S.saved.layout !== containerKey(S.app.root);
 const valuesDirty = () => !S.saved || S.saved.graph !== graphKey();
 const isDirty = () => layoutDirty() || valuesDirty();
 const exposureChanged = () => !S.saved || S.saved.exposed !== exposedKey();
@@ -205,18 +204,24 @@ async function showPage() {
     return;
   }
 
-  S.board = new Board(el("board"), {
+  S.page = new ContainerView(el("board"), {
     live,
     ctx: { execution: () => S.execution },
-    onChange: onBoardChange,
     onNote: (msg, kind) => log(msg, kind || "info"),
+    ids: () => collectIds(rootBlocks()),
+    onSelect,
+  }, { onChange: onBoardChange });
+  S.inspector = new Inspector(el("inspector"), {
+    patch: (id, patch) => { const hit = S.page.find(id); if (hit) hit.board.update(id, patch, "title"); renderInspector(); },
+    move: moveSelected,
+    remove: (id) => { const hit = S.page.find(id); if (hit) hit.board.removeId(id); },
   });
-  S.board.setDoc(S.view);
-  S.board.setModules(S.resolution.modules);
+  S.page.setModules(S.resolution.modules);
+  S.page.setContainer(S.app.root, S.draft);
+  S.history.reset(JSON.stringify(S.app.root));
   applyResolution();
   setMode(S.isNew ? "edit" : "use");
   wireToolbar();
-  el("cols").value = String(S.view.columns);
   describePage();
   await adoptActiveExecution();
   updateState();
@@ -235,9 +240,9 @@ async function loadDoc() {
       graph: snapshotGraph(lib.graph),
       root: { columns: 12, tabs: [{ id: "main", title: "Main", blocks: [] }] },
     };
-    S.view = makeView(S.app);
+    S.draft = makeDraft(S.app);
     S.resolution = await resolveNow();
-    S.view.blocks = autoFill(S.resolution.modules, S.view.columns);
+    S.app.root.tabs[0].blocks = autoFill(S.resolution.modules, S.app.root.columns);
     S.resolution = await resolveNow();
     S.saved = null;
   } else {
@@ -246,7 +251,7 @@ async function loadDoc() {
     S.version = t.version;
     S.app = t.doc;
     S.app.graph = snapshotGraph(S.app.graph);
-    S.view = makeView(S.app);
+    S.draft = makeDraft(S.app);
     S.resolution = await resolveNow();
     markSaved();
   }
@@ -256,7 +261,7 @@ function describePage() {
   const bits = [];
   if (S.version) bits.push(`version ${S.version}`);
   if (S.app.source_graph) bits.push(`built on graph “${S.app.source_graph}”`);
-  const n = S.view.blocks.length;
+  const n = [...walkCards(rootBlocks())].length;
   bits.push(`${n} card${n === 1 ? "" : "s"}`);
   el("app-sub").textContent = bits.join(" · ");
   el("btn-update").hidden = !S.app.source_graph || S.isNew;
@@ -276,7 +281,7 @@ function scheduleResolve(delay = 300) {
       const res = await resolveNow();
       if (seq !== S.resolveSeq) return; // a newer edit superseded this answer
       S.resolution = res;
-      S.board.setModules(res.modules);
+      S.page.setModules(res.modules);
       applyResolution();
       renderTray();
     } catch (err) {
@@ -289,7 +294,7 @@ function applyResolution() {
   const res = S.resolution;
   S.statuses = {};
   for (const b of res.blocks) S.statuses[b.id] = { status: b.status, detail: b.detail };
-  S.board.setStatuses(S.statuses);
+  S.page.setStatuses(S.statuses);
   renderIssues(res.issues || []);
   renderTray();
   updateState();
@@ -320,9 +325,77 @@ function renderIssues(issues, heading) {
 /* ---- board events ----------------------------------------------------------- */
 
 function onBoardChange(reason) {
-  if (reason === "blocks") { scheduleResolve(0); describePage(); }
+  if (reason === "blocks") {
+    scheduleResolve(0);
+    describePage();
+    if (S.sel && !S.page.find(S.sel)) S.sel = null;
+    renderInspector();
+    renderTray();
+  }
   if (reason === "value") scheduleResolve(600);
+  if (reason !== "value") S.history.record(JSON.stringify(S.app.root), { merge: reason === "text" });
+  if (reason === "layout") renderInspector();
   updateState();
+}
+
+/* ---- selection, inspector, undo ----------------------------------------------- */
+
+const targetBoard = () => (S.target && S.target.alive ? S.target : S.page.activeBoard);
+
+function onSelect({ board, id, view }) {
+  S.sel = id;
+  S.target = view ? view.activeBoard : board;
+  markSelection();
+  renderInspector();
+  el("cols").value = String(targetBoard().view.container.columns);
+}
+
+function markSelection() {
+  S.page.mark(S.sel, targetBoard());
+}
+
+function renderInspector() {
+  const hit = S.sel && S.mode === "edit" ? S.page.find(S.sel) : null;
+  if (!hit) { S.inspector.hide(); return; }
+  const { block } = hit;
+  S.inspector.show({
+    block,
+    defaultTitle: titleFor({ ...block, title: null }, S.resolution && S.resolution.modules).defaultTitle,
+    targets: moveTargets(S.app.root, block.id),
+    here: locateCard(S.app.root, block.id),
+  });
+  markSelection();
+}
+
+function moveSelected(id, owner, tabId) {
+  const root = moveCard(S.app.root, id, owner, tabId);
+  if (root === S.app.root) return;
+  applyRoot(root);
+}
+
+/** Replace the whole page (a move, an undo): rebuild the boards over it and re-check it with the server. */
+function applyRoot(root, { record = true } = {}) {
+  S.app.root = root;
+  S.page.setContainer(root, S.draft);
+  if (S.sel && !S.page.find(S.sel)) S.sel = null;
+  if (record) S.history.record(JSON.stringify(root));
+  scheduleResolve(0);
+  describePage();
+  renderInspector();
+  renderTray();
+  updateHistoryButtons();
+  el("cols").value = String(targetBoard().view.container.columns);
+  updateState();
+}
+
+function stepHistory(direction) {
+  const snap = direction < 0 ? S.history.undo() : S.history.redo();
+  if (snap !== null) applyRoot(JSON.parse(snap), { record: false });
+}
+
+function updateHistoryButtons() {
+  el("btn-undo").disabled = !S.history.canUndo;
+  el("btn-redo").disabled = !S.history.canRedo;
 }
 
 /* ---- mode + toolbar --------------------------------------------------------- */
@@ -335,8 +408,11 @@ function setMode(mode) {
   el("mode-edit").setAttribute("aria-pressed", String(mode === "edit"));
   el("tray").hidden = mode !== "edit";
   document.body.classList.toggle("app-editing", mode === "edit");
-  S.board.setMode(mode);
+  S.page.setMode(mode);
+  if (mode !== "edit") S.sel = null;
+  renderInspector();
   renderTray();
+  updateHistoryButtons();
 }
 
 function wireToolbar() {
@@ -347,24 +423,36 @@ function wireToolbar() {
   el("btn-stop").onclick = stop;
   el("btn-delete").onclick = remove;
   el("btn-update").onclick = updateFromGraph;
+  el("btn-undo").onclick = () => stepHistory(-1);
+  el("btn-redo").onclick = () => stepHistory(1);
+  el("btn-phone").onclick = () => {
+    const on = el("board").classList.toggle("bd-phone");
+    el("btn-phone").setAttribute("aria-pressed", String(on));
+  };
+  el("add-note").onclick = () => targetBoard().addNote();
+  el("add-heading").onclick = () => targetBoard().addNote("heading");
+  el("add-section").onclick = () => targetBoard().addSection();
+  document.addEventListener("keydown", (ev) => {
+    if (S.mode !== "edit" || !(ev.ctrlKey || ev.metaKey) || ev.target.closest("input, textarea, select")) return;
+    const key = ev.key.toLowerCase();
+    if (key === "z") { ev.preventDefault(); stepHistory(ev.shiftKey ? 1 : -1); }
+    else if (key === "y") { ev.preventDefault(); stepHistory(1); }
+  });
   el("tray-adv").onchange = renderTray;
   el("tray-search").oninput = renderTray;
   el("cols").onchange = () => {
-    const n = Math.max(1, Math.min(24, parseInt(el("cols").value, 10) || S.view.columns));
+    const view = targetBoard().view;
+    const n = Math.max(1, Math.min(24, parseInt(el("cols").value, 10) || view.container.columns));
     el("cols").value = String(n);
-    if (n === S.view.columns) return;
-    S.view.columns = n;
-    S.view.blocks = settleLayout(S.view.blocks, n);
-    S.board.applyLayout();
-    onBoardChange("layout");
+    view.setColumns(n);
   };
   window.addEventListener("beforeunload", (e) => {
-    if (S.view && isDirty()) { e.preventDefault(); e.returnValue = ""; }
+    if (S.app && isDirty()) { e.preventDefault(); e.returnValue = ""; }
   });
 }
 
 function updateState() {
-  if (!S.view) return;
+  if (!S.app) return;
   const save = el("btn-save");
   save.textContent = isDirty() ? "Save •" : "Save";
   save.classList.toggle("is-dirty", isDirty());
@@ -389,9 +477,9 @@ function updateState() {
 
 function renderTray() {
   const tray = el("tray-list");
-  if (!S.view || !S.resolution || S.mode !== "edit") return;
+  if (!S.app || !S.resolution || S.mode !== "edit") return;
   const needle = el("tray-search").value.trim().toLowerCase();
-  let groups = buildAvailable(S.resolution.modules, S.view.blocks, { showAdvanced: el("tray-adv").checked });
+  let groups = buildAvailable(S.resolution.modules, rootBlocks(), { showAdvanced: el("tray-adv").checked });
   groups = groups
     .map((g) => ({
       ...g,
@@ -418,6 +506,15 @@ function renderTray() {
     const sum = document.createElement("summary");
     sum.textContent = g.title;
     d.append(sum);
+    if (g.scope === "node" && g.items.some((i) => i.kind === "field" && !i.placed && !i.advanced)) {
+      const form = document.createElement("button");
+      form.type = "button";
+      form.className = "bd-tray-item bd-tray-form";
+      form.title = "Add this node's settings as one section of cards";
+      form.textContent = "All settings as a section";
+      form.onclick = () => targetBoard().addNodeSection(g.key.slice("node:".length));
+      d.append(form);
+    }
     for (const kind of ["display", "field"]) {
       const items = g.items.filter((i) => i.kind === kind);
       if (!items.length) continue;
@@ -437,7 +534,7 @@ function renderTray() {
         tag.className = "bd-tray-tag";
         tag.textContent = it.placed ? "added" : it.advanced ? "advanced" : "+";
         b.append(label, tag);
-        b.onclick = () => S.board.addRef(it.ref);
+        b.onclick = () => targetBoard().addRef(it.ref);
         d.append(b);
       }
     }
@@ -495,8 +592,8 @@ async function updateFromGraph() {
     if (diff.orphaned_cards.length) lines.push(`${diff.orphaned_cards.length} card(s) would lose their target`);
     if (!window.confirm(`Update "${S.name}" from graph "${S.app.source_graph}"?\n\n${lines.join("\n")}\n\nValues typed on this page are replaced by the graph's.`)) return;
     S.app.graph = next;
-    S.view = makeView({ ...S.app, root: { ...S.app.root, columns: S.view.columns, tabs: [{ ...S.app.root.tabs[0], blocks: S.view.blocks }] } });
-    S.board.setDoc(S.view);
+    S.draft = makeDraft(S.app);
+    S.page.setContainer(S.app.root, S.draft);
     scheduleResolve(0);
     updateState();
   } catch (err) {
@@ -508,12 +605,12 @@ async function updateFromGraph() {
 
 async function run() {
   showMessage("page-error", "");
-  const values = valuesPayload(S.view, statusByBlock(S.resolution));
+  const values = valuesPayload({ blocks: rootBlocks(), graph: S.draft }, statusByBlock(S.resolution));
   try {
     const exec = await api(`/apps/${enc(S.name)}/run`, { method: "POST", body: { values } });
     log(`Run #${exec.execution_id} started from "${S.name}".`, "success");
     S.execution = { ...exec, done: 0, total: 0 };
-    S.board.refreshDisplays();
+    S.page.refreshDisplays();
     updateState();
     schedulePoll(400);
   } catch (err) {
@@ -564,7 +661,7 @@ async function adoptActiveExecution() {
       S.execution = { ...latest, done: 0, total: 0 };
       await pollExecution(false);
     }
-    S.board.refreshDisplays();
+    S.page.refreshDisplays();
     updateState();
   } catch (err) {
     log(`Could not read run state: ${errText(err)}`, "warn");
@@ -588,7 +685,7 @@ async function pollExecution(again) {
   } catch (err) {
     log(`Could not read run state: ${errText(err)}`, "warn");
   }
-  S.board.refreshDisplays();
+  S.page.refreshDisplays();
   updateState();
   if (again && executionActive()) schedulePoll(1500);
 }

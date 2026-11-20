@@ -38,6 +38,11 @@ export class Inspector {
     if (uid) this._ask();
   }
 
+  /** A card's run badge changed: redraw when it is the node being shown. */
+  statusChanged(uid) {
+    if (uid === this.uid) this._draw();
+  }
+
   _askLater() {
     clearTimeout(this._timer);
     this._timer = setTimeout(() => this._ask(), this.wait);
@@ -69,7 +74,7 @@ export class Inspector {
     this.root.append(make("div", "g2-insp-title", info ? info.display_name : node.class_name));
     this.root.append(make("div", "g2-insp-uid", `${node.class_name} · ${node.uid}`));
     if (info?.doc) this.root.append(make("div", "g2-insp-doc", info.doc));
-    const resolved = this.shapes.stateOf(node.uid);
+    const resolved = this.shapes.stateOf(node.uid, node.class_name);
     if (resolved.message) this.root.append(make("div", `console-line ${resolved.state === "error" ? "error" : "warn"}`, resolved.message));
     const status = this.views.get(node.uid)?.status;
     if (status && status.state !== "idle") this.root.append(make("div", `console-line ${status.state === "error" ? "error" : "info"}`, `last run: ${status.state}${status.text ? ` ${status.text}` : ""}${status.title ? ` -- ${status.title}` : ""}`));

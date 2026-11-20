@@ -152,6 +152,7 @@ async function boot() {
         el("ed-selection").textContent = uids.length > 1 ? `${uids.length} nodes selected` : "";
       },
       onQuickAdd: (point, event) => quick.open({ x: event.clientX, y: event.clientY }, null, "Add node"),
+      onNodeStatus: (uid) => inspector?.statusChanged(uid),
       onDropEmpty: ({ from, reverse, events, point, client }) => {
         if (events) return;
         const shape = shapes.shapeOf(doc.nodes.get(from.uid));
@@ -248,16 +249,20 @@ async function boot() {
   el("btn-arrange").addEventListener("click", arrangeAll);
 
   // A class with dynamic ports is asked for its shape when it appears, when the document is replaced,
-  // and (debounced) when one of the params it depends on changes.
+  // and (debounced) when one of the params it depends on changes. The canvas owns the first three
+  // (it creates and drops the views); settings are the graph's, so they are re-resolved here.
   const resolveAll = () => { for (const node of doc.nodes.values()) shapes.resolveNow(node); };
-  doc.on("node:add", (e) => shapes.resolveNow(doc.nodes.get(e.uid)));
-  doc.on("node:remove", (e) => shapes.forget(e.uid));
-  doc.on("node:params", (e) => {
-    const node = doc.nodes.get(e.uid);
-    if (node && shapes.dependsOn(node.class_name, e.name)) shapes.schedule(node);
-  });
   doc.on("settings", () => resolveAll());
-  doc.on("reset", resolveAll);
+  // A background tab can have its timers and requests frozen mid-resolve. Asking
+  // again for the nodes that never got an answer is what lets the card recover
+  // without a reload. Ready nodes are left alone: a resolve can be costly.
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") return;
+    for (const node of doc.nodes.values()) {
+      const { state } = shapes.stateOf(node.uid, node.class_name);
+      if (state === "error" || state === "resolving") shapes.resolveNow(node);
+    }
+  });
   doc.on("change", () => {
     el("btn-run").disabled = instance.open || !doc.nodes.size;
     memory.refreshLater();

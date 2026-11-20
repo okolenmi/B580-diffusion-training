@@ -27,7 +27,9 @@ const TYPING = /^(INPUT|TEXTAREA|SELECT)$/;
 
 export class Canvas {
   /**
-   * @param {{root: HTMLElement, doc, shapes, options: Function, note: Function, hooks?: {onSelect?, onDropEmpty?, onQuickAdd?}}} deps
+   * @param {{root: HTMLElement, doc, shapes, options: Function, note: Function,
+   *          hooks?: {onSelect?, onDropEmpty?, onQuickAdd?, onNodeStatus?}}} deps
+   *        `onNodeStatus(uid)` runs after a card's run badge changed (the Inspector reads it).
    */
   constructor({ root, doc, shapes, options, note, hooks = {} }) {
     this.root = root;
@@ -76,7 +78,7 @@ export class Canvas {
     const { doc, shapes } = this;
     doc.on("reset", () => this.rebuild());
     doc.on("node:add", (e) => { this._addView(doc.nodes.get(e.uid)); shapes.resolveNow(doc.nodes.get(e.uid)); });
-    doc.on("node:remove", (e) => { this._dropView(e.uid); shapes.forget(e.uid); this.edges.update(); });
+    doc.on("node:remove", (e) => { this._dropView(e.uid); this.edges.update(); });
     doc.on("node:move", (e) => { this.views.get(e.uid)?.place(); this._schedule(e.uid); });
     doc.on("node:title", (e) => this.views.get(e.uid)?.render());
     doc.on("node:ui", (e) => this._refresh(e.uid));
@@ -139,11 +141,14 @@ export class Canvas {
 
   _dropView(uid) {
     const view = this.views.get(uid);
-    if (!view) return;
-    this.observer?.unobserve(view.el);
-    view.el.remove();
-    this.views.delete(uid);
-    this.selection.delete(uid);
+    if (view) {
+      this.observer?.unobserve(view.el);
+      view.el.remove();
+      this.views.delete(uid);
+      this.selection.delete(uid);
+    }
+    // A reloaded document may reuse the uid; its resolved shape belongs to the old node.
+    this.shapes.forget(uid);
   }
 
   _editTitle(uid, element) {
@@ -198,11 +203,17 @@ export class Canvas {
 
   /** Shows a run result on a node (`state`: done | error | running | idle, with a short text). */
   setNodeStatus(uid, state, text = "", title = "") {
-    this.views.get(uid)?.setStatus({ state, text, title });
+    const view = this.views.get(uid);
+    if (!view) return;
+    view.setStatus({ state, text, title });
+    this.hooks.onNodeStatus?.(uid);
   }
 
   clearStatuses() {
-    for (const view of this.views.values()) view.setStatus({ state: "idle" });
+    for (const [uid, view] of this.views) {
+      view.setStatus({ state: "idle" });
+      this.hooks.onNodeStatus?.(uid);
+    }
   }
 
   /** Selects a node and brings it to the middle of the view (an issue chip names it). */

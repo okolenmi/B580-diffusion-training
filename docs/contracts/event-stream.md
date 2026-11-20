@@ -43,8 +43,9 @@ anything with `seq` at or below what the replay covered (`replayed_through`).
 | a cursor of another epoch, any `seq` | `resync_required: true`, then live |
 
 `stream_opened` carries `{type, occurred_at, resync_required, replayed_through}`. `resync_required` means "refetch the source of truth" (the
-database rows); it is about **lifecycle** events only, because a missed delta is not recoverable by refetching. `replayed_through` is the
-end of the replay (or the client's own `seq` when its epoch matched), not the id it sent.
+database rows); it is about **lifecycle** events only, because the ring does not hold a missed delta. A view that shows per-node results (the
+graph editor) re-reads its run's stored results on every (re)open instead. `replayed_through` is the end of the replay (or the client's own
+`seq` when its epoch matched), not the id it sent.
 
 The ring (`EVENT_REPLAY_RING`, 512) holds **lifecycle events only**. Nothing is persisted: a client away longer than the ring resyncs instead of
 replaying. A replayed event the client already saw is possible after a stale `Last-Event-ID`; handlers patch rows from the payload, so it is
@@ -64,7 +65,9 @@ harmless by construction.
 Unlisted kinds are lifecycle on purpose: wrongly treating an event as coalescible loses a terminal event, the other mistake costs one frame.
 
 Each client has a bounded buffer (`SSE_QUEUE_MAX`, 256). Only when it is full and nothing can be coalesced is the oldest frame dropped, whatever
-its class; every drop is counted and logged. The frontend refetches on every (re)open and the dashboard polls slowly, which closes that gap.
+its class; every drop is counted and logged. `lib/events.js` refetches the lifecycle rows when `stream_opened.resync_required` is not `false`;
+the graph editor also re-reads the run whose results are on the cards on every (re)open, and polls that run while it is active, because the
+ring never replays a `graph_execution_progressed` delta. The dashboard polls slowly. Together they close the gap.
 
 ## The schema test
 

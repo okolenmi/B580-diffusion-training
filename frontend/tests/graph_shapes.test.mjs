@@ -6,6 +6,7 @@ import { ShapeStore } from "../js/graph/shapes.js";
 const CATALOG = { nodes: [
   { class_name: "Static", inputs: [{ name: "a" }], outputs: [] },
   { class_name: "Dyn", inputs: [{ name: "file" }], outputs: [{ name: "old" }], dynamic: { depends_on: ["file"], debounce_ms: 50 } },
+  { class_name: "Dyn2", inputs: [], outputs: [{ name: "old2" }], dynamic: { depends_on: ["file"], debounce_ms: 50 } },
 ] };
 
 const fakeTimers = () => {
@@ -85,4 +86,48 @@ test("a failed request is an error state, not an exception", async () => {
   store.setCatalog(CATALOG);
   await store.resolveNow({ uid: "n_1", class_name: "Dyn", params: {} });
   assert.equal(store.stateOf("n_1").message, "offline");
+});
+
+test("a uid reused for another class does not inherit the old resolved shape", async () => {
+  const store = new ShapeStore({ resolve: async (cls) => ({ state: "ready", inputs: [], outputs: [{ name: cls }] }) });
+  store.setCatalog(CATALOG);
+  const dyn = { uid: "n_1", class_name: "Dyn", params: {} };
+  await store.resolveNow(dyn);
+  assert.equal(store.shapeOf(dyn).outputs[0].name, "Dyn");
+  const reused = { uid: "n_1", class_name: "Static" };
+  assert.deepEqual(store.shapeOf(reused).inputs, [{ name: "a" }]);
+  assert.equal(store.stateOf("n_1", "Static").state, "idle");
+  assert.equal(store.stateOf("n_1", "Dyn").state, "ready");
+  // Another dynamic class replaces the entry instead of reusing it.
+  const dyn2 = { uid: "n_1", class_name: "Dyn2", params: {} };
+  await store.resolveNow(dyn2);
+  assert.equal(store.shapeOf(dyn2).outputs[0].name, "Dyn2");
+  assert.equal(store.stateOf("n_1", "Dyn").state, "idle");
+});
+
+test("forget drops the entry, and an answer still on its way lands nowhere", async () => {
+  const answer = deferred();
+  const store = new ShapeStore({ resolve: () => answer.promise });
+  store.setCatalog(CATALOG);
+  const node = { uid: "n_1", class_name: "Dyn", params: {} };
+  const pending = store.resolveNow(node);
+  store.forget("n_1");
+  answer.resolve({ state: "ready", inputs: [], outputs: [{ name: "late" }] });
+  await pending;
+  assert.equal(store.stateOf("n_1").state, "idle");
+  assert.deepEqual(store.shapeOf(node).outputs, [{ name: "old" }]);
+});
+
+test("resolveNow cancels a pending debounce, so the node is asked once", async () => {
+  const timers = fakeTimers();
+  let calls = 0;
+  const store = new ShapeStore({ timers, resolve: async () => { calls += 1; return { state: "ready", inputs: [], outputs: [] }; } });
+  store.setCatalog(CATALOG);
+  const node = { uid: "n_1", class_name: "Dyn", params: {} };
+  store.schedule(node);
+  await store.resolveNow(node);
+  assert.equal(timers.pending(), 0);
+  timers.fire();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(calls, 1);
 });

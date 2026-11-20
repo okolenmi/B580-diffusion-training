@@ -7,7 +7,9 @@
    with `dynamic: {depends_on, debounce_ms}` is re-resolved (debounced,
    sequence-tagged, superseded answers ignored) when one of those params
    changes. States per node: ready | needs_choice | error | resolving; on
-   `error` the last good shape stays. `shape` events tell views what to patch.
+   `error` the last good shape stays. A uid reused by a reloaded document
+   starts from its new class's static ports, never the old node's answer.
+   `shape` events tell views what to patch.
    --------------------------------------------------------------------------- */
 
 const DEFAULT_DEBOUNCE_MS = 300;
@@ -51,20 +53,24 @@ export class ShapeStore {
   /** The node's ports: the last resolved shape, else the class's static ports; null for a class the catalog lacks. */
   shapeOf(node) {
     const entry = this._state.get(node.uid);
-    if (entry && entry.shape) return entry.shape;
+    if (entry && entry.class_name === node.class_name && entry.shape) return entry.shape;
     const info = this.info(node.class_name);
     return info ? ShapeStore._static(info) : null;
   }
 
-  /** `{state, info, message, focus, choices, detail}` of a node; `idle` for a node never resolved. */
-  stateOf(uid) {
+  /** `{state, info, message, focus, choices, detail}` of a node; `idle` for a node never resolved.
+   *  Pass `className` to treat a uid reused by another class as unresolved. */
+  stateOf(uid, className = null) {
     const e = this._state.get(uid);
-    return e ? { state: e.state, info: e.info, message: e.message, focus: e.focus, choices: e.choices, detail: e.detail } : { state: "idle" };
+    if (!e || (className !== null && e.class_name !== className)) return { state: "idle" };
+    return { state: e.state, info: e.info, message: e.message, focus: e.focus, choices: e.choices, detail: e.detail };
   }
 
   forget(uid) {
     const e = this._state.get(uid);
-    if (e && e.timer) this._timers.clear(e.timer);
+    if (!e) return;
+    if (e.timer) this._timers.clear(e.timer);
+    e.seq += 1; // an answer still on its way belongs to the forgotten node
     this._state.delete(uid);
   }
 
@@ -89,7 +95,7 @@ export class ShapeStore {
   schedule(node) {
     const info = this.info(node.class_name);
     if (!info || !info.dynamic) return;
-    const entry = this._entry(node.uid);
+    const entry = this._entry(node.uid, node.class_name);
     if (entry.timer) this._timers.clear(entry.timer);
     entry.state = "resolving";
     this._notify(node.uid);
@@ -99,13 +105,26 @@ export class ShapeStore {
     }, info.dynamic.debounce_ms ?? DEFAULT_DEBOUNCE_MS);
   }
 
-  _entry(uid) {
-    if (!this._state.has(uid)) this._state.set(uid, { state: "idle", shape: null, seq: 0, timer: null });
-    return this._state.get(uid);
+  /** The entry for `uid`, replaced when the uid now belongs to another class (a reloaded document). */
+  _entry(uid, className) {
+    let entry = this._state.get(uid);
+    if (!entry || entry.class_name !== className) {
+      if (entry) {
+        if (entry.timer) this._timers.clear(entry.timer);
+        entry.seq += 1; // an answer for the old class must not land on the new one
+      }
+      entry = { class_name: className, state: "idle", shape: null, seq: 0, timer: null };
+      this._state.set(uid, entry);
+    }
+    return entry;
   }
 
   async _run(node) {
-    const entry = this._entry(node.uid);
+    const entry = this._entry(node.uid, node.class_name);
+    if (entry.timer) {
+      this._timers.clear(entry.timer);
+      entry.timer = null;
+    }
     const seq = ++entry.seq;
     entry.state = "resolving";
     this._notify(node.uid);

@@ -125,7 +125,7 @@ export class NodeView {
       this.el.append(make("div", "g2-unknown", `Unknown node class ${this.node.class_name}: kept as it is, the server will report it.`));
       return;
     }
-    const resolved = this.shapes.stateOf(this.node.uid);
+    const resolved = this.shapes.stateOf(this.node.uid, this.node.class_name);
     this.el.dataset.resolve = resolved.state;
     if (layout.collapsed) {
       this._pins(shape);

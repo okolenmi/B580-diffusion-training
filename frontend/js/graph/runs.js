@@ -5,6 +5,8 @@
    (graph-json.md); the server owns everything else. A node's result shows on
    its card as `done 1.2s` / `error`, from the stored results of the run
    being looked at and from `graph_execution_progressed` while one is live.
+   The stored results are also re-read on every poll and stream (re)open:
+   a progress event is a delta, and a delta that was lost is not replayed.
    A refused start explains itself: the issue list for an invalid graph, the
    ledger's breakdown for a memory refusal.
    --------------------------------------------------------------------------- */
@@ -13,13 +15,21 @@ import { api, ApiError } from "../api.js";
 import { errText } from "../lib/errors.js";
 
 const ACTIVE = new Set(["planned", "queued", "running"]);
+const POLL_MS = 2500;
 
 const seconds = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`);
 
+/** The run whose results belong on the cards: the one looked at, else (while following) the newest one. */
+export function statusRun(items, selected, follow = true) {
+  if (selected !== null) return selected;
+  return follow ? items[0]?.execution_id ?? null : null;
+}
+
 export class Runs {
-  constructor(root, canvas, { onNote, onRunState, onIssues, onMemoryRefusal, onSelect, onOpen }) {
+  constructor(root, canvas, { onNote, onRunState, onIssues, onMemoryRefusal, onSelect, onOpen, request = api }) {
     this.root = root;
     this.canvas = canvas;
+    this._request = request;
     this.onNote = onNote;
     this.onRunState = onRunState;
     this.onIssues = onIssues;
@@ -28,26 +38,74 @@ export class Runs {
     this.onOpen = onOpen || (() => {});
     this.items = [];
     this.selected = null;
+    this._statusRun = null; // the run whose results are drawn; null when the cards show none
+    this._follow = true;    // show the newest run until the person explicitly leaves the runs
+    this._statusActive = false; // the status run was still going at the last detail read
+    this._statusFailed = false; // the last detail read failed; keep polling until one succeeds
+    this._refreshSeq = 0;
     this._timer = null;
     this._queued = false;
   }
 
-  /** After the event stream (re)opens: nothing is replayed, so the list and the open run are read again. */
+  /** After the event stream (re)opens: the list and the run whose results are drawn are read again. */
   async resync() {
     await this.refresh();
     if (this.selected !== null) await this.select(this.selected, { open: false });
   }
 
   async refresh() {
+    clearTimeout(this._timer);
+    this._timer = null;
+    const seq = ++this._refreshSeq;
+    let failed = false;
     try {
-      this.items = (await api("/graphs/executions?limit=50")).executions || [];
+      const items = (await this._request("/graphs/executions?limit=50")).executions || [];
+      if (seq !== this._refreshSeq) return; // a newer refresh owns the answer
+      this.items = items;
       this.render();
-      clearTimeout(this._timer);
-      if (this.items.some((e) => ACTIVE.has(e.status))) this._timer = setTimeout(() => this.refresh(), 2500);
-      this.onRunState(this.items.some((e) => ACTIVE.has(e.status)));
     } catch (err) {
+      if (seq !== this._refreshSeq) return;
+      failed = true;
       this.onNote(errText(err), "error");
     }
+    const wanted = statusRun(this.items, this.selected, this._follow);
+    if (wanted !== this._statusRun) {
+      this.canvas.clearStatuses();
+      this._statusRun = wanted;
+      this._statusActive = false;
+      this._statusFailed = false;
+    }
+    // A progress event is a delta and may be lost (a reconnect, a full client
+    // queue). The run row holds every result, so reading it while the run is
+    // open is what makes a missed node recover without a reload.
+    if (this._statusRun !== null) await this._syncStatuses(this._statusRun);
+    if (seq !== this._refreshSeq) return;
+    const active = this.items.some((e) => ACTIVE.has(e.status)) || this._statusActive;
+    if (active || failed || this._statusFailed) this._timer = setTimeout(() => this.refresh(), POLL_MS);
+    if (!failed) this.onRunState(active);
+  }
+
+  /** Puts a run's stored results on the cards; never clears the live badges that are already there. */
+  async _syncStatuses(id) {
+    let detail;
+    try {
+      detail = await this._request(`/graphs/executions/${id}`);
+    } catch (err) {
+      if (this._statusRun !== id) return null;
+      // One line per failure, not one per poll; the poll keeps retrying.
+      if (!this._statusFailed) this.onNote(errText(err), "error");
+      this._statusFailed = true;
+      return null;
+    }
+    if (this._statusRun !== id) return null;
+    this._statusFailed = false;
+    this._statusActive = ACTIVE.has(detail.status);
+    this._applyResults(detail);
+    return detail;
+  }
+
+  _applyResults(detail) {
+    for (const r of detail.results || []) this.canvas.setNodeStatus(r.node_id, r.ok ? "done" : "error", seconds(r.duration_ms ?? 0), r.error || "");
   }
 
   /** The run being looked at, as the status display reads it; null before the first. */
@@ -58,27 +116,47 @@ export class Runs {
   /** Look at a run: its curves and statuses follow. `open` also puts the run's own frozen graph on the canvas (an
    *  instance); a run just started from the canvas is followed without that, the canvas already is its graph. */
   async select(id, { open = false } = {}) {
+    // Clear before the fetch, not after it: progress events for the new run can
+    // arrive while the detail is on its way, and clearing afterwards wipes them.
+    if (this._statusRun !== id) this.canvas.clearStatuses();
+    this._statusRun = id;
+    this._statusActive = false;
+    this._statusFailed = false;
     this.selected = id;
+    this._follow = true;
     this.render();
     try {
-      const detail = await api(`/graphs/executions/${id}`);
+      const detail = await this._request(`/graphs/executions/${id}`);
+      if (this._statusRun !== id) return; // another run was picked meanwhile
       if (open) this.onOpen(detail);
-      this.canvas.clearStatuses();
-      for (const r of detail.results || []) this.canvas.setNodeStatus(r.node_id, r.ok ? "done" : "error", seconds(r.duration_ms), r.error || "");
+      this._statusActive = ACTIVE.has(detail.status);
+      this._applyResults(detail);
       if (detail.error) this.onNote(`Run #${id}: ${detail.error}`, "error");
-      this.onSelect(id, ACTIVE.has(detail.status));
+      this.onSelect(id, this._statusActive);
     } catch (err) {
       this.onNote(errText(err), "error");
+      if (this._statusRun === id) {
+        this._statusFailed = true; // the poll retries the read
+        if (!this._timer) this._timer = setTimeout(() => this.refresh(), POLL_MS);
+      }
     }
   }
 
   /** `mode`: what to do when the card has no room -- "auto" plans the run, "parallel" refuses, "queue" waits its turn. */
   async run(graph, mode = "auto", name = null) {
     try {
-      const exec = await api("/graphs/run", { method: "POST", body: { graph, mode, name } });
+      const exec = await this._request("/graphs/run", { method: "POST", body: { graph, mode, name } });
+      // The new run's cards start clean; `refresh` then reads its stored
+      // results and keeps the poll going while it is active.
+      this.selected = exec.execution_id;
+      this._statusRun = exec.execution_id;
+      this._statusActive = ACTIVE.has(exec.status);
+      this._statusFailed = false;
+      this._follow = true;
       this.canvas.clearStatuses();
+      this.render();
       await this.refresh();
-      this.select(exec.execution_id);
+      this.onSelect(exec.execution_id, this._statusActive);
       this.onNote(exec.status === "planned" ? `Run #${exec.execution_id} planned: it starts when there is room.` : `Run #${exec.execution_id} started.`, "success");
       return exec;
     } catch (err) {
@@ -101,16 +179,20 @@ export class Runs {
     const answer = window.prompt(`Name for run #${item.execution_id} (empty clears it)`, item.name || "");
     if (answer === null) return;
     try {
-      await api(`/graphs/executions/${item.execution_id}`, { method: "PATCH", body: { name: answer } });
+      await this._request(`/graphs/executions/${item.execution_id}`, { method: "PATCH", body: { name: answer } });
       await this.refresh();
     } catch (err) {
       this.onNote(errText(err), "error");
     }
   }
 
-  /** Stop looking at any run: the canvas goes back to the live streams. */
+  /** Stop looking at any run: the canvas goes back to the live streams and the cards show no results. */
   deselect() {
     this.selected = null;
+    this._follow = false;
+    this._statusRun = null;
+    this._statusActive = false;
+    this._statusFailed = false;
     this.render();
     this.canvas.clearStatuses();
     this.onSelect(null, false);
@@ -121,7 +203,7 @@ export class Runs {
     const target = id ?? stopTarget(this.items, this.selected);
     if (target === null) return this.onNote("No active run to stop.", "warn");
     try {
-      const exec = await api(`/graphs/executions/${target}/stop`, { method: "POST" });
+      const exec = await this._request(`/graphs/executions/${target}/stop`, { method: "POST" });
       this.onNote(`Run #${exec.execution_id} stopped.`, "warn");
       await this.refresh();
     } catch (err) {
@@ -132,9 +214,13 @@ export class Runs {
   async wipe() {
     if (!window.confirm("Delete all run history?")) return;
     try {
-      const res = await api("/graphs/executions", { method: "DELETE" });
+      const res = await this._request("/graphs/executions", { method: "DELETE" });
       this.canvas.clearStatuses();
       this.selected = null;
+      this._statusRun = null;
+      this._statusActive = false;
+      this._statusFailed = false;
+      this._follow = true;
       this.onNote(`Deleted ${res.deleted} run(s).`, "warn");
       await this.refresh();
     } catch (err) {
@@ -142,11 +228,29 @@ export class Runs {
     }
   }
 
-  /** Feed parsed `/events` messages here; everything but graph runs is ignored. */
+  /** Feed parsed `/events` messages here; everything but stream (re)opens and graph runs is ignored. */
   onEvent(ev) {
-    if (!ev || typeof ev.type !== "string" || !ev.type.startsWith("graph_execution")) return;
-    if (ev.type === "graph_execution_progressed" && ev.execution_id === this.selected) {
-      this.canvas.setNodeStatus(ev.node_id, ev.ok ? "done" : "error", seconds(ev.duration_ms || 0));
+    if (!ev || typeof ev.type !== "string") return;
+    if (ev.type === "stream_opened") {
+      // Progress is a delta and is not replayed. The server says "no resync"
+      // when lifecycle events covered the gap, but node results were still
+      // lost, so the run on the cards is read again either way.
+      if (ev.resync_required === false) this.resync();
+      return;
+    }
+    if (!ev.type.startsWith("graph_execution")) return;
+    if (ev.type === "graph_execution_progressed") {
+      if (this.selected === null && this._follow && ev.execution_id !== this._statusRun) {
+        // Following the newest run without having picked one: adopt it now
+        // rather than waiting for the next poll.
+        this.canvas.clearStatuses();
+        this._statusRun = ev.execution_id;
+        this._statusActive = true;
+        this._statusFailed = false;
+      }
+      if (ev.execution_id === this._statusRun) {
+        this.canvas.setNodeStatus(ev.node_id, ev.ok ? "done" : "error", seconds(ev.duration_ms || 0), ev.error || "");
+      }
       return;
     }
     if (ev.type === "graph_execution_failed" && ev.error) this.onNote(`Run #${ev.execution_id} failed: ${ev.error}`, "error");

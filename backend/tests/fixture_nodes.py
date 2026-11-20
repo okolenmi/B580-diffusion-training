@@ -128,12 +128,14 @@ class WidgetNode(Node):
     MODULES = (
         DisplayModule(name="loss", kind="chart", title="Loss", scale="symlog", series=(Series("loss", "loss", "#6c8cff"),)),
         DisplayModule(name="progress", kind="progress", title="Progress", value_key="step", total_key="total_steps"),
+        DisplayModule(name="status", kind="line", title="Status", value_key="status"),
+        DisplayModule(name="result", kind="result", title="Result", series=(Series("step", "steps done"), Series("loss", "last loss"))),
     )
 
     def build(self, **inputs):
         steps = inputs["steps"]
         for i in range(steps):
-            self.context.report(f"node:{self.uid}", {"step": i + 1, "total_steps": steps, "loss": 1.0 / (i + 1)})
+            self.context.report(f"node:{self.uid}", {"step": i + 1, "total_steps": steps, "loss": 1.0 / (i + 1), "status": f"step {i + 1} of {steps}"})
         return {"done": steps}
 
 

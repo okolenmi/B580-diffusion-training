@@ -397,11 +397,12 @@ export function patchBlock(doc, id, patch) {
  * in the tray.
  */
 export function autoFill(modules, columns = 12, { maxFields = 16 } = {}) {
-  const narrow = columns < 8;
-  const leftW = narrow ? columns : Math.max(3, Math.round(columns / 3));
-  const rightW = narrow ? columns : columns - leftW;
-  const rightX = narrow ? 0 : leftW;
+  const { fieldRefs, displayRefs } = draftRefs(modules, maxFields);
+  return placeRefs(fieldRefs, displayRefs, modules, columns, { next: 1, fields: true });
+}
 
+/** What a draft offers: the settable fields worth showing and every live view, in the order the graph's nodes come. */
+function draftRefs(modules, maxFields) {
   const fieldRefs = [];
   const graphBudget = (modules.graph_fields || []).find((f) => f.name === "memory.vram_max_mb");
   if (graphBudget) fieldRefs.push(graphRef("field", graphBudget.name));
@@ -429,31 +430,59 @@ export function autoFill(modules, columns = 12, { maxFields = 16 } = {}) {
     if (!node.known) continue;
     for (const d of node.displays) displayRefs.push(nodeRef(node.id, "display", d.name));
   }
-  if ((modules.graph_displays || []).some((d) => d.name === "memory")) {
-    displayRefs.push(graphRef("display", "memory"));
+  for (const name of ["memory", "history", "queue"]) {
+    if ((modules.graph_displays || []).some((d) => d.name === name)) displayRefs.push(graphRef("display", name));
   }
+  return { fieldRefs, displayRefs };
+}
 
+/** Fields stacked on the left (when `fields`), views on the right (the whole width without fields); `at.next` numbers the ids so tabs share them. */
+function placeRefs(fieldRefs, displayRefs, modules, columns, at) {
+  const narrow = columns < 8;
+  const leftW = narrow ? columns : Math.max(3, Math.round(columns / 3));
+  const rightW = narrow || !at.fields ? columns : columns - leftW;
+  const rightX = narrow || !at.fields ? 0 : leftW;
   const blocks = [];
+  const add = (ref, x, y, w, h) => {
+    blocks.push({ id: `b${at.next++}`, ref, x, y, w, h, collapsed: false, title: null, options: {} });
+    return h;
+  };
   let yLeft = 0;
-  for (const ref of fieldRefs) {
-    const [, h] = defaultSize(ref, modules, columns);
-    blocks.push({
-      id: `b${blocks.length + 1}`, ref, x: 0, y: yLeft, w: leftW, h,
-      collapsed: false, title: null, options: {},
-    });
-    yLeft += h;
-  }
+  for (const ref of fieldRefs) yLeft += add(ref, 0, yLeft, leftW, defaultSize(ref, modules, columns)[1]);
   let yRight = narrow ? yLeft : 0;
   for (const ref of displayRefs) {
     const [w, h] = defaultSize(ref, modules, columns);
-    const bw = Math.min(w, rightW);
-    blocks.push({
-      id: `b${blocks.length + 1}`, ref, x: rightX, y: yRight, w: bw, h,
-      collapsed: false, title: null, options: {},
-    });
-    yRight += h;
+    yRight += add(ref, rightX, yRight, Math.min(w, rightW), h);
   }
   return resolve(blocks, columns);
+}
+
+const WATCHED_KINDS = new Set(["chart", "bars", "scalar"]);
+const RUN_LIST_KINDS = new Set(["history", "queue"]);
+
+/**
+ * The page a new app starts with: the same cards as `autoFill`, sorted into tabs so a training app is not one long heap --
+ * Run (inputs, buttons, status, results), Charts (everything plotted), Runs (history and queue). A tab with nothing for it is left out,
+ * and a graph that offers only one is a single tab as before.
+ */
+export function autoPage(modules, columns = 12, { maxFields = 16 } = {}) {
+  const { fieldRefs, displayRefs } = draftRefs(modules, maxFields);
+  const kindOf = (ref) => {
+    const { descriptor } = findTarget(ref, modules);
+    return ref.kind === "action" ? "action" : (descriptor && descriptor.kind) || "";
+  };
+  const groups = { run: [], charts: [], runs: [] };
+  for (const ref of displayRefs) {
+    const kind = kindOf(ref);
+    groups[WATCHED_KINDS.has(kind) ? "charts" : RUN_LIST_KINDS.has(kind) ? "runs" : "run"].push(ref);
+  }
+  const at = { next: 1, fields: true };
+  const tabs = [{ id: "run", title: "Run", blocks: placeRefs(fieldRefs, groups.run, modules, columns, at) }];
+  at.fields = false;
+  if (groups.charts.length) tabs.push({ id: "charts", title: "Charts", blocks: placeRefs([], groups.charts, modules, columns, at) });
+  if (groups.runs.length) tabs.push({ id: "runs", title: "Runs", blocks: placeRefs([], groups.runs, modules, columns, at) });
+  if (tabs.length === 1) tabs[0] = { id: "main", title: "Main", blocks: tabs[0].blocks };
+  return tabs;
 }
 
 /* ---- values: the draft graph is where a field's value lives ------------- */
@@ -524,6 +553,23 @@ export function valuesPayload(doc, statuses = {}) {
   if (Object.keys(nodes).length) out.nodes = nodes;
   if (Object.keys(memory).length) out.memory = memory;
   return out;
+}
+
+/**
+ * Put a past run's `values` (the shape `valuesPayload` sent) back into the draft, for every field card the page still has:
+ * a `null` clears the parameter, a key the run did not record is left alone (it was wired, or the card is newer than the run).
+ * Returns how many fields changed.
+ */
+export function applyValues(doc, values) {
+  let changed = 0;
+  for (const b of leafCards(doc.blocks)) {
+    if (b.ref.kind !== "field") continue;
+    const bag = b.ref.scope === "graph" ? values.memory : values.nodes && values.nodes[b.ref.node];
+    const key = b.ref.scope === "graph" ? b.ref.name.split(".", 2)[1] : b.ref.name;
+    if (!bag || !Object.hasOwn(bag, key)) continue;
+    if (setFieldValue(doc, b.ref, bag[key])) changed++;
+  }
+  return changed;
 }
 
 /* ---- dirty detection ----------------------------------------------------- */

@@ -191,5 +191,13 @@ Open an app made from the image starter (item 97) in `/apps/<name>`, *Edit*: add
 ## 99. Save now during training (about 10 minutes, needs a graph with a Save Adapter)
 Make an app from a training graph that has a Save Adapter (the new page has a *Save now* button; the trainer has a new `checkpoint` output you do not need to wire). Run it with a save interval far beyond the step count, wait for a few steps, press *Save now*: the line under the button should go Sent… then Done, and a `<name>_step<N>` adapter file should appear in the saver's folder within a step or two (not after the run). Then (1) press it twice in a row: two files at two steps; (2) on a graph without a Save Adapter the button is disabled and says what to add; (3) start a run, restart the server while it trains, reload the app page and press *Save now* again: it must still work (the inbox is a folder next to the run's event file); (4) press it after the run ended: disabled. Report the delay between press and file, and anything the trainer did differently after a save (loss spike, slower step).
 
+## 100. Training app: status, results, history and queue (about 15 minutes, a real training graph)
+Make an app from the SDXL LoRA starter (Apps, new, pick the graph): the first page has three tabs, *Run*, *Charts*, *Runs*. Run a few steps and watch:
+1. *Run*: the trainer's *Status* line goes Preparing, then `Training · step N of M · x s/step`, then `Finished at step N`; *Saved* shows the newest adapter file and how many were written; *Model* (Load Model) says what the checkpoint was split into; *Result* keeps the last step and loss after the run ends.
+2. *Runs*: the finished run is listed with the values it was given. Change the learning rate or the step count on *Run*, run again, then press *Run again* on the first row: the page must show the first run's values again (nothing starts). Report values that do not come back.
+3. While a run trains, press *Add to queue*: the second run shows under *Waiting runs* (numbered). Cancel one of two: it disappears and shows as stopped in the history. Let one start by itself when the first ends (needs memory to be free): the page should switch to following it without a reload.
+4. Stop a training mid-run, then look at *Runs*: stopped, with the values; an error run shows its message in red.
+Report anything that blanks, jumps or lags in the cards, and any status sentence that stays stale after the run ends.
+
 ## Reading a bundle automatically
 `python -m accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m perf hwcheck` without running anything.

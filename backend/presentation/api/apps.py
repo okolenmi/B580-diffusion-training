@@ -88,6 +88,7 @@ def run_app(name: str, body: AppRunIn, apps: AppServices = Depends(apps_of)):
         apps.run.execute(
             name, body.values,
             memory_overrides=body.memory_overrides.as_overrides() if body.memory_overrides else None,
+            mode=body.mode,
         )
     )
 

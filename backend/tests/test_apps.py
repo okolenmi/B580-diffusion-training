@@ -12,6 +12,7 @@ What this covers (all on fixture nodes; nothing here touches a GPU):
   H  the HTTP API end to end: app CRUD and versions, diff, boards, run and the origin it records
   I  artifacts: the pictures a run leaves for a page are served, nothing else is
   J  actions: a page's "save now" reaches a running node through the command inbox and is answered
+  K  an app's runs: the list filtered by app (the history card), a run queued behind a live one (the queue card) and cancelled
 
 Run directly: python backend/tests/test_apps.py
 """
@@ -21,6 +22,7 @@ from __future__ import annotations
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -80,7 +82,8 @@ check(steps["label"] == "Steps" and steps["group"] == "run" and steps["unit"] ==
       and (steps["minimum"], steps["maximum"], steps["step"]) == (1, 100, 1),
       "port hints reach the catalog")
 check(next(p for p in w["inputs"] if p["name"] == "tag")["advanced"] is True, "advanced reaches the catalog")
-check([m["name"] for m in w["modules"]] == ["loss", "progress"], "modules reach the catalog as dicts")
+check([m["name"] for m in w["modules"]] == ["loss", "progress", "status", "result"], "modules reach the catalog as dicts")
+check([m["kind"] for m in w["modules"]][2:] == ["line", "result"], "a sentence and a result are module kinds the catalog carries")
 check(snap["SumNode"]["modules"] == [], "a node with no live views has none")
 
 # ==========================================================================
@@ -209,7 +212,7 @@ check(wfields["tag"]["has_value"] is False, "an unset param says so")
 sfields = {f["name"]: f for f in by_id[SU]["fields"]}
 check(sfields["a"]["wired"] is True and sfields["b"]["wired"] is False,
       "a port fed by an edge is flagged wired")
-check([d["name"] for d in by_id[W1]["displays"]] == ["loss", "progress"], "displays listed")
+check([d["name"] for d in by_id[W1]["displays"]] == ["loss", "progress", "status", "result"], "displays listed")
 check(by_id[W1]["displays"][0]["stream"] == node_stream_id(W1) == f"node:{W1}",
       "each display carries its stream")
 check(by_id[GHOST]["known"] is False and by_id[GHOST]["fields"] == [], "an unknown class is kept, marked")
@@ -324,7 +327,7 @@ out = ContractGraphRuntime(registry(), reporter=_EventReporter(writer), releaser
 widget_frames = [frame for stream, frame in writer.frames if stream == f"node:{W1}"]
 check(out.error is None and [f["step"] for f in widget_frames] == [1, 2, 3],
       f"a node with live views reports on node:<uid> (got {out.error}, {widget_frames})")
-check(widget_frames[0] == {"step": 1, "total_steps": 3, "loss": 1.0}, "the node's own dict is the frame")
+check(widget_frames[0] == {"step": 1, "total_steps": 3, "loss": 1.0, "status": "step 1 of 3"}, "the node's own dict is the frame")
 
 sup = GraphExecutionSupervisor.__new__(GraphExecutionSupervisor)
 bus = RecordingMonitorBus()
@@ -520,5 +523,42 @@ check(status_ == 409 and body["error"]["code"] == "action_unavailable" and "list
       f"with nothing to act on it the action is refused and says what to add (got {status_} {body})")
 asgi_request(app, f"/api/v1/graphs/executions/{lone}/stop", method="POST")
 wait_until(lambda: asgi_request(app, f"/api/v1/graphs/executions/{lone}")[2].get("status") in ("stopped", "finished", "error"), timeout=30)
+
+# ==========================================================================
+# K. an app's runs
+# ==========================================================================
+print("-- K: an app's runs --")
+status_, _, body = asgi_request(app, "/api/v1/graphs/executions?app=sum")
+mine = body.get("executions", [])
+check(status_ == 200 and [r["execution_id"] for r in mine] == [eid], f"the list can be limited to the runs one app started (got {status_} {mine})")
+check(asgi_request(app, "/api/v1/graphs/executions?app=nope")[2].get("executions") == [], "an app that never ran has an empty history")
+check(any(r["origin"] is None for r in asgi_request(app, "/api/v1/graphs/executions")[2]["executions"]), "without the filter runs from the editor are listed too")
+status_, _, body = asgi_request(app, f"{API}/sum/run", method="POST", json_body={"values": {}, "mode": "sideways"})
+check(status_ == 422, f"an unknown run mode is refused (got {status_})")
+
+def start_live() -> int:
+    """A run that is running now: the previous one gives its memory back a moment after it ends, so a start can be planned first."""
+    for _ in range(40):
+        _, _, started = asgi_request(app, "/api/v1/graphs/run", method="POST", json_body={"graph": LONE})
+        if started["status"] != "planned":
+            return started["execution_id"]
+        asgi_request(app, f"/api/v1/graphs/executions/{started['execution_id']}/stop", method="POST")
+        time.sleep(0.25)
+    return started["execution_id"]
+
+
+busy = start_live()
+check(wait_until(lambda: asgi_request(app, f"/api/v1/graphs/executions/{busy}")[2].get("status") == "running", timeout=30), "a run is live")
+status_, _, body = asgi_request(app, f"{API}/sum/run", method="POST", json_body={"values": {"nodes": {S: {"b": 5.0}}}, "mode": "queue"})
+waiting = body.get("execution_id")
+check(status_ == 201 and body["status"] == "planned" and body["origin"]["app"] == "sum",
+      f"a run queued behind a live one waits, and remembers where it came from (got {status_} {body.get('status')})")
+rows = asgi_request(app, "/api/v1/graphs/executions?app=sum")[2]["executions"]
+check(rows[0]["execution_id"] == waiting and rows[0]["origin"]["values"] == {"nodes": {S: {"b": 5.0}}},
+      "the history lists it newest first with the values it was asked for (what Run again puts back)")
+status_, _, body = asgi_request(app, f"/api/v1/graphs/executions/{waiting}/stop", method="POST")
+check(status_ == 200 and asgi_request(app, f"/api/v1/graphs/executions/{waiting}")[2]["status"] == "stopped", f"a waiting run is cancelled like a running one is stopped (got {status_})")
+asgi_request(app, f"/api/v1/graphs/executions/{busy}/stop", method="POST")
+wait_until(lambda: asgi_request(app, f"/api/v1/graphs/executions/{busy}")[2].get("status") in ("stopped", "finished", "error"), timeout=30)
 
 finish()

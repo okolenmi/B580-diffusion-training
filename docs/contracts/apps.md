@@ -65,6 +65,30 @@ the run is `running`. Pressing it calls `POST /api/v1/graphs/executions/{id}/act
 The node's answers come back as frames `{kind: "action", id, action, status: queued | delivered | rejected | failed, detail}` on `node:<uid>`, which the card shows.
 The draft builder puts every available action on a new page. How a command reaches the run: `events.md` (Commands).
 
+## Status, results and runs
+
+Two more display kinds read what a node reports, kept by the page's stream state (the newest value of each key, so a frame that lacks it does not blank it):
+
+* `line` (`DisplayModule(kind="line", value_key=...)`): one live sentence. The trainer says what it is doing (`Preparing...`, `Training · step N of M · x s/step`,
+  `Finished at step N of M`), Save Adapter the file it wrote last, Load Model what it split the checkpoint into.
+* `result` (`DisplayModule(kind="result", series=(Series(key, label, unit), ...))`): the newest value of each named key as a small list, text as it came: where
+  the trainer got to (step, total, last loss) and the newest adapter file with how many were written.
+
+A node reports a sentence as a key of an ordinary frame on `node:<uid>` (`{step, status: "..."}`); a frame must carry `step` for the stream reader to keep it.
+
+Two graph displays are about runs, not a node, and read persisted state the page polls (`GET /api/v1/graphs/executions`), not a stream:
+
+* `history` (graph display): the runs this app started, newest first (`?app=<name>` limits the list to runs whose origin is that app). Each row has the status,
+  time, duration and the first values it was given; **Run again** puts the run's recorded `origin.values` back on the page (only for cards the page still has;
+  `null` clears, a key the run did not record is left alone). It does not start anything.
+* `queue` (graph display): runs waiting for memory (`planned`), in the order they will start, each with **Cancel** (`POST /graphs/executions/{id}/stop`).
+
+The page's **Add to queue** button runs with `mode: "queue"` (`POST /apps/{name}/run`), which waits behind whatever lives or waits instead of starting beside it.
+When the run the page follows has ended and the next run of the app has started, the page follows that one.
+
+The draft builder (`autoPage`) sorts a new app into tabs: **Run** (inputs, action buttons, run status, sentences, results, progress, images), **Charts** (charts,
+bars, scalars, memory) and **Runs** (history, queue); a tab nothing belongs on is left out.
+
 ## REST
 
 | Route | |
@@ -74,7 +98,7 @@ The draft builder puts every available action on a new page. How a command reach
 | `GET /api/v1/apps/{name}` | one app with `doc`, `version`, `graph_hash`; 404 `app_not_found` |
 | `DELETE /api/v1/apps/{name}` | `{deleted: true}`; 404 |
 | `POST /api/v1/apps/{name}/diff` | body `{graph}`: `{added, removed, changed, wiring_changed, settings_changed, orphaned_cards, new_version}`; a pure read, the review before "update from graph" |
-| `POST /api/v1/apps/{name}/run` | body `{values, memory_overrides?}`: 201 execution summary; 422 `app_invalid` / `graph_invalid`, 409 `graph_execution_active` / `memory_unavailable` |
+| `POST /api/v1/apps/{name}/run` | body `{values, memory_overrides?, mode?}` (`auto` default, `parallel`, `queue`): 201 execution summary; 422 `app_invalid` / `graph_invalid`, 409 `graph_execution_active` / `memory_unavailable` |
 | `POST /api/v1/boards/modules` | body `{graph}`: per node its fields and live displays, and the graph's own: what a card can bind to |
 | `POST /api/v1/boards/resolve` | body `{doc, graph?}` (an App document, or a flat board with the graph beside it): per card `ok`, `wired`, `missing_node`, `missing_module`, `unknown_class`, plus the graph's validation issues; 422 `board_invalid` |
 

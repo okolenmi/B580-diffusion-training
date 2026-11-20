@@ -117,6 +117,9 @@ class DiffusionTrainerNode(Node):
                       series=(Series("loss_t_low", "t low", "#4caf50"), Series("loss_t_mid", "t mid", "#ffb300"), Series("loss_t_high", "t high", "#ff5252"))),
         DisplayModule("timing", "chart", "Step phases", size=(12, 5), pattern="*_ms", exclude=("step_ms",),
                       doc="Milliseconds per phase of the step (present with `timing` on)."),
+        DisplayModule("status", "line", "Status", value_key="status", size=(12, 1), doc="What the trainer is doing, in one sentence."),
+        DisplayModule("result", "result", "Result", size=(4, 3), series=(Series("step", "steps done"), Series("total", "of"), Series("loss", "last loss")),
+                      doc="Where training got to: the latest step, the planned total and the last loss."),
     )
     EVENTS_IN = {"save_now": EventIn(SaveRequested, handler="on_save_now", label="Save now",
                                      doc="Ask for a checkpoint after the current step (a page's \"Save now\" button sends it).")}
@@ -130,10 +133,15 @@ class DiffusionTrainerNode(Node):
         """The event for wired nodes, and the flat per-step report the monitor boards draw (`step`, `total`, then the metrics).
         Commands a page posted meanwhile are delivered here, between two steps, where the weights are consistent."""
         self._step = event.step
-        self.context.report(f"node:{self.uid}", {"step": event.step, "total": event.total, **event.metrics})
+        rate = event.metrics.get("step_ms")
+        status = f"Training · step {event.step} of {event.total}" + (f" · {rate / 1000:.1f} s/step" if isinstance(rate, (int, float)) else "")
+        self.context.report(f"node:{self.uid}", {"step": event.step, "total": event.total, **event.metrics, "status": status})
         self.emit("step_finished", event)
         if self.context.events is not None:
             self.context.events.drain()
+
+    def _status(self, step: int, text: str) -> None:
+        self.context.report(f"node:{self.uid}", {"step": step, "status": text})
 
     def on_save_now(self, event: SaveRequested, ctx) -> None:
         self.emit("checkpoint", CheckpointDue(self._step, event.reason))
@@ -141,6 +149,7 @@ class DiffusionTrainerNode(Node):
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
         self._step = 0
+        self._status(inputs.get("start_step") or 0, "Preparing: loading data and building the step")
         self.listen_now()
         model: TrainableDenoiser = inputs["model"]
         accelerator = Accelerator(model.device)
@@ -177,7 +186,9 @@ class DiffusionTrainerNode(Node):
             model.info = {**model.info, "cleaner": trainer.clean_summary}
         if trainer.init_summary:
             model.info = {**model.info, "aligned_init": trainer.init_summary}
-        self.emit("ended", CheckpointDue(start + result.steps_done, "stopped" if result.stopped else "finished"))
+        final = start + result.steps_done
+        self._status(final, f"{'Stopped' if result.stopped else 'Finished'} at step {final} of {result.total}")
+        self.emit("ended", CheckpointDue(final, "stopped" if result.stopped else "finished"))
         if result.stopped:
             self.report_completion(Completion.unfinished_at(start + result.steps_done, result.total))
         return {"model": model}

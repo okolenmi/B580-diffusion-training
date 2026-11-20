@@ -127,6 +127,22 @@ GRAPH_DISPLAYS: tuple[dict[str, Any], ...] = (
         "size": [6, 3],
     },
     {
+        "name": "history",
+        "kind": "history",
+        "title": "Runs of this app",
+        "source": "executions",
+        "doc": "The runs this app started, newest first; Run again puts a run's values back on the page.",
+        "size": [12, 5],
+    },
+    {
+        "name": "queue",
+        "kind": "queue",
+        "title": "Waiting runs",
+        "source": "executions",
+        "doc": "Runs waiting for memory, in the order they will start; each can be cancelled.",
+        "size": [6, 3],
+    },
+    {
         "name": "memory",
         "kind": "chart",
         "title": "Device memory",

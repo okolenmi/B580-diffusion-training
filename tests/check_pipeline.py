@@ -96,7 +96,10 @@ def full_run():
         check(len(printed.getvalue().strip().splitlines()) == len(graph(tmp, steps=4).nodes), "the command line reports every finished node")
         check(validation.ok, f"the graph validates ({[i.message for i in validation.errors][:2]})")
         check(outcome.ok and not outcome.stopped, f"the run finishes ({outcome.error})")
-        flat = [f for st, f in trace.frames if st.startswith("node:") and "step" in f and "kind" not in f]
+        flat = [f for st, f in trace.frames if st.startswith("node:") and "step" in f and "kind" not in f and "loss" in f]
+        said = [f["status"] for st, f in trace.frames if st.startswith("node:") and "status" in f and not f["status"].startswith("Saved")]
+        check(said[0].startswith("Preparing") and said[-1].startswith("Finished at step 4 of 4") and any(t.startswith("Training · step 2 of 4") for t in said),
+              f"the trainer keeps its status line: preparing, training, finished ({said[:1]} ... {said[-1:]})")
         check(len(flat) == 4 and [f["step"] for f in flat] == [1, 2, 3, 4] and all(f["total"] == 4 and "loss" in f and "lr" in f for f in flat),
               f"the trainer reports one flat frame per step on its own stream, the shape the monitor boards read ({len(flat)} frames)")
         saved = sorted(p.name for p in (tmp / "out").glob("*.safetensors"))

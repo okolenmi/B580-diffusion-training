@@ -336,6 +336,17 @@ def named_tasks():
     ExecutionContext().task("quiet").__enter__()  # a context without a reporter ignores tasks
 
 
+def displays():
+    """The sentence and result kinds name what they read; without it the declaration is refused."""
+    from graph import DisplayModule, Series
+
+    raises(ValueError, lambda: DisplayModule("s", "line", "S"), "a line needs the key that holds its sentence", "value_key")
+    raises(ValueError, lambda: DisplayModule("r", "result", "R"), "a result needs the keys it lists", "Series")
+    line = DisplayModule("s", "line", "S", value_key="status")
+    result = DisplayModule("r", "result", "R", series=(Series("step", "step"),))
+    check(line.as_dict()["value_key"] == "status" and result.as_dict()["series"][0]["key"] == "step", "both reach the catalog as dicts")
+
+
 def actions():
     """A page's command reaches a running node between its steps and is answered; declarations are checked; nothing a page sends
     can choose the event."""
@@ -392,4 +403,4 @@ def actions():
 
 
 if __name__ == "__main__":
-    run(declarations, document, validation, running, events, settings_checks, dynamic_and_catalog, named_tasks, actions)
+    run(declarations, document, validation, running, events, settings_checks, dynamic_and_catalog, named_tasks, displays, actions)

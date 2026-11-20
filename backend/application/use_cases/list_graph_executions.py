@@ -21,11 +21,11 @@ class ListGraphExecutions:
     def __init__(self, executions: GraphExecutionRepository) -> None:
         self._executions = executions
 
-    def execute(self, *, limit: int = DEFAULT_LIMIT) -> ExecutionListResult:
+    def execute(self, *, limit: int = DEFAULT_LIMIT, app: str | None = None) -> ExecutionListResult:
         if not 1 <= limit <= MAX_LIMIT:
             raise InvalidQueryError(
                 f"limit must be between 1 and {MAX_LIMIT}, got {limit}"
             )
-        found = self._executions.list_executions(limit=limit)
+        found = self._executions.list_executions(limit=limit, app=app)
         summaries = tuple(to_execution_summary_dto(item) for item in found)
         return ExecutionListResult(executions=summaries, count=len(summaries))

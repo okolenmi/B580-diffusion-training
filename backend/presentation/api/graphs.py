@@ -133,10 +133,11 @@ def run_graph(
 @router.get("/executions", response_model=ExecutionListOut)
 def list_executions(
     limit: int = Query(DEFAULT_EXECUTION_PAGE_SIZE),
+    app: str | None = Query(None, description="only runs an App started (its history card)"),
     services: ApplicationServices = Depends(get_services),
 ):
     """Newest-first page; ``limit`` must be 1..500 (else 422)."""
-    return execution_list_out(services.graphs.list_executions.execute(limit=limit))
+    return execution_list_out(services.graphs.list_executions.execute(limit=limit, app=app))
 
 
 @router.delete("/executions", response_model=DeleteExecutionsOut)

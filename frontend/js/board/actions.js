@@ -99,6 +99,9 @@ export class ActionCard {
     }
   }
 
+  /** Nothing to release (the board owns the stream); a board drops every card it built when its tab is left. */
+  destroy() {}
+
   update() {
     const { descriptor } = this;
     const running = this._running;

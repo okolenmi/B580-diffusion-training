@@ -13,7 +13,7 @@ from families.api.detection import Detection
 from families.api.library import SCOPES
 from families.api.parts import ROLE_CLASSES, ROLE_LABELS, make_part
 from families.registry import FAMILY_IDS, detect_file
-from graph import DynamicShape, Environment, Node, Port, Resolution
+from graph import DisplayModule, DynamicShape, Environment, Node, Port, Resolution
 
 _SERVICE = "models"
 _DTYPES = ("auto", "bf16", "fp16", "fp32")
@@ -67,6 +67,7 @@ class LoadModelNode(Node):
                       doc="Requested compute dtype. auto follows the graph setting, then the file."),
     }
     OUTPUTS: dict[str, Port] = {}
+    MODULES = (DisplayModule("status", "line", "Model", value_key="status", size=(12, 1), doc="The model file and the parts it was split into."),)
     POSSIBLE_OUTPUTS = {role: Port(role, cls, label=ROLE_LABELS[role]) for role, cls in ROLE_CLASSES.items()}
 
     @classmethod
@@ -103,4 +104,5 @@ class LoadModelNode(Node):
         library = env.service(_SERVICE)
         path = str(library.resolve(inputs.get("scope") or "checkpoints", inputs["file"]))
         dtype = inputs.get("dtype") or "auto"
+        self.context.report(f"node:{self.uid}", {"step": 0, "status": detection.summary()})
         return {p.role: make_part(detection.family_id, path, p, dtype) for p in detection.parts}

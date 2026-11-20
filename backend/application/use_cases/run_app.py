@@ -23,7 +23,7 @@ class RunApp:
         self._start = start
 
     def execute(
-        self, name: str, values: dict | None = None, *, memory_overrides: dict | None = None
+        self, name: str, values: dict | None = None, *, memory_overrides: dict | None = None, mode: str = "auto"
     ) -> GraphExecutionSummaryDTO:
         try:
             clean = normalize_app_name(name)
@@ -40,4 +40,4 @@ class RunApp:
         if problems:
             raise AppInvalidError(f"{len(problems)} value(s) refused", details=problems)
         origin = {"app": saved.name, "version": saved.version, "values": values or {}}
-        return self._start.execute(graph, memory_overrides=memory_overrides, origin=origin)
+        return self._start.execute(graph, memory_overrides=memory_overrides, mode=mode, origin=origin)

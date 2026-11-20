@@ -92,6 +92,8 @@ streams until the server restarts; a finished run's curves come from `/execution
 with `{"name": ...}` sets or clears it in any status (404 for an unknown run). It is outside the lifecycle: a rename never races a status change.
 The editor sends the Library name box as the name of a started run and renames on a double-click in the Runs list.
 
+`GET /graphs/executions?limit=<1..500>&app=<name>` lists newest first; `app` keeps only runs whose `origin.app` is that name (an App's history).
+
 ## Memory of a run
 
 `GET /graphs/executions/{id}` carries a `memory` block (null for rows older than the columns): the effective settings, `demand_mb` with

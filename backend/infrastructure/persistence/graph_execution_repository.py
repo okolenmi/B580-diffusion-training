@@ -163,12 +163,12 @@ class SqliteGraphExecutionRepository(GraphExecutionRepository):
             ).fetchone()
         return _row_to_execution(row) if row else None
 
-    def list_executions(self, *, limit: int = 50) -> list[GraphExecution]:
+    def list_executions(self, *, limit: int = 50, app: str | None = None) -> list[GraphExecution]:
+        where, args = ("", ()) if app is None else ("WHERE json_extract(origin_json, '$.app') = ? ", (app,))
         with self._db.connection() as conn:
             rows = conn.execute(
-                f"SELECT {_COLUMNS} FROM graph_executions "
-                "ORDER BY id DESC LIMIT ?",
-                (limit,),
+                f"SELECT {_COLUMNS} FROM graph_executions {where}ORDER BY id DESC LIMIT ?",
+                (*args, limit),
             ).fetchall()
         return [_row_to_execution(row) for row in rows]
 

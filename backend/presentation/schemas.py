@@ -745,6 +745,8 @@ class AppRunIn(BaseModel):
 
     values: dict[str, Any] = Field(default_factory=dict)
     memory_overrides: MemoryOverridesIn | None = None
+    #: As for ``POST /graphs/run``: ``queue`` waits behind whatever lives or waits (the page's "Add to queue").
+    mode: Literal["auto", "parallel", "queue"] = "auto"
 
 
 class ModulesIn(BaseModel):

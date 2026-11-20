@@ -2,7 +2,7 @@
    board/displays.js -- how each display *kind* is drawn.
 
    The backend says what a live view *is* (nodes/ui.py: kind chart | scalar |
-   bars | text | progress | image, plus the graph's own `status`); this file is the
+   bars | text | progress | image | line | result, plus the graph's own `status`, `history` and `queue`, which board/runs.js draws); this file is the
    only place that knows what each looks like. A new module of an existing
    kind needs no change here; a new kind is one function below, and an
    unknown kind degrades to a labelled placeholder rather than a blank hole.
@@ -15,8 +15,8 @@
 
 import { LossChart } from "../lib/loss_chart.js";
 import {
-  barsOf, chartRows, decimate, formatDuration, formatValue, progressOf,
-  referenceLines, rowsToCsv, scalarOf, seriesFor, textOf,
+  barsOf, chartRows, decimate, formatDuration, formatValue, lineOf, progressOf,
+  referenceLines, resultOf, rowsToCsv, scalarOf, seriesFor, textOf,
 } from "./series.js";
 import { COUNTS, ViewWindow, rowsForWindow } from "./view.js";
 
@@ -337,12 +337,53 @@ function imageDisplay({ module, state }) {
   };
 }
 
+/* ---- line and result ---------------------------------------------------- */
+
+/** One sentence a node keeps current ("Training · step 120 of 1000"). */
+function lineDisplay({ module, state }) {
+  const root = div("bd-line", "—");
+  return {
+    el: root,
+    update() {
+      const text = lineOf(module, state);
+      root.textContent = text === null ? "—" : text;
+      root.classList.toggle("is-empty", text === null);
+    },
+    destroy() {},
+  };
+}
+
+/** What a node produced: the newest value of each key it names, as a small list. */
+function resultDisplay({ module, state }) {
+  const root = div("bd-result");
+  let shown = "";
+  return {
+    el: root,
+    update() {
+      const rows = resultOf(module, state);
+      const key = JSON.stringify(rows);
+      if (key === shown) return;
+      shown = key;
+      root.replaceChildren();
+      if (!rows.length) { root.append(div("bd-empty", "Nothing yet")); return; }
+      for (const r of rows) {
+        const row = div("bd-result-row");
+        const value = div("bd-result-value", r.unit ? `${r.text} ${r.unit}` : r.text);
+        value.title = r.text;
+        row.append(div("bd-result-label", r.label), value);
+        root.append(row);
+      }
+    },
+    destroy() {},
+  };
+}
+
 /* ---- graph run status ---------------------------------------------------- */
 
 /* The run states the backend actually has (domain/value_objects.GraphStatus):
-   queued, running, finished, error, stopped. */
+   planned, queued, running, finished, error, stopped. */
 const STATUS_CLASS = {
-  queued: "status-idle", running: "status-running", finished: "status-completed",
+  planned: "status-idle", queued: "status-idle", running: "status-running", finished: "status-completed",
   error: "status-failed", stopped: "status-cancelled",
 };
 
@@ -392,6 +433,7 @@ function statusDisplay({ ctx }) {
 const KINDS = {
   chart: chartDisplay, scalar: scalarDisplay, bars: barsDisplay,
   text: textDisplay, progress: progressDisplay, image: imageDisplay, status: statusDisplay,
+  line: lineDisplay, result: resultDisplay,
 };
 
 export const KNOWN_KINDS = Object.keys(KINDS);

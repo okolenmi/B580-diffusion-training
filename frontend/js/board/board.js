@@ -38,6 +38,7 @@ import { ActionCard } from "./actions.js";
 import { ContainerView } from "./container.js";
 import { createDisplay } from "./displays.js";
 import { buildFieldControl } from "./fields.js";
+import { HistoryCard, QueueCard } from "./runs.js";
 import {
   cellDelta, columnWidth, effH, flowOrder, keyNudge, moveTo, resizeTo, resolve, setCollapsed,
 } from "./layout.js";
@@ -412,6 +413,15 @@ export class Board {
       entry.display = new ActionCard({ descriptor, node, state: handle.state, ctx: this.ctx, onNote: this.onNote });
       entry.tick = true; // the button follows the run's state, which changes without a frame
       entry.body.append(entry.display.el);
+      return;
+    }
+
+    // runs of the app: persisted state the page polls, not a stream
+    if (descriptor.kind === "history" || descriptor.kind === "queue") {
+      entry.display = new (descriptor.kind === "history" ? HistoryCard : QueueCard)({ ctx: this.ctx });
+      entry.tick = true;
+      entry.body.append(entry.display.el);
+      entry.display.update();
       return;
     }
 

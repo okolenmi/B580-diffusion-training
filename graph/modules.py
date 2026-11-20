@@ -1,6 +1,7 @@
 """Display modules: what a node can show while it runs, and the actions a page may ask of it.
 
-A node lists displays in ``MODULES`` and actions in ``ACTIONS``; the editor and the boards draw them from the
+A node lists displays in ``MODULES`` (a ``line`` is one live sentence, a ``result`` the latest value of each of its series: what the node
+produced) and actions in ``ACTIONS``; the editor and the boards draw them from the
 catalog. A module names the report keys it reads; it never draws anything itself.
 """
 
@@ -8,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-KINDS = ("chart", "scalar", "bars", "text", "progress", "image")
+KINDS = ("chart", "scalar", "bars", "text", "progress", "image", "line", "result")
 CADENCES = ("step", "run")
 SCALES = ("linear", "symlog")
 X_KEYS = ("step", "t")
@@ -95,6 +96,10 @@ class DisplayModule:
             raise ValueError(f"DisplayModule {self.name!r}: a {self.kind} module needs a Series or a pattern")
         if self.kind == "progress" and not (self.value_key and self.total_key):
             raise ValueError(f"DisplayModule {self.name!r}: progress needs value_key and total_key")
+        if self.kind == "line" and not self.value_key:
+            raise ValueError(f"DisplayModule {self.name!r}: line needs value_key, the report key that holds the sentence")
+        if self.kind == "result" and not self.series:
+            raise ValueError(f"DisplayModule {self.name!r}: result needs Series naming the report keys it lists")
         if self.kind == "image" and not self.value_key:
             raise ValueError(f"DisplayModule {self.name!r}: image needs value_key, the report key that holds the list of pictures")
         if len(self.size) != 2 or any(not isinstance(v, int) or v < 1 for v in self.size):

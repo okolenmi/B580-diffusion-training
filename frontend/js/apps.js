@@ -31,14 +31,14 @@ import { History } from "./board/history.js";
 import { Inspector } from "./board/inspector.js";
 import { LiveStreams } from "./board/live.js";
 import {
-  autoFill, buildAvailable, collectIds, containerKey, leafCards, locateCard, moveCard, moveTargets, refKey, statusByBlock,
+  applyValues, autoPage, buildAvailable, collectIds, containerKey, leafCards, locateCard, moveCard, moveTargets, refKey, statusByBlock,
   titleFor, valuesPayload, walkCards,
 } from "./board/model.js";
 import { el, showMessage } from "./lib/dom.js";
 import { errText } from "./lib/errors.js";
 import { log } from "./lib/log.js";
 
-const ACTIVE = new Set(["queued", "running"]);
+const ACTIVE = new Set(["planned", "queued", "running"]);
 const enc = encodeURIComponent;
 
 const url = new URL(location.href);
@@ -140,6 +140,7 @@ const S = {
   resolution: null,
   statuses: {},        // card id -> {status, detail}
   execution: null,     // {execution_id, status, started_at, finished_at, error, done, total}
+  runs: null,          // {history: this app's runs, planned: every run waiting for memory}, newest first; null before the first answer
   resolveSeq: 0,
   resolveTimer: 0,
   pollTimer: 0,
@@ -206,7 +207,13 @@ async function showPage() {
 
   S.page = new ContainerView(el("board"), {
     live,
-    ctx: { execution: () => S.execution },
+    ctx: {
+      execution: () => S.execution,
+      runs: () => S.runs,
+      runAgain,
+      cancelRun,
+      canRunAgain: () => S.mode === "use" && !S.isNew,
+    },
     onNote: (msg, kind) => log(msg, kind || "info"),
     ids: () => collectIds(rootBlocks()),
     onSelect,
@@ -224,6 +231,7 @@ async function showPage() {
   wireToolbar();
   describePage();
   await adoptActiveExecution();
+  await refreshRuns();
   updateState();
 }
 
@@ -242,7 +250,7 @@ async function loadDoc() {
     };
     S.draft = makeDraft(S.app);
     S.resolution = await resolveNow();
-    S.app.root.tabs[0].blocks = autoFill(S.resolution.modules, S.app.root.columns);
+    S.app.root.tabs = autoPage(S.resolution.modules, S.app.root.columns);
     S.resolution = await resolveNow();
     S.saved = null;
   } else {
@@ -419,7 +427,8 @@ function wireToolbar() {
   el("mode-use").onclick = () => setMode("use");
   el("mode-edit").onclick = () => setMode("edit");
   el("btn-save").onclick = save;
-  el("btn-run").onclick = run;
+  el("btn-run").onclick = () => run("auto");
+  el("btn-queue").onclick = () => run("queue");
   el("btn-stop").onclick = stop;
   el("btn-delete").onclick = remove;
   el("btn-update").onclick = updateFromGraph;
@@ -466,6 +475,10 @@ function updateState() {
   else if (active) why = "A run is already in progress.";
   run.disabled = !!why;
   run.title = why || "Run the graph with the values on this page";
+  const queue = el("btn-queue");
+  const queueWhy = S.isNew ? "Save this app first." : exposureChanged() ? "Save the app first — it now shows fields the saved app does not." : "";
+  queue.disabled = !!queueWhy;
+  queue.title = queueWhy || "Run these values after whatever is running or waiting";
 
   const bits = [];
   if (S.isNew) bits.push("not saved yet");
@@ -603,16 +616,20 @@ async function updateFromGraph() {
 
 /* ---- run / stop --------------------------------------------------------------- */
 
-async function run() {
+async function run(mode = "auto") {
   showMessage("page-error", "");
   const values = valuesPayload({ blocks: rootBlocks(), graph: S.draft }, statusByBlock(S.resolution));
   try {
-    const exec = await api(`/apps/${enc(S.name)}/run`, { method: "POST", body: { values } });
-    log(`Run #${exec.execution_id} started from "${S.name}".`, "success");
-    S.execution = { ...exec, done: 0, total: 0 };
+    const exec = await api(`/apps/${enc(S.name)}/run`, { method: "POST", body: { values, mode } });
+    const waiting = exec.status === "planned";
+    log(waiting ? `Run #${exec.execution_id} is waiting its turn.` : `Run #${exec.execution_id} started from "${S.name}".`, "success");
+    if (!(waiting && executionActive())) {
+      S.execution = { ...exec, done: 0, total: 0 };
+      schedulePoll(400);
+    }
     S.page.refreshDisplays();
     updateState();
-    schedulePoll(400);
+    refreshRuns();
   } catch (err) {
     if (err instanceof ApiError && err.code === "graph_invalid") {
       const issues = Array.isArray(err.details) ? err.details : (err.details && err.details.issues) || [];
@@ -645,9 +662,54 @@ async function stop() {
     await api(`/graphs/executions/${S.execution.execution_id}/stop`, { method: "POST" });
     log(`Run #${S.execution.execution_id} stopped.`, "warn");
     schedulePoll(200);
+    refreshRuns();
   } catch (err) {
     showMessage("page-error", `Could not stop: ${errText(err)}`);
   }
+}
+
+/** A waiting run is cancelled the way a running one is stopped. */
+async function cancelRun(id) {
+  try {
+    await api(`/graphs/executions/${id}/stop`, { method: "POST" });
+    log(`Run #${id} cancelled.`, "warn");
+  } catch (err) {
+    showMessage("page-error", `Could not cancel: ${errText(err)}`);
+  }
+  await refreshRuns();
+}
+
+/** Put a past run's values back on the page; it still has to be run. */
+function runAgain(run) {
+  const values = run.origin && run.origin.values;
+  if (!values) return;
+  const changed = applyValues({ blocks: rootBlocks(), graph: S.draft }, values);
+  S.page.setContainer(S.app.root, S.draft);
+  scheduleResolve(0);
+  updateState();
+  log(changed ? `Values of run #${run.execution_id} are on the page: ${changed} changed.` : `The page already has the values of run #${run.execution_id}.`, "info");
+}
+
+/** The history and queue cards' data, and: when the run this page followed has ended and the next one of this app has started, follow that. */
+async function refreshRuns() {
+  try {
+    const [mine, all] = await Promise.all([
+      api(`/graphs/executions?limit=30&app=${enc(S.name)}`),
+      api("/graphs/executions?limit=100"),
+    ]);
+    S.runs = {
+      history: mine.executions || [],
+      planned: (all.executions || []).filter((r) => r.status === "planned").sort((a, b) => a.execution_id - b.execution_id),
+    };
+    const next = S.runs.history.find((r) => r.status === "running" || r.status === "queued");
+    if (next && !executionActive()) {
+      S.execution = { ...next, done: 0, total: 0 };
+      schedulePoll(0);
+    }
+  } catch (err) {
+    log(`Could not read the run list: ${errText(err)}`, "warn");
+  }
+  if (S.page) S.page.refreshDisplays();
 }
 
 async function adoptActiveExecution() {
@@ -687,6 +749,7 @@ async function pollExecution(again) {
   }
   S.page.refreshDisplays();
   updateState();
+  refreshRuns();
   if (again && executionActive()) schedulePoll(1500);
 }
 

@@ -286,6 +286,26 @@ export function textOf(module, state) {
   return last === undefined ? null : String(last.value);
 }
 
+/** line: the newest sentence a node reported under `module.value_key`, or null. */
+export function lineOf(module, state) {
+  const last = state.last[module.value_key];
+  return last === undefined || last.value === "" ? null : String(last.value);
+}
+
+/** result: one row per series whose key has been reported, newest value of each; numbers formatted, text as it came. */
+export function resultOf(module, state) {
+  const rows = [];
+  for (const series of module.series || []) {
+    const last = state.last[series.key];
+    if (last === undefined) continue;
+    rows.push({
+      key: series.key, label: series.label || series.key, unit: series.unit || "",
+      text: typeof last.value === "number" ? formatValue(last.value) : String(last.value),
+    });
+  }
+  return rows;
+}
+
 /**
  * progress: `value` of `total` with a rate and an ETA from the last few
  * reports' arrival times (`window` rows). Rate is steps per second of

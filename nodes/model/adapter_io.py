@@ -11,7 +11,7 @@ from engine.handles import TrainableDenoiser
 from engine.step.ema import PowerEma
 from engine.step.save_probe import SaveProbe
 from families.api.parts import AdapterMerge, DenoiserPart
-from graph import EventIn, Group, Node, Port
+from graph import DisplayModule, EventIn, Group, Node, Port, Series
 from graph.events import CheckpointDue
 
 _SERVICE = "models"
@@ -39,6 +39,11 @@ class SaveAdapterNode(Node):
     GROUPS = (Group("diagnostics", "Diagnostics", collapsed=True, advanced=True),)
     OUTPUTS = {"saved": Port("saved", int, doc="Files written so far (0 at build time).")}
     EVENTS_IN = {"checkpoint": EventIn(CheckpointDue, handler="on_checkpoint", scoped=True)}
+    MODULES = (
+        DisplayModule("status", "line", "Last file", value_key="status", size=(12, 1), doc="The adapter file written most recently."),
+        DisplayModule("saved", "result", "Saved", size=(4, 3), series=(Series("file", "file"), Series("step", "at step"), Series("written", "files written")),
+                      doc="The newest adapter file and how many this run has written."),
+    )
 
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
@@ -83,7 +88,9 @@ class SaveAdapterNode(Node):
         self.written.append(path)
 
     def on_checkpoint(self, event: CheckpointDue, ctx) -> None:
-        self._write(f"step{event.step:06d}", event.step)
+        name = os.path.basename(self._write(f"step{event.step:06d}", event.step))
+        self.context.report(f"node:{self.uid}", {"step": event.step, "file": name, "written": len(self.written),
+                                                 "status": f"Saved {name} (step {event.step}, {event.reason})"})
 
 
 class LoadAdapterNode(Node):

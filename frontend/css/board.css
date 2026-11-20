@@ -226,3 +226,22 @@
 .bd-action-note { font-size: 12px; color: var(--text-dim); min-height: 1.2em; overflow-wrap: anywhere; }
 .bd-action-note[data-status="delivered"] { color: var(--ok, #4caf50); }
 .bd-action-note[data-status="rejected"], .bd-action-note[data-status="failed"] { color: var(--bad, #ff5252); }
+
+/* ---- 8. line, result, and the runs cards ---- */
+
+.bd-line { font-size: 13px; line-height: 1.4; padding: 2px 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.bd-line.is-empty { color: var(--text-dim); }
+.bd-result { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.bd-result-row { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border); padding-bottom: 3px; }
+.bd-result-label { color: var(--text-dim); }
+.bd-result-value { font-variant-numeric: tabular-nums; text-align: right; overflow-wrap: anywhere; font-weight: 600; }
+.bd-runs { display: flex; flex-direction: column; gap: 6px; }
+.bd-run { display: flex; align-items: center; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); }
+.bd-run .status-badge { margin: 0; flex: none; }
+.bd-run-main { flex: 1; min-width: 0; }
+.bd-run-head { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.bd-run-id { font-weight: 600; }
+.bd-run-when, .bd-run-time { color: var(--text-dim); }
+.bd-run-values { color: var(--text-dim); font-size: 12px; overflow-wrap: anywhere; }
+.bd-run-values.is-error { color: var(--red); }
+.bd-run-again { flex: none; padding: 3px 10px; font-size: 12px; }

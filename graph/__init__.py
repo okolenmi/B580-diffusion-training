@@ -5,11 +5,12 @@ Pure Python; no torch. The server imports this package, so it must stay light.
 
 from .addon_edit import apply_set, available, configure, disable, enable, load_set, remove
 from .addons import EVENTS_SLOT, Addon, AddonError, AddonSet, AddonSlot, AddonSpec, HostContext
+from .commands import ActionDispatcher
 from .catalog import CATALOG_FORMAT, build_catalog, node_info
 from .document import FORMAT, Edge, GraphDoc, GraphFormatError, NodeSpec, new_uid, parse
 from .events import (CheckpointDue, EpochEnding, EpochStarted, EventContext, EventHub, EventType, MemoryPressure,
-                     PromptsChanged, RunStarted, RunStopped, StepFinished, StopRequested)
-from .modules import DisplayModule, Series
+                     PromptsChanged, RunStarted, RunStopped, SaveRequested, StepFinished, StopRequested)
+from .modules import ActionModule, DisplayModule, Series
 from .node import COMPLETE, Completion, Environment, ExecutionContext, Node, Resolution, is_field
 from .ports import DynamicShape, EventIn, EventOut, Group, Port
 from .registry import NodeRegistry

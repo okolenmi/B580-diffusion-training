@@ -34,6 +34,7 @@
    page can show an inspector and know where "add" should land.
    --------------------------------------------------------------------------- */
 
+import { ActionCard } from "./actions.js";
 import { ContainerView } from "./container.js";
 import { createDisplay } from "./displays.js";
 import { buildFieldControl } from "./fields.js";
@@ -402,6 +403,15 @@ export class Board {
       });
       entry.field = field;
       entry.body.append(field.el);
+      return;
+    }
+
+    if (block.ref.kind === "action") {
+      const handle = this.live.acquire(node.stream, () => this._schedule(entry));
+      entry.release = handle.release;
+      entry.display = new ActionCard({ descriptor, node, state: handle.state, ctx: this.ctx, onNote: this.onNote });
+      entry.tick = true; // the button follows the run's state, which changes without a frame
+      entry.body.append(entry.display.el);
       return;
     }
 

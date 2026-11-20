@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -84,7 +85,7 @@ logger = logging.getLogger(__name__)
 #: `execution_12.events.jsonl`, `execution_12.graph.json`, `execution_12.log`.
 #: Anchored and non-greedy on the digits so `execution_1.log` cannot match
 #: `execution_12` and take the wrong run's file.
-_FILE = re.compile(r"^execution_(\d+)\.(?:events\.jsonl|graph\.json|log)$")
+_FILE = re.compile(r"^execution_(\d+)\.(?:events\.jsonl|graph\.json|log|commands)$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,7 +260,7 @@ class SweepExecutionScratch:
         """
         grouped: dict[int, list[Path]] = {}
         for path in sorted(self._scratch_dir.iterdir()):
-            if not path.is_file():
+            if not (path.is_file() or (path.is_dir() and path.name.endswith(".commands"))):
                 continue
             match = _FILE.match(path.name)
             if match is None:
@@ -286,7 +287,10 @@ class SweepExecutionScratch:
             except OSError:
                 pass
             try:
-                path.unlink()
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
                 files += 1
             except FileNotFoundError:
                 continue

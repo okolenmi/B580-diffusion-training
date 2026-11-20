@@ -56,3 +56,15 @@ Every dispatched event is reported through `ctx.reporter` as a frame
 `{"kind":"event","name":"<port>","source":"<uid>","type":"EpochEnding","summary":{...},
 "seq":<int>,"t":<float seconds since run start>}` on stream `node:<uid>`. Node state changes
 use the frame kind `node_state` on stream `graph:run` (see `runs.md`).
+
+## Commands (a page's actions)
+
+A page can ask a running node for something it declared in `ACTIONS` (`ActionModule(name, label, event, needs=..., defaults=...)`); `event` is a key of the
+node's `EVENTS_IN`. The server writes `{id, node, action}` as one file into the run's inbox folder, `execution_<N>.commands/` beside its event file (atomic
+rename; it survives a server restart because the child does). A thread in the child (`backend/infrastructure/command_inbox.py`) hands each file to
+`graph.ActionDispatcher`, which builds the payload from `defaults` (never from the file) and calls `EventHub.request(uid, key, event, answer)`. The hub
+delivers it to that node's own handler at its next `drain()` on the run thread; a node whose build is long (the trainer) calls `listen_now()` first so it can hear
+commands during its build, and drains after each step. Answers are frames on `node:<uid>`, see `apps.md` (Actions). A command for an unknown node or action, or
+after the run ended, is answered `rejected`; a handler error fails the run like any handler error. The trainer's `save_now` handler emits
+`CheckpointDue(step, "manual")` from its `checkpoint` output.
+

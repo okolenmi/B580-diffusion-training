@@ -7,7 +7,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from graph import DisplayModule, Group, Node, Port, Series
+from graph import ActionModule, CheckpointDue, DisplayModule, EventIn, EventOut, Group, Node, Port, SaveRequested, Series
 
 
 class Handle:
@@ -135,3 +135,41 @@ class WidgetNode(Node):
         for i in range(steps):
             self.context.report(f"node:{self.uid}", {"step": i + 1, "total_steps": steps, "loss": 1.0 / (i + 1)})
         return {"done": steps}
+
+
+#: What CheckpointListenerNode heard in this process (the in-process gateway runs the graph here).
+HEARD: list = []
+
+
+class ActionWaitNode(Node):
+    """Works until a page's "save now" reaches it (or the run is cancelled), handing posted commands over as a trainer does."""
+
+    OUTPUTS = {"done": Port("done", int)}
+    EVENTS_IN = {"save_now": EventIn(SaveRequested, handler="on_save_now")}
+    EVENTS_OUT = {"checkpoint": EventOut(CheckpointDue)}
+    ACTIONS = (ActionModule("save_now", "Save now", "save_now", needs=CheckpointDue, needs_label="a listener"),)
+
+    def build(self, **inputs):
+        self.saved = False
+        self.listen_now()
+        deadline = time.monotonic() + 20
+        while not self.saved and not self.context.should_cancel() and time.monotonic() < deadline:
+            self.context.events.drain()
+            time.sleep(0.02)
+        return {"done": int(self.saved)}
+
+    def on_save_now(self, event, ctx):
+        self.saved = True
+        self.emit("checkpoint", CheckpointDue(7, event.reason))
+
+
+class CheckpointListenerNode(Node):
+    OUTPUTS = {"ok": Port("ok", int)}
+    EVENTS_IN = {"checkpoint": EventIn(CheckpointDue, handler="on_checkpoint", scoped=True)}
+
+    def build(self, **inputs):
+        HEARD.clear()
+        return {"ok": 1}
+
+    def on_checkpoint(self, event, ctx):
+        HEARD.append((event.step, event.reason))

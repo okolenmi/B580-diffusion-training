@@ -55,6 +55,7 @@ from .use_cases.subscribe_monitor import SubscribeMonitor
 from .use_cases.save_graph import SaveGraph
 from .use_cases.start_graph_execution import StartGraphExecution
 from .use_cases.rename_graph_execution import RenameGraphExecution
+from .use_cases.send_execution_action import SendExecutionAction
 from .use_cases.stop_graph_execution import StopGraphExecution
 from .use_cases.update_settings import UpdateSettings
 from .use_cases.upload_asset import UploadAsset
@@ -139,6 +140,8 @@ class GraphServices:
     #: What a run (live or finished) reported to its monitors: the curves of a past run.
     execution_metrics: GetExecutionMetrics
     stop_execution: StopGraphExecution
+    #: A page asks a node of a live run to act (Save now); delivered through the run's command inbox.
+    send_action: SendExecutionAction
     rename_execution: RenameGraphExecution
     delete_executions: DeleteGraphExecutions
     reconcile_executions: ReconcileGraphExecutions

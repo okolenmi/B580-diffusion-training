@@ -179,6 +179,8 @@ def _ref(card: dict, where: str, problems: list[str]) -> None:
         problems.append(f"{where}.ref.node: a graph block has no node")
     elif scope == "note" and node is not None:
         problems.append(f"{where}.ref.node: a note has no node")
+    if ref.get("kind") == "action" and scope != "node":
+        problems.append(f"{where}.ref: an action belongs to a node (scope \"node\")")
     if (scope == "note") != (ref.get("kind") == "note"):
         problems.append(f"{where}.ref: scope and kind are both \"note\" for a note, and only then")
 

@@ -70,6 +70,7 @@ from .application.use_cases import (
     StartGraphExecution,
     SubscribeMonitor,
     RenameGraphExecution,
+    SendExecutionAction,
     StopGraphExecution,
     UpdateSettings,
     UploadAsset,
@@ -80,6 +81,7 @@ from .config import GRAPH_EXECUTION_CHILD, Settings
 from .infrastructure.server_restart import ExecServerRestarter
 from .infrastructure.clock import SystemClock
 from .infrastructure.file_artifact_store import FileArtifactStore
+from .infrastructure.file_command_channel import FileCommandChannel
 from .infrastructure.image_libraries import FsImageLibraries
 from .infrastructure.events.callback_event_bus import CallbackEventBus
 from .infrastructure.file_asset_store import FileSystemAssetStore
@@ -352,6 +354,8 @@ def build_container(settings: Settings) -> Container:
             get_execution=GetGraphExecution(executions=graph_executions),
             execution_metrics=GetExecutionMetrics(executions=graph_executions, metrics=execution_metrics),
             rename_execution=RenameGraphExecution(executions=graph_executions),
+            send_action=SendExecutionAction(
+                executions=graph_executions, catalog=node_catalog, channel=FileCommandChannel(graph_scratch)),
             stop_execution=StopGraphExecution(
                 executions=graph_executions,
                 writer=execution_writer,

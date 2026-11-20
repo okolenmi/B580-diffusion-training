@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 from collections.abc import Callable
 
+from .commands import ActionDispatcher
 from .addons import GRAPH, SLOT_PREFIX, Addon, AddonBuilder, HostContext, end_of, split_port
 from .document import GraphDoc
 from .events import EventError, EventHub, RunStopped, Reporter, Wire
@@ -75,6 +76,8 @@ class GraphRunner:
     releaser: Callable[[], None] = _default_releaser
     runtime_factory: Callable[[ExecutionContext], Any] | None = None
     env: Environment | None = None
+    #: Where a page's commands come from while a run is live (graph/commands.py); bound to each run's hub.
+    commands: ActionDispatcher | None = None
 
     def validate(self, doc: GraphDoc) -> Validation:
         return validate(doc, self.registry, self._settings(), self.env)
@@ -208,6 +211,8 @@ class _Execution:
         self.completion_by: dict[str, Completion] = {}
         self.retained: dict[str, Node] = {}  # nodes that listen to events stay alive until the run ends
         self.addons = AddonBuilder(self.addon_classes, self.hub)
+        if runner.commands is not None:
+            runner.commands.bind(self.hub, {n.uid: self.classes[n.class_name] for n in doc.nodes if n.class_name in self.classes})
         self.addons_built: list[Addon] = []
         self.results: list[NodeResult] = []
         self.error: str | None = None
@@ -282,6 +287,8 @@ class _Execution:
 
     def close(self) -> None:
         """Close the retained nodes, last built first, then let the process give back what the run held."""
+        if self.runner.commands is not None:
+            self.runner.commands.unbind()
         for addon in reversed(self.addons_built):
             try:
                 addon.close()

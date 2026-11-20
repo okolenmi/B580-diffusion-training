@@ -28,6 +28,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from ..actions import action_states
 from ..errors import BoardInvalidError
 from ..ports.graph_runtime import GraphRuntime, issue_to_dict
 from ..ports.node_catalog import NodeCatalog
@@ -82,7 +83,7 @@ class DescribeGraphModules:
                 nodes.append({
                     "id": spec.uid, "class_name": spec.class_name,
                     "display_name": spec.class_name, "known": False,
-                    "fields": [], "displays": [], "stream": stream,
+                    "fields": [], "displays": [], "actions": [], "stream": stream,
                 })
                 continue
             wired = {edge.to_port for edge in graph.edges_to(spec.uid)}
@@ -96,6 +97,7 @@ class DescribeGraphModules:
                     for port in self._inputs(info, spec, graph) if port.get("field")
                 ],
                 "displays": [dict(module, stream=stream) for module in info["modules"]],
+                "actions": action_states(graph, spec.uid, info, by_class),
                 "stream": stream,
             })
         memory = graph.memory.as_dict()
@@ -194,6 +196,10 @@ class ResolveBoard:
             elif field["wired"]:
                 out.update(status=STATUS_WIRED,
                            detail=f"{name!r} is fed by another node; its value is not set here")
+        elif kind == "action":
+            if not any(a["name"] == name for a in node["actions"]):
+                out.update(status=STATUS_MISSING_MODULE,
+                           detail=f"{node['display_name']} has no action {name!r}")
         elif not any(d["name"] == name for d in node["displays"]):
             out.update(status=STATUS_MISSING_MODULE,
                        detail=f"{node['display_name']} has no live view {name!r}")

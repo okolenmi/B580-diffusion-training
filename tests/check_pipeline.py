@@ -23,7 +23,7 @@ from data.store import DatasetStore
 from engine.devices import Accelerator
 from engine.runtime.factory import make_runtime
 from console import NodeTrace
-from graph import GraphDoc, GraphRunner, NodeRegistry
+from graph import ActionDispatcher, GraphDoc, GraphRunner, NodeRegistry
 from graph.node import Environment
 from nodes.conditioning import conditioner
 from nodes.dataset import batching, latents
@@ -48,12 +48,14 @@ def graph(tmp: Path, steps: int, captured: bool = False, **extra) -> GraphDoc:
 class Trace:
     """Collects reporter frames; can ask the run to stop once a step has finished."""
 
-    def __init__(self, stop_after: int | None = None, cancel: threading.Event | None = None):
+    def __init__(self, stop_after: int | None = None, cancel: threading.Event | None = None, on_step=None):
         self.frames: list[tuple[str, dict]] = []
-        self.stop_after, self.cancel = stop_after, cancel
+        self.stop_after, self.cancel, self.on_step = stop_after, cancel, on_step
 
     def report(self, stream, frame):
         self.frames.append((stream, frame))
+        if self.on_step is not None and frame.get("name") == "step_finished":
+            self.on_step(self.steps())
         if self.stop_after and frame.get("name") == "step_finished" and self.steps() >= self.stop_after:
             self.cancel.set()
 
@@ -61,12 +63,12 @@ class Trace:
         return sum(1 for _, f in self.frames if f.get("name") == "step_finished")
 
 
-def execute(store: DatasetStore, doc: GraphDoc, stop_after: int | None = None, family=TinyFamily):
+def execute(store: DatasetStore, doc: GraphDoc, stop_after: int | None = None, family=TinyFamily, on_step=None, commands=None):
     cancel = threading.Event()
-    trace = Trace(stop_after, cancel)
+    trace = Trace(stop_after, cancel, on_step)
     node_trace = NodeTrace(doc, Accelerator("cpu"), None)
     runner = GraphRunner(REGISTRY, reporter=trace, env=Environment(services={"datasets": store}), runtime_factory=make_runtime,
-                         observer=node_trace)
+                         observer=node_trace, commands=commands)
     with ExitStack() as stack:
         for module in (conditioner, inject_adapter, latents, batching):
             stack.enter_context(mock.patch.object(module, "get_family", lambda _id: family()))
@@ -109,6 +111,16 @@ def full_run():
         check(stopped.ok and stopped.stopped, f"a stop request ends the run cleanly ({stopped.error})")
         saved = sorted(p.name for p in (tmp / "out").glob("*.safetensors"))
         check(saved == ["toy_step000002.safetensors", "toy_step000003.safetensors"], f"the stopped run still saves where it stopped ({saved})")
+
+        shutil.rmtree(tmp / "out")
+        doc = graph(tmp, steps=5, save_every=1000)
+        trainer = next(n.uid for n in doc.nodes if n.class_name == "DiffusionTrainerNode")
+        dispatcher = ActionDispatcher()
+        _, asked, trace = execute(store, doc, commands=dispatcher, on_step=lambda n: n == 3 and dispatcher.dispatch(
+            {"id": "c1", "node": trainer, "action": "save_now"}))
+        saved = sorted(p.name for p in (tmp / "out").glob("*.safetensors"))
+        check(asked.ok and saved == ["toy_step000003.safetensors", "toy_step000005.safetensors"],
+              f"Save now during training writes a file at the step it was asked for, besides the final one ({asked.error}, {saved})")
 
         shutil.rmtree(tmp / "out")
         _, graphed, trace = execute(store, graph(tmp, steps=3, captured=True))

@@ -93,6 +93,7 @@ from backend.application.use_cases import (
     SaveGraph,
     StartGraphExecution,
     RenameGraphExecution,
+    SendExecutionAction,
     StopGraphExecution,
     SubscribeMonitor,
     SweepExecutionScratch,
@@ -119,6 +120,7 @@ from backend.infrastructure.persistence.graph_execution_repository import (
 )
 from backend.infrastructure.persistence.graph_library import SqliteGraphLibrary
 from backend.infrastructure.file_artifact_store import FileArtifactStore
+from backend.infrastructure.file_command_channel import FileCommandChannel
 from backend.infrastructure.persistence.app_library import SqliteAppLibrary
 from backend.application.services import AppServices, LibraryServices
 from backend.application.use_cases.image_libraries import (
@@ -565,6 +567,7 @@ def build_services(
     assets: FileSystemAssetStore | None = None,
     graph_registry: Any | None = None,
     graph_runtime: GraphRuntime | None = None,
+    real_runs: bool = False,
     graph_executions: GraphExecutionRepository | None = None,
     graph_library: GraphLibrary | None = None,
     graph_supervisor: GraphExecutionSupervisor | None = None,
@@ -610,6 +613,9 @@ def build_services(
     # Default to the real adapter (replay/clear semantics under test);
     # the API tests exercise it, the runtime test swaps in a recorder.
     monitor_bus = monitor_bus if monitor_bus is not None else SharedMonitorBus()
+    # ``real_runs``: runs get the runtime a child process builds (frames reach the event file, commands reach the nodes) instead of
+    # a silent one; a runtime the caller passes is used as given.
+    own_runtime = graph_runtime is not None or not real_runs
     if graph_runtime is None:
         graph_runtime = ContractGraphRuntime(graph_registry, releaser=lambda: None)
     # One directory for the supervisor and the sweep, so a test
@@ -667,7 +673,7 @@ def build_services(
             writer=execution_writer,
             gateway=InProcessGraphTaskGateway(
                 graph_registry,
-                runtime_factory=lambda _writer: graph_runtime,
+                runtime_factory=(lambda _writer: graph_runtime) if own_runtime else None,
             ),
             events=publisher,
             clock=clock,
@@ -763,6 +769,8 @@ def build_services(
             get_execution=GetGraphExecution(executions=graph_executions),
             execution_metrics=GetExecutionMetrics(executions=graph_executions, metrics=execution_metrics),
             rename_execution=RenameGraphExecution(executions=graph_executions),
+            send_action=SendExecutionAction(
+                executions=graph_executions, catalog=contract_catalog, channel=FileCommandChannel(graph_scratch)),
             stop_execution=StopGraphExecution(
                 executions=graph_executions,
                 writer=execution_writer,

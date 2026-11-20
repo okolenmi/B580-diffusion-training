@@ -88,6 +88,8 @@ class SubprocessGraphTaskGateway(GraphTaskGateway):
         # The row's memory numbers (MEM-05 #1). Only known ones travel:
         # an absent pair is the child's explicit unknown, whereas a
         # zero here would be an invented claim to check against.
+        if launch.command_dir is not None:
+            command += ["--commands", str(launch.command_dir)]
         if launch.memory_budget_mb is not None:
             command += ["--memory-budget-mb", str(launch.memory_budget_mb)]
         if launch.memory_grant_mb is not None:
@@ -245,7 +247,8 @@ class InProcessGraphTaskGateway(GraphTaskGateway):
         from .admission.graph_memory import GraphMemory
 
         from .graph_event_stream import ExecutionEventWriter
-        from .graph_task_worker import build_runtime, run_execution
+        from graph import ActionDispatcher
+        from .graph_task_worker import _commands_for, _EventReporter, build_runtime, run_execution
 
         # A pid, because the port says so and because every caller above
         # (stop, reconcile, the API) speaks in pids. Negative and
@@ -274,13 +277,16 @@ class InProcessGraphTaskGateway(GraphTaskGateway):
                 # the worker, where "exit cleanly" means a process
                 # ending), and this path runs inside the admission
                 # process, where the ledger's own check just answered.
+                dispatcher = ActionDispatcher(_EventReporter(writer))
                 make = self._runtime_factory or (
                     lambda w: build_runtime(
                         w, self._registry, memory=memory,
                         env=self._environment() if self._environment else None,
+                        commands=dispatcher,
                     )
                 )
-                run_execution(graph, writer, cancel, make(writer))
+                with _commands_for(launch.command_dir, dispatcher):
+                    run_execution(graph, writer, cancel, make(writer))
             except Exception as exc:  # noqa: BLE001 -- the watcher needs to hear
                 writer.outcome(error=f"{type(exc).__name__}: {exc}", results_count=0)
             finally:

@@ -112,6 +112,13 @@ class StopRequested(EventType):
 
 
 @dataclass(frozen=True)
+class SaveRequested(EventType):
+    """A person asked a node to save what it holds now (a page's action); the node answers with a CheckpointDue."""
+
+    reason: str = "manual"
+
+
+@dataclass(frozen=True)
 class MemoryPressure(EventType):
     level: str
 
@@ -241,16 +248,40 @@ class EventHub:
     def post(self, uid: str, port: str, event: EventType) -> None:
         self._posted.put((uid, port, event))
 
+    def request(self, uid: str, key: str, event: EventType, answer: Callable[[str, str], None]) -> None:
+        """Ask node ``uid`` to handle ``event`` on its own ``EVENTS_IN[key]``, from any thread. It is delivered at the next
+        ``drain``; ``answer(status, detail)`` is told ``delivered`` once the handler returned, or ``rejected`` / ``failed`` with why."""
+        self._posted.put((uid, key, event, answer))
+
     def drain(self) -> int:
         """Deliver events posted from other threads. Call from the run thread at a safe point."""
         count = 0
         while True:
             try:
-                uid, port, event = self._posted.get_nowait()
+                item = self._posted.get_nowait()
             except queue.Empty:
                 return count
-            self.emit(uid, port, event)
+            if len(item) == 4:
+                self._deliver_request(*item)
+            else:
+                self.emit(*item)
             count += 1
+
+    def _deliver_request(self, uid: str, key: str, event: EventType, answer: Callable[[str, str], None]) -> None:
+        node = self._nodes.get(uid)
+        spec = getattr(node, "EVENTS_IN", {}).get(key) if node is not None else None
+        if spec is None:
+            answer("rejected", "the node is not listening yet" if node is None else f"the node has no event {key!r}")
+            return
+        if self.stopped:
+            answer("rejected", "the run is stopping")
+            return
+        try:
+            self._deliver(_Subscriber(Wire("page", key, uid, key), spec.handler), event)
+        except EventError as exc:
+            answer("failed", str(exc))
+            raise
+        answer("delivered", "")
 
     def _route(self, source: str) -> list[list[_Catcher]]:
         """Who hears an event from ``source`` without a wire, level by level: its own addons, then each enclosing scope

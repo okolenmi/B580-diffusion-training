@@ -47,7 +47,8 @@ def port_info(port: Port) -> dict:
 
 def event_port_info(name: str, port: EventIn | EventOut) -> dict:
     return {"name": name, "label": port.label or _label(name), "doc": port.doc,
-            "payload": type_name(port.payload), "payload_mro": type_mro_names(port.payload)}
+            "payload": type_name(port.payload), "payload_mro": type_mro_names(port.payload),
+            "scoped": bool(getattr(port, "scoped", False))}
 
 
 def _auto_display_name(class_name: str) -> str:
@@ -76,6 +77,7 @@ def node_info(cls: type[Node]) -> dict:
         "events_out": [event_port_info(n, p) for n, p in cls.EVENTS_OUT.items()],
         "addon_slots": [{"name": s.name, "socket": s.socket, "many": s.many, "doc": s.doc} for s in slots_of(cls)],
         "modules": [m.as_dict() for m in cls.MODULES],
+        "actions": [a.as_dict() for a in cls.ACTIONS],
         "reads_settings": list(cls.READS_SETTINGS),
         "settings": [s.as_dict() for s in cls.SETTINGS],
         "dynamic": ({"depends_on": list(cls.DYNAMIC.depends_on), "debounce_ms": cls.DYNAMIC.debounce_ms}

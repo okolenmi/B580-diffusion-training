@@ -11,6 +11,7 @@ What this covers (all on fixture nodes; nothing here touches a GPU):
      monitor still wins); the supervisor clears streams / republishes memory
   H  the HTTP API end to end: app CRUD and versions, diff, boards, run and the origin it records
   I  artifacts: the pictures a run leaves for a page are served, nothing else is
+  J  actions: a page's "save now" reaches a running node through the command inbox and is answered
 
 Run directly: python backend/tests/test_apps.py
 """
@@ -346,7 +347,7 @@ check(True, "no bus: both are no-ops")
 # ==========================================================================
 print("-- H: HTTP API --")
 root = Path(tempfile.mkdtemp(prefix="backend-apps-"))
-services = build_services(project_root=root, graph_registry=registry())
+services = build_services(project_root=root, graph_registry=registry(), real_runs=True)
 app = create_app(services)
 
 def put(name, document, description=""):
@@ -456,5 +457,68 @@ check(status_ == 200 and headers.get("content-type") == "image/png", f"a picture
 for bad in ("n_aaaaaa/note.txt", "n_aaaaaa/missing.png", "../secret.png", "n_aaaaaa/../../secret.png"):
     status_, _, body = asgi_request(app, f"/api/v1/artifacts/{bad}")
     check(status_ == 404, f"{bad!r} is not served (got {status_})")
+
+# ==========================================================================
+# J. actions
+# ==========================================================================
+print("-- J: actions --")
+from backend.infrastructure.command_inbox import CommandInbox, CommandOutbox  # noqa: E402
+from backend.tests import fixture_nodes  # noqa: E402
+
+with tempfile.TemporaryDirectory() as raw:
+    inbox_dir = Path(raw) / "execution_1.commands"
+    got: list = []
+    box = CommandInbox(inbox_dir, got.append)
+    outbox = CommandOutbox(inbox_dir)
+    first = outbox.submit(S, "save_now")
+    second = outbox.submit(S, "other")
+    (inbox_dir / "junk.json").write_text("{}")
+    (inbox_dir / "99999999999999999999-deadbeef.json").write_text("not json")
+    check(box.poll() == 2 and [c["id"] for c in got] == [first, second] and got[0] == {"id": first, "node": S, "action": "save_now"},
+          f"commands arrive whole, in the order they were sent, and nothing else is read (got {got})")
+    check(sorted(p.name for p in inbox_dir.iterdir()) == ["junk.json"], "a taken command is removed; files that are not commands are left alone")
+
+LISTEN, WAIT = uid("listen"), uid("wait")
+RUN_GRAPH = {"format": 3, "nodes": [
+    {"uid": LISTEN, "class_name": "CheckpointListenerNode", "params": {}},
+    {"uid": WAIT, "class_name": "ActionWaitNode", "params": {}}], "edges": []}
+status_, _, body = asgi_request(app, "/api/v1/graphs/run", method="POST", json_body={"graph": RUN_GRAPH})
+check(status_ == 201, f"a run with an action starts (got {status_} {body})")
+xid = body["execution_id"]
+EXEC = f"/api/v1/graphs/executions/{xid}"
+
+
+def state() -> str:
+    return asgi_request(app, EXEC)[2].get("status")
+
+
+check(wait_until(lambda: state() == "running" and (state_node := asgi_request(app, EXEC)[2]) is not None
+                 and any(r["node_id"] == LISTEN for r in state_node["results"]), timeout=30), "the run is live and the listener is built")
+status_, _, mods = asgi_request(app, f"{BOARDS}/modules", method="POST", json_body={"graph": RUN_GRAPH})
+action = next(n for n in mods["nodes"] if n["id"] == WAIT)["actions"][0]
+check(action["name"] == "save_now" and action["available"] is True, f"the board is offered the action, available (got {action})")
+status_, _, body = asgi_request(app, f"{EXEC}/actions", method="POST", json_body={"node": WAIT, "action": "nope"})
+check(status_ == 404 and body["error"]["code"] == "action_not_found", f"an action the node does not declare is 404 (got {status_} {body})")
+status_, _, body = asgi_request(app, f"{EXEC}/actions", method="POST", json_body={"node": "n_zzzzzz", "action": "save_now"})
+check(status_ == 404, "a node that is not in the run is 404")
+status_, _, body = asgi_request(app, f"{EXEC}/actions", method="POST", json_body={"node": WAIT, "action": "save_now"})
+check(status_ == 202 and body["status"] == "queued" and body["command_id"], f"the action is queued (got {status_} {body})")
+check(wait_until(lambda: state() == "finished", timeout=30), f"the node handled it and the run finished (got {state()})")
+check(fixture_nodes.HEARD == [(7, "manual")], f"the listener heard the node's checkpoint (got {fixture_nodes.HEARD})")
+status_, _, frames = asgi_request(app, f"{EXEC}/monitor/node:{WAIT}")
+answers = [f["status"] for f in frames.get("frames", []) if f.get("kind") == "action"]
+check(answers[:2] == ["queued", "delivered"], f"the run answered on the node's stream (got {answers})")
+status_, _, body = asgi_request(app, f"{EXEC}/actions", method="POST", json_body={"node": WAIT, "action": "save_now"})
+check(status_ == 409 and body["error"]["code"] == "graph_execution_not_active", f"a finished run takes no actions (got {status_} {body})")
+
+LONE = {"format": 3, "nodes": [{"uid": WAIT, "class_name": "ActionWaitNode", "params": {}}], "edges": []}
+status_, _, body = asgi_request(app, "/api/v1/graphs/run", method="POST", json_body={"graph": LONE})
+lone = body["execution_id"]
+check(wait_until(lambda: asgi_request(app, f"/api/v1/graphs/executions/{lone}")[2].get("status") == "running", timeout=30), "a lone node runs")
+status_, _, body = asgi_request(app, f"/api/v1/graphs/executions/{lone}/actions", method="POST", json_body={"node": WAIT, "action": "save_now"})
+check(status_ == 409 and body["error"]["code"] == "action_unavailable" and "listens" in body["error"]["message"],
+      f"with nothing to act on it the action is refused and says what to add (got {status_} {body})")
+asgi_request(app, f"/api/v1/graphs/executions/{lone}/stop", method="POST")
+wait_until(lambda: asgi_request(app, f"/api/v1/graphs/executions/{lone}")[2].get("status") in ("stopped", "finished", "error"), timeout=30)
 
 finish()

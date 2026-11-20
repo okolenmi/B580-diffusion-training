@@ -216,6 +216,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
             graph_path=paths["graph"],
             event_path=paths["events"],
             log_path=paths["log"],
+            command_dir=paths.get("commands"),
             memory_budget_mb=memory_budget_mb,
             memory_grant_mb=memory_grant_mb,
             memory_adaptive=memory_adaptive,
@@ -248,6 +249,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
             "graph": base.with_suffix(".graph.json"),
             "events": base.with_suffix(".events.jsonl"),
             "log": base.with_suffix(".log"),
+            "commands": base.with_suffix(".commands"),
         }
 
     def recorded_outcome(self, execution_id: ExecutionId) -> RecordedOutcome | None:

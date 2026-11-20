@@ -11,7 +11,7 @@ A flat board (a view inside a graph document) is `{mode: "page" | "monitor", col
 `{columns, tabs: [{id, title, blocks}]}`: each tab has its own grid. A card carries either a `ref` (it points at one module) or a `container`
 (it is a titled section with one tab, or a tabbed card with several); containers nest at most 3 deep and are not allowed in a flat board.
 
-A card is `{id, x, y, w, h, collapsed, title, style?, options, ref | container}`. `ref` is `{scope: "node" | "graph" | "note", kind: "field" | "display" |
+A card is `{id, x, y, w, h, collapsed, title, style?, options, ref | container}`. `ref` is `{scope: "node" | "graph" | "note", kind: "field" | "display" | "action" |
 "note", name, node?}`; `node` is the node uid and only for scope `node`. `style` is one of `plain`, `outlined`, `accent`, `bare`.
 
 Limits: columns 1..24 (default 12); at most 200 cards in a document, containers included; at most 12 tabs in a container; ids `[A-Za-z0-9_-]{1,40}`,
@@ -53,6 +53,17 @@ Running an app changes only the fields its cards expose: `values` is `{"nodes": 
 the parameter, a field that is wired from another node or not exposed by a card is refused (`app_invalid`, every problem in `details`). The run is the
 same `StartGraphExecution` as the editor's Run and records its **origin**: `{app, version, values}`, returned as `origin` on every execution summary
 (`null` for runs not started from an app).
+
+## Actions
+
+An **action card** (`ref.kind: "action"`, scope `node`, name = the action) is a button for something a node declared in `ACTIONS` (`graph.ActionModule`): "Save now" on the
+trainer. Ownership: the node that holds the state declares it; what it does to other nodes goes through ordinary events (the trainer answers with a
+`CheckpointDue` that any Save Adapter in the graph writes). `boards/modules` lists each node's `actions` with `available` and, when false, a `reason`
+(`needs` names the event type some other node must listen for; nothing listens, the card shows the reason and stays disabled). The button works only while
+the run is `running`. Pressing it calls `POST /api/v1/graphs/executions/{id}/actions` with `{node, action}` and nothing else (202 `{command_id, status: "queued"}`;
+404 `action_not_found`; 409 `graph_execution_not_active`, `action_unavailable`); the event is built inside the run from the declaration, never from the request.
+The node's answers come back as frames `{kind: "action", id, action, status: queued | delivered | rejected | failed, detail}` on `node:<uid>`, which the card shows.
+The draft builder puts every available action on a new page. How a command reaches the run: `events.md` (Commands).
 
 ## REST
 

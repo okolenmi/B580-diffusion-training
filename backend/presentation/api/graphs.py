@@ -29,6 +29,8 @@ from ...application.limits import DEFAULT_EXECUTION_PAGE_SIZE
 from ...application.services import ApplicationServices
 from ..deps import get_services
 from ..schemas import (
+    ActionIn,
+    ActionQueuedOut,
     DeleteExecutionsOut,
     DeleteGraphOut,
     MemoryPreviewOut,
@@ -211,6 +213,23 @@ def stop_execution(
     """Request cancel, then CAS to ``stopped`` (409 if it already
     reached a terminal state, whose status rides in the envelope)."""
     return execution_out(services.graphs.stop_execution.execute(execution_id))
+
+
+@router.post(
+    "/executions/{execution_id}/actions",
+    response_model=ActionQueuedOut,
+    status_code=202,
+    responses={404: _ERROR_404, 409: {"description": "the run is not running / nothing in the graph can act on the action"}},
+)
+def send_action(
+    execution_id: int,
+    body: ActionIn,
+    services: ApplicationServices = Depends(get_services),
+):
+    """Ask a node of a running execution to do something it declared (an ``ActionModule``), e.g. ``save_now`` on the trainer.
+    202: queued in the run's command inbox; the node's own frames say whether it was delivered."""
+    queued = services.graphs.send_action.execute(execution_id, body.node, body.action)
+    return ActionQueuedOut(command_id=queued.command_id, node=queued.node, action=queued.action)
 
 
 @router.get("/library", response_model=SavedGraphListOut)

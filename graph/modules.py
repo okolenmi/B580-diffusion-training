@@ -1,12 +1,12 @@
-"""Display modules: what a node can show while it runs.
+"""Display modules: what a node can show while it runs, and the actions a page may ask of it.
 
-A node lists them in ``MODULES``; the editor and the monitor boards draw them from the
+A node lists displays in ``MODULES`` and actions in ``ACTIONS``; the editor and the boards draw them from the
 catalog. A module names the report keys it reads; it never draws anything itself.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 KINDS = ("chart", "scalar", "bars", "text", "progress", "image")
 CADENCES = ("step", "run")
@@ -27,6 +27,40 @@ class Series:
 
     def as_dict(self) -> dict:
         return {"key": self.key, "label": self.label or self.key, "color": self.color, "unit": self.unit}
+
+
+@dataclass(frozen=True)
+class ActionModule:
+    """A button a page may put on a running node: "save now". The node that owns the state declares it.
+
+    ``event`` is a key of the node's ``EVENTS_IN``; pressing the button delivers that event, built here from ``defaults`` and never
+    from anything the page sends, so a page can only trigger what the node declared. ``needs`` is the event type some *other* node of
+    the graph must listen for (the node's effect goes through ordinary events); when none does, the page shows the button disabled
+    with ``needs_label`` as the reason.
+    """
+
+    name: str
+    label: str
+    event: str
+    doc: str = ""
+    confirm: str | None = None
+    defaults: dict = field(default_factory=dict)
+    needs: type | None = None
+    needs_label: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.name or ":" in self.name or "/" in self.name:
+            raise ValueError(f"ActionModule name {self.name!r} must be non-empty without ':' or '/'")
+        if not self.label or not self.event:
+            raise ValueError(f"ActionModule {self.name!r} needs a label and an event")
+        if self.needs is not None and not self.needs_label:
+            raise ValueError(f"ActionModule {self.name!r}: `needs` also needs a `needs_label` that names what to add")
+
+    def as_dict(self) -> dict:
+        return {
+            "name": self.name, "label": self.label, "event": self.event, "doc": self.doc, "confirm": self.confirm,
+            "needs": self.needs.__name__ if self.needs is not None else None, "needs_label": self.needs_label,
+        }
 
 
 @dataclass(frozen=True)

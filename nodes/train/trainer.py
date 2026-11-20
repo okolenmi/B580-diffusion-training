@@ -24,9 +24,9 @@ from engine.step.probe import TimeProbe
 from engine.step.schedule import LRSchedule
 from engine.step.regional import RegionalUpdate
 from engine.step.trainer import Trainer
-from graph import AddonSlot, Completion, EventOut, Group, Node, Port
-from graph.modules import DisplayModule, Series
-from graph.events import CheckpointDue, StepFinished
+from graph import AddonSlot, Completion, EventIn, EventOut, Group, Node, Port
+from graph.modules import ActionModule, DisplayModule, Series
+from graph.events import CheckpointDue, SaveRequested, StepFinished
 from .addons import ConditionerBound, ModelBound, RegionPolicy
 
 
@@ -118,16 +118,30 @@ class DiffusionTrainerNode(Node):
         DisplayModule("timing", "chart", "Step phases", size=(12, 5), pattern="*_ms", exclude=("step_ms",),
                       doc="Milliseconds per phase of the step (present with `timing` on)."),
     )
+    EVENTS_IN = {"save_now": EventIn(SaveRequested, handler="on_save_now", label="Save now",
+                                     doc="Ask for a checkpoint after the current step (a page's \"Save now\" button sends it).")}
     EVENTS_OUT = {"step_finished": EventOut(StepFinished, doc="After every optimizer step."),
-                  "ended": EventOut(CheckpointDue, doc="Once when training ends, finished or stopped: wire it to a saver for the final file.")}
+                  "ended": EventOut(CheckpointDue, doc="Once when training ends, finished or stopped: wire it to a saver for the final file."),
+                  "checkpoint": EventOut(CheckpointDue, doc="A checkpoint a person asked for while training: a Save Adapter in the graph writes it.")}
+    ACTIONS = (ActionModule("save_now", "Save now", "save_now", needs=CheckpointDue, needs_label="a Save Adapter node",
+                            doc="Write the adapter as it is after the current step, without waiting for the next scheduled save."),)
 
     def _step_finished(self, event: StepFinished) -> None:
-        """The event for wired nodes, and the flat per-step report the monitor boards draw (`step`, `total`, then the metrics)."""
+        """The event for wired nodes, and the flat per-step report the monitor boards draw (`step`, `total`, then the metrics).
+        Commands a page posted meanwhile are delivered here, between two steps, where the weights are consistent."""
+        self._step = event.step
         self.context.report(f"node:{self.uid}", {"step": event.step, "total": event.total, **event.metrics})
         self.emit("step_finished", event)
+        if self.context.events is not None:
+            self.context.events.drain()
+
+    def on_save_now(self, event: SaveRequested, ctx) -> None:
+        self.emit("checkpoint", CheckpointDue(self._step, event.reason))
 
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
+        self._step = 0
+        self.listen_now()
         model: TrainableDenoiser = inputs["model"]
         accelerator = Accelerator(model.device)
         self._warn_slow_int8(model, inputs)
@@ -156,6 +170,7 @@ class DiffusionTrainerNode(Node):
                           say=lambda message: self.context.report("cleaning", {"node": self.uid, "message": message}),
                           warn=lambda message: self.context.report("warning", {"node": self.uid, "message": message}))
         start = inputs.get("start_step") or 0
+        self._step = start
         with self._attention_for_determinism(model, inputs):
             result = trainer.run(start)
         if trainer.clean_summary:

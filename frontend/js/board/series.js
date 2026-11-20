@@ -50,6 +50,7 @@ export class StreamState {
     this.t0 = null;      // first `t` after a clear: x=t is shown relative to it
     this.runEnd = null;  // null while running, {step, cancelled} after run_end
     this.latestFrame = null;
+    this.actions = new Map(); // command id -> {action, status, detail, at}: a node's answers to a page's actions
   }
 
   /** Parse and apply one SSE `data` string. Never throws. */
@@ -78,6 +79,10 @@ export class StreamState {
       return { kind: "run_end" };
     }
     if (frame.type !== undefined) return { kind: "ignored" };
+    if (frame.kind === "action") {
+      this.actions.set(String(frame.id), { action: frame.action, status: frame.status, detail: frame.detail || "", at });
+      return { kind: "action" };
+    }
     if (num(frame.step) === null && num(frame.t) === null) return { kind: "ignored" };
 
     if (this.runEnd) this.runEnd = null; // a new report after run_end: new run

@@ -30,6 +30,7 @@ Three things it deliberately does not do
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import math
@@ -65,6 +66,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--execution", type=int, required=True)
     p.add_argument("--graph", required=True, help="JSON GraphDefinition")
     p.add_argument("--events", required=True, help="append-only event file")
+    p.add_argument("--commands", default=None, help="folder a page's actions arrive in (command_inbox); absent = no actions")
     # MEM-05 #1: the row's numbers, optional so a caller that has none
     # (and every test that never knew about them) still spawns -- the
     # child treats an absent pair as its explicit unknown.
@@ -106,7 +108,7 @@ class _EventReporter:
         self._writer.monitor(stream, frame)
 
 
-def build_runtime(writer, registry=None, memory=None, env=None):
+def build_runtime(writer, registry=None, memory=None, env=None, commands=None):
     """The one runtime both gateways run: the real one, wired to the file.
 
     ``registry`` lets the in-process gateway reuse the server's already-discovered one; the child passes nothing and
@@ -122,6 +124,7 @@ def build_runtime(writer, registry=None, memory=None, env=None):
     return ContractGraphRuntime(
         registry,
         reporter=_EventReporter(writer),
+        commands=commands,
         env=env if env is not None else process_environment(),
         runtime_factory=tree.make_runtime,
         # The budget is allocator MB (what admission counted); the card-wide limit is left to the card.
@@ -396,6 +399,15 @@ class MemoryTelemetry:
         return False
 
 
+def _commands_for(directory, dispatcher):
+    """The run's command inbox as a context manager; a run launched without a folder accepts no actions."""
+    from .command_inbox import CommandInbox
+
+    if not directory:
+        return contextlib.nullcontext()
+    return CommandInbox(Path(directory), dispatcher.dispatch)
+
+
 def main(argv: list[str] | None = None) -> int:
     # The floor first, before the signal handlers: a child that cannot run
     # should say why on stderr, where the supervisor's log will keep it.
@@ -450,6 +462,7 @@ def main(argv: list[str] | None = None) -> int:
     set_perf_env()
 
     from backend.domain.graph import GraphDefinition
+    from graph import ActionDispatcher
     from .admission.graph_memory import GraphMemory
     from .graph_event_stream import ExecutionEventWriter
 
@@ -500,9 +513,10 @@ def main(argv: list[str] | None = None) -> int:
         # The fixed-interval producer wraps the whole run -- discovery
         # included, which is the child's longest stretch of device-quiet
         # time and would otherwise be the one part of the process no frame covers.
-        with MemoryTelemetry(device_ctx, writer, memory, backstop, cancel):
+        dispatcher = ActionDispatcher(_EventReporter(writer))
+        with MemoryTelemetry(device_ctx, writer, memory, backstop, cancel), _commands_for(args.commands, dispatcher):
             outcome = run_execution(
-                graph, writer, cancel, build_runtime(writer, memory=memory)
+                graph, writer, cancel, build_runtime(writer, memory=memory, commands=dispatcher)
             )
             return 1 if outcome.error else 0
     except Exception as exc:  # noqa: BLE001 -- the server needs to hear about this

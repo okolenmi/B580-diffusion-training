@@ -93,7 +93,7 @@ export function findTarget(ref, modules) {
   }
   const node = (modules.nodes || []).find((n) => n.id === ref.node) || null;
   if (!node) return { node: null, descriptor: null };
-  const list = ref.kind === "field" ? node.fields : node.displays;
+  const list = ref.kind === "field" ? node.fields : ref.kind === "action" ? node.actions : node.displays;
   return { node, descriptor: (list || []).find((d) => d.name === ref.name) || null };
 }
 
@@ -128,6 +128,8 @@ export function defaultSize(ref, modules, columns) {
   if (ref.kind === "display") {
     const size = descriptor && Array.isArray(descriptor.size) ? descriptor.size : [6, 4];
     [w, h] = size;
+  } else if (ref.kind === "action") {
+    [w, h] = [3, 2];
   } else if (descriptor) {
     if (JSON_TYPES.has(descriptor.type)) h = 3;
   }
@@ -173,6 +175,8 @@ export function buildAvailable(modules, blocks, { showAdvanced = false } = {}) {
     const items = [
       ...node.displays.map((d) =>
         item(nodeRef(node.id, "display", d.name), d.title, d.doc || "")),
+      ...(node.actions || []).map((a) =>
+        item(nodeRef(node.id, "action", a.name), a.label, a.doc || "")),
       ...node.fields
         .filter((f) => !f.wired)
         .map((f) =>
@@ -416,6 +420,11 @@ export function autoFill(modules, columns = 12, { maxFields = 16 } = {}) {
   }
 
   const displayRefs = [graphRef("display", "run")];
+  // A button the graph can act on goes first on the right: "Save now" is what a person looks for during a run.
+  for (const node of modules.nodes || []) {
+    if (!node.known) continue;
+    for (const a of node.actions || []) if (a.available) displayRefs.unshift(nodeRef(node.id, "action", a.name));
+  }
   for (const node of modules.nodes || []) {
     if (!node.known) continue;
     for (const d of node.displays) displayRefs.push(nodeRef(node.id, "display", d.name));

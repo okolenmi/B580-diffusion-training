@@ -510,6 +510,21 @@ class ExecutionOut(ExecutionSummaryOut):
     memory: dict[str, Any] | None = None
 
 
+class ActionIn(BaseModel):
+    """Which node's action to trigger. Nothing else travels: the node's declaration builds the event."""
+
+    node: str = Field(min_length=1, max_length=64)
+    action: str = Field(min_length=1, max_length=64)
+
+
+class ActionQueuedOut(BaseModel):
+    command_id: str
+    node: str
+    action: str
+    #: Always "queued": whether the node handled it arrives on the node's stream as ``{"kind": "action", "id", "status"}`` frames.
+    status: str = "queued"
+
+
 class ExecutionRenameIn(BaseModel):
     name: str | None = Field(default=None, max_length=200)
 

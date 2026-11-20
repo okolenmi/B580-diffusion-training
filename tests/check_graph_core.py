@@ -336,5 +336,60 @@ def named_tasks():
     ExecutionContext().task("quiet").__enter__()  # a context without a reporter ignores tasks
 
 
+def actions():
+    """A page's command reaches a running node between its steps and is answered; declarations are checked; nothing a page sends
+    can choose the event."""
+    from graph import ActionDispatcher, ActionModule, CheckpointDue, SaveRequested
+
+    def declare_bad() -> None:
+        class Bad(Node):
+            OUTPUTS = {"x": Port("x", int)}
+            EVENTS_IN = {"go": EventIn(SaveRequested, handler="on_go")}
+            ACTIONS = (ActionModule("a", "A", "missing"),)
+
+            def build(self, **inputs):
+                return {"x": 1}
+
+            def on_go(self, event, ctx):
+                pass
+
+    raises(TypeError, declare_bad, "an action naming an event outside EVENTS_IN is refused when the class is declared", "EVENTS_IN")
+    raises(ValueError, lambda: ActionModule("a", "A", "go", needs=CheckpointDue), "needs asks for a label", "needs_label")
+
+    registry = REGISTRY
+    info = node_info(toy_nodes.ActionTrainerNode)
+    check(info["actions"][0]["needs"] == "CheckpointDue" and info["events_in"][0]["scoped"] is False, "the catalog lists the action and whether an event is scoped")
+
+    frames = Frames()
+    dispatcher = ActionDispatcher(frames)
+    sent: list = []
+
+    def hook(step: int) -> None:
+        if step == 2:
+            command = {"id": "c1", "node": uid(1), "action": "save_now", "reason": "from the page"}
+            worker = threading.Thread(target=lambda: dispatcher.dispatch(command))
+            worker.start()
+            worker.join()
+            sent.append(step)
+        if step == 3:
+            for bad in ({"id": "c2", "node": uid(1), "action": "nope"}, {"id": "c3", "node": "n_zzzzzz", "action": "save_now"}):
+                dispatcher.dispatch(bad)
+
+    toy_nodes.STEP_HOOK[:] = [hook]
+    try:
+        graph = doc([("CheckpointCollectorNode", {}), ("ActionTrainerNode", {"steps": 4})])
+        outcome = GraphRunner(registry, reporter=frames, commands=dispatcher).run(graph)
+    finally:
+        toy_nodes.STEP_HOOK.clear()
+    check(outcome.error is None, "a run with a live action completes")
+    heard = toy_nodes.CheckpointCollectorNode.HEARD
+    check(heard == [(2, "manual")], f"the saver heard one checkpoint, at step 2, with the node's own reason not the page's: {heard}")
+    answers = [(f["id"], f["status"]) for s, f in frames.frames if f.get("kind") == "action"]
+    check(answers[:2] == [("c1", "queued"), ("c1", "delivered")], f"a command is queued, then delivered: {answers}")
+    check(("c2", "rejected") in answers and ("c3", "rejected") in answers, "an unknown action or node is rejected, not ignored")
+    dispatcher.dispatch({"id": "c4", "node": uid(1), "action": "save_now"})
+    check(frames.frames[-1][1]["status"] == "rejected", "after the run ended commands are rejected")
+
+
 if __name__ == "__main__":
-    run(declarations, document, validation, running, events, settings_checks, dynamic_and_catalog, named_tasks)
+    run(declarations, document, validation, running, events, settings_checks, dynamic_and_catalog, named_tasks, actions)

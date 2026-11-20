@@ -91,8 +91,10 @@ class ContractGraphRuntime(GraphRuntime):
         releaser: Callable[[], None] = default_memory_releaser,
         runtime_factory: Callable[[Any], Any] | None = None,
         overrides: dict | None = None,
+        commands: Any | None = None,
     ) -> None:
         self._registry = registry or tree.NodeRegistry.default()
+        self._commands = commands
         self._reporter = reporter
         self._env = env
         self._releaser = releaser
@@ -104,7 +106,7 @@ class ContractGraphRuntime(GraphRuntime):
         env = self._env() if callable(self._env) else self._env
         return tree.GraphRunner(
             self._registry, reporter=self._reporter, observer=observer, env=env, releaser=self._releaser,
-            runtime_factory=self._runtime_factory,
+            runtime_factory=self._runtime_factory, commands=self._commands,
         )
 
     def validate(self, graph: GraphDefinition) -> tuple[GraphIssue, ...]:

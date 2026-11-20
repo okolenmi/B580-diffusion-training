@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 
-from graph import (Completion, DynamicShape, EpochEnding, EventIn, EventOut, Group, Node,
-                     Port, PromptsChanged, Resolution, StepFinished, StopRequested)
+from graph import (ActionModule, CheckpointDue, Completion, DynamicShape, EpochEnding, EventIn, EventOut, Group, Node,
+                     Port, PromptsChanged, Resolution, SaveRequested, StepFinished, StopRequested)
 
 
 class Table(list):
@@ -198,3 +198,45 @@ class GroupedNode(Node):
 
     def build(self, **inputs):
         return {"x": sum(inputs[f"f{i}"] for i in range(10))}
+
+
+#: Called with the step number inside ActionTrainerNode's loop; a test uses it to send commands from another thread.
+STEP_HOOK: list = []
+
+
+class ActionTrainerNode(Node):
+    """A long build that offers a 'save now' action and hands posted commands over between steps."""
+
+    INPUTS = {"steps": Port("steps", int, required=False, default=4)}
+    OUTPUTS = {"model": Port("model", OtherHandle)}
+    EVENTS_IN = {"save_now": EventIn(SaveRequested, handler="on_save_now")}
+    EVENTS_OUT = {"checkpoint": EventOut(CheckpointDue)}
+    ACTIONS = (ActionModule("save_now", "Save now", "save_now", needs=CheckpointDue, needs_label="a saver", defaults={"reason": "manual"}),)
+
+    def build(self, **inputs):
+        self.step = 0
+        self.listen_now()
+        for step in range(1, inputs["steps"] + 1):
+            self.step = step
+            for hook in STEP_HOOK:
+                hook(step)
+            self.context.events.drain()
+        return {"model": OtherHandle()}
+
+    def on_save_now(self, event, ctx):
+        self.emit("checkpoint", CheckpointDue(self.step, event.reason))
+
+
+class CheckpointCollectorNode(Node):
+    """Hears every CheckpointDue in the graph (scoped) and keeps them."""
+
+    OUTPUTS = {"saved": Port("saved", str)}
+    EVENTS_IN = {"checkpoint": EventIn(CheckpointDue, handler="on_checkpoint", scoped=True)}
+    HEARD: list = []
+
+    def build(self, **inputs):
+        type(self).HEARD.clear()
+        return {"saved": "ok"}
+
+    def on_checkpoint(self, event, ctx):
+        type(self).HEARD.append((event.step, event.reason))

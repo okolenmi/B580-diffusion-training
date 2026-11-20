@@ -32,6 +32,8 @@ and a state-changing method carrying an `Origin` must match this server's origin
 | `graph_invalid` | 422 | graphs |
 | `graph_not_found`, `graph_execution_not_found`, `node_class_not_found`, `starter_not_found` | 404 | graphs |
 | `graph_execution_not_active` | 409 | graphs |
+| `action_not_found` | 404 | graphs (the run's graph has no such node, or the node declares no such action) |
+| `action_unavailable` | 409 | graphs (the node has the action but nothing in the graph listens for what it produces; the message says what to add) |
 | `app_invalid` | 422 | apps (the app document's shape, or a value submitted to run one that the app does not expose / that is fed by another node — `details` lists every problem) |
 | `board_invalid` | 422 | boards (the shape of a draft view or app sent to `/boards/resolve`; `details` lists every problem) |
 | `app_not_found` | 404 | apps |

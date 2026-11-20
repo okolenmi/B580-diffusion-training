@@ -158,6 +158,20 @@ class GraphInvalidError(ApplicationError):
     status_code = 422
 
 
+class ActionNotFoundError(ApplicationError):
+    """The run's graph has no such node, or the node declares no such action."""
+
+    code = "action_not_found"
+    status_code = 404
+
+
+class ActionUnavailableError(ApplicationError):
+    """The node has the action but nothing in the graph could act on it (``reason`` says what to add)."""
+
+    code = "action_unavailable"
+    status_code = 409
+
+
 class GraphExecutionNotFoundError(ApplicationError):
     """No graph execution exists under the requested id."""
 

@@ -33,6 +33,7 @@ Python: `graph/catalog.py`.
   "events_in":  [ EventPortInfo ],
   "events_out": [ EventPortInfo ],
   "modules": [ DisplayModuleInfo ],
+  "actions": [ {name, label, event, doc, confirm, needs, needs_label} ],   // what a page may ask of the node while it runs (contracts/apps.md)
   "reads_settings": [ "device.default" ],
   "settings": [ SettingSpec ],            // contributed by this class
   "dynamic": null | { "depends_on": ["scope", "file"], "debounce_ms": 300 },
@@ -60,7 +61,7 @@ Python: `graph/catalog.py`.
 }
 ```
 
-`EventPortInfo`: `{name, label, doc, payload, payload_mro}`.
+`EventPortInfo`: `{name, label, doc, payload, payload_mro, scoped}` (`scoped` only on inputs).
 
 `DisplayModuleInfo`: the existing module shape (`name, kind, title, series[],
 pattern, exclude, cadence, x, scale, value_key, total_key, reference_key, doc,

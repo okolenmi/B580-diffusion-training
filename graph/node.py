@@ -15,7 +15,7 @@ from typing import Any, ClassVar
 
 from .addons import AddonSet, AddonSlot
 from .events import EventHub, EventType, Reporter
-from .modules import DisplayModule
+from .modules import ActionModule, DisplayModule
 from .ports import DynamicShape, EventIn, EventOut, Group, Port
 from .settings import Settings, SettingSpec, SettingsRegistry, SettingsView
 
@@ -207,6 +207,7 @@ class Node(ABC):
     EVENTS_OUT: ClassVar[dict[str, EventOut]] = {}
     ADDON_SLOTS: ClassVar[tuple[AddonSlot, ...]] = ()
     MODULES: ClassVar[tuple[DisplayModule, ...]] = ()
+    ACTIONS: ClassVar[tuple[ActionModule, ...]] = ()
     READS_SETTINGS: ClassVar[tuple[str, ...]] = ()
     SETTINGS: ClassVar[tuple[SettingSpec, ...]] = ()
     DYNAMIC: ClassVar[DynamicShape | None] = None
@@ -258,6 +259,13 @@ class Node(ABC):
         hub = self.context.events
         if hub is not None:
             hub.emit(self.uid, port, event)
+
+    def listen_now(self) -> None:
+        """Register this node's event handlers with the run now rather than after ``build`` returns. A node whose build is the
+        long part of its run (a trainer) calls this first so a page's action can reach it while it works."""
+        hub = self.context.events
+        if hub is not None and self.EVENTS_IN:
+            hub.attach(self.uid, self)
 
     def close(self) -> None:
         """Called once when the run ends, for nodes the runtime retained (those with EVENTS_IN)."""
@@ -335,6 +343,18 @@ def _check_declarations(cls: type[Node]) -> None:
         raise TypeError(f"{name}.MODULES must be a tuple of DisplayModule")
     if len({m.name for m in cls.MODULES}) != len(cls.MODULES):
         raise TypeError(f"{name}.MODULES has duplicate names")
+    if not isinstance(cls.ACTIONS, tuple) or not all(isinstance(a, ActionModule) for a in cls.ACTIONS):
+        raise TypeError(f"{name}.ACTIONS must be a tuple of ActionModule")
+    if len({a.name for a in cls.ACTIONS}) != len(cls.ACTIONS):
+        raise TypeError(f"{name}.ACTIONS has duplicate names")
+    for action in cls.ACTIONS:
+        ev = cls.EVENTS_IN.get(action.event)
+        if ev is None:
+            raise TypeError(f"{name}.ACTIONS[{action.name!r}] names event {action.event!r}, which is not in EVENTS_IN")
+        try:
+            ev.payload(**action.defaults)
+        except TypeError as exc:
+            raise TypeError(f"{name}.ACTIONS[{action.name!r}].defaults do not build a {ev.payload.__name__}: {exc}") from exc
     if not isinstance(cls.READS_SETTINGS, tuple) or not all(isinstance(k, str) for k in cls.READS_SETTINGS):
         raise TypeError(f"{name}.READS_SETTINGS must be a tuple of keys")
     if cls.SETTINGS:

@@ -397,6 +397,48 @@ export function moveCard(root, id, owner, tabId) {
   return tree;
 }
 
+/**
+ * Put the cards `ids` into one new box (a section) that takes their place: the box has one tab holding the cards as they were
+ * arranged, and more tabs can be added to it afterwards. The cards must share one tab of one container, and the box must not
+ * nest deeper than allowed. A new tree; the root itself when that is not possible.
+ */
+export function groupCards(root, ids) {
+  const wanted = new Set(ids);
+  if (!wanted.size) return root;
+  const spots = [...wanted].map((id) => locateCard(root, id));
+  const first = spots[0];
+  if (spots.some((s) => !s || s.owner !== first.owner || s.tabId !== first.tabId)) return root;
+  const tree = JSON.parse(JSON.stringify(root));
+  const find = (container, depth) => {
+    for (const tab of container.tabs) {
+      for (const b of tab.blocks) {
+        if (b.id === first.owner) return { container: b.container, depth: depth + 1 };
+        if (b.container) { const hit = find(b.container, depth + 1); if (hit) return hit; }
+      }
+    }
+    return null;
+  };
+  const dest = first.owner ? find(tree, 0) : { container: tree, depth: 0 };
+  const tab = dest && dest.container.tabs.find((t) => t.id === first.tabId);
+  if (!tab) return root;
+  const picked = tab.blocks.filter((b) => wanted.has(b.id));
+  if (picked.length !== wanted.size) return root;
+  if (dest.depth + 1 + depthOf(picked) > MAX_DEPTH) return root;
+  const left = Math.min(...picked.map((b) => b.x));
+  const top = Math.min(...picked.map((b) => b.y));
+  const right = Math.max(...picked.map((b) => b.x + b.w));
+  const bottom = Math.max(...picked.map((b) => b.y + b.h));
+  const columns = Math.min(Math.max(right - left, 3), dest.container.columns);
+  const box = {
+    id: newBlockId(null, collectIds(tree.tabs.flatMap((t) => t.blocks))),
+    container: { columns, tabs: [{ id: "t1", title: "Tab 1", blocks: picked.map((b) => ({ ...b, x: b.x - left, y: b.y - top })) }] },
+    x: Math.min(left, dest.container.columns - columns), y: top, w: columns, h: bottom - top + 2,
+    collapsed: false, title: null, style: "outlined", options: {},
+  };
+  tab.blocks = resolve([...tab.blocks.filter((b) => !wanted.has(b.id)), box], dest.container.columns);
+  return tree;
+}
+
 export function patchBlock(doc, id, patch) {
   return { ...doc, blocks: doc.blocks.map((b) => (b.id === id ? { ...b, ...patch } : b)) };
 }

@@ -209,11 +209,12 @@ export class Board {
     return null;
   }
 
-  /** Mark one card as the selected one and one board as where new cards land (edit mode's visual cues). */
-  mark(selectedId, targetBoard) {
+  /** Mark the selected cards (an id or a set of ids) and one board as where new cards land (edit mode's visual cues). */
+  mark(selected, targetBoard) {
+    const chosen = selected instanceof Set ? selected : new Set([selected]);
     for (const b of this.boards()) {
       b.root.classList.toggle("bd-target", b === targetBoard && b.nested);
-      for (const [id, e] of b.entries) e.el.classList.toggle("is-selected", id === selectedId);
+      for (const [id, e] of b.entries) e.el.classList.toggle("is-selected", chosen.has(id));
     }
   }
 
@@ -338,7 +339,7 @@ export class Board {
     el.addEventListener("pointerdown", (ev) => {
       if (this.mode !== "edit" || !this.onSelect || ev.bdSelected) return;
       ev.bdSelected = true;
-      this.onSelect({ board: this, id: entry.block.id, view: entry.view });
+      this.onSelect({ board: this, id: entry.block.id, view: entry.view, extend: ev.ctrlKey || ev.metaKey || ev.shiftKey });
     });
     return entry;
   }

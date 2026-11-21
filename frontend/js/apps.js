@@ -31,7 +31,7 @@ import { History } from "./board/history.js";
 import { Inspector } from "./board/inspector.js";
 import { LiveStreams } from "./board/live.js";
 import {
-  applyValues, autoPage, buildAvailable, collectIds, containerKey, leafCards, locateCard, moveCard, moveTargets, refKey, statusByBlock,
+  applyValues, autoPage, buildAvailable, collectIds, containerKey, groupCards, leafCards, locateCard, moveCard, moveTargets, refKey, statusByBlock,
   titleFor, valuesPayload, walkCards,
 } from "./board/model.js";
 import { el, showMessage } from "./lib/dom.js";
@@ -133,6 +133,7 @@ const S = {
   app: null,           // the document: {graph, root, style, source_graph, ...}
   draft: null,         // stand-in graph the field cards write into: {nodes, memory}
   sel: null,           // selected card id (edit mode)
+  picked: new Set(),   // every selected card (Ctrl/Shift-click adds); always holds `sel`
   target: null,        // the Board "add" lands in
   history: new History(),
   saved: null,         // {layout, graph, exposed} as last saved; null = never
@@ -222,6 +223,9 @@ async function showPage() {
     patch: (id, patch) => { const hit = S.page.find(id); if (hit) hit.board.update(id, patch, "title"); renderInspector(); },
     move: moveSelected,
     remove: (id) => { const hit = S.page.find(id); if (hit) hit.board.removeId(id); },
+    group: groupSelected,
+    removeMany: () => { for (const id of [...S.picked]) { const hit = S.page.find(id); if (hit) hit.board.removeId(id); } },
+    addTab: (id) => { const hit = S.page.find(id); const entry = hit && hit.board.entries.get(id); if (entry && entry.view) entry.view.addTab(); },
   });
   S.page.setModules(S.resolution.modules);
   S.page.setContainer(S.app.root, S.draft);
@@ -336,7 +340,8 @@ function onBoardChange(reason) {
   if (reason === "blocks") {
     scheduleResolve(0);
     describePage();
-    if (S.sel && !S.page.find(S.sel)) S.sel = null;
+    S.picked = new Set([...S.picked].filter((id) => S.page.find(id)));
+    if (S.sel && !S.picked.has(S.sel)) S.sel = [...S.picked][0] || null;
     renderInspector();
     renderTray();
   }
@@ -350,21 +355,33 @@ function onBoardChange(reason) {
 
 const targetBoard = () => (S.target && S.target.alive ? S.target : S.page.activeBoard);
 
-function onSelect({ board, id, view }) {
-  S.sel = id;
-  S.target = view ? view.activeBoard : board;
+function onSelect({ board, id, view, extend }) {
+  const target = view ? view.activeBoard : board;
+  // Cards are picked together only from one tab: a card on another board starts a new selection.
+  if (extend && id && S.sel && S.target === target && S.target.alive) {
+    if (S.picked.has(id) && S.picked.size > 1) S.picked.delete(id); else S.picked.add(id);
+  } else {
+    S.picked = new Set(id ? [id] : []);
+  }
+  S.sel = id && S.picked.has(id) ? id : [...S.picked][0] || null;
+  S.target = target;
   markSelection();
   renderInspector();
   el("cols").value = String(targetBoard().view.container.columns);
 }
 
 function markSelection() {
-  S.page.mark(S.sel, targetBoard());
+  S.page.mark(S.picked.size > 1 ? S.picked : S.sel, targetBoard());
 }
 
 function renderInspector() {
   const hit = S.sel && S.mode === "edit" ? S.page.find(S.sel) : null;
   if (!hit) { S.inspector.hide(); return; }
+  if (S.picked.size > 1) {
+    S.inspector.showMany({ count: S.picked.size, canGroup: groupCards(S.app.root, [...S.picked]) !== S.app.root });
+    markSelection();
+    return;
+  }
   const { block } = hit;
   S.inspector.show({
     block,
@@ -373,6 +390,19 @@ function renderInspector() {
     here: locateCard(S.app.root, block.id),
   });
   markSelection();
+}
+
+/** Wrap the picked cards (or the selected one) in a new box, and select the box. */
+function groupSelected() {
+  const ids = S.picked.size > 1 ? [...S.picked] : [S.sel];
+  const root = groupCards(S.app.root, ids);
+  if (root === S.app.root) { log("Those cards cannot be boxed together (one tab only, and boxes nest three deep at most).", "warn"); return; }
+  const box = locateCard(root, ids[0]).owner;
+  applyRoot(root);
+  S.picked = new Set([box]);
+  S.sel = box;
+  markSelection();
+  renderInspector();
 }
 
 function moveSelected(id, owner, tabId) {
@@ -386,6 +416,7 @@ function applyRoot(root, { record = true } = {}) {
   S.app.root = root;
   S.page.setContainer(root, S.draft);
   if (S.sel && !S.page.find(S.sel)) S.sel = null;
+  S.picked = new Set(S.sel ? [S.sel] : []);
   if (record) S.history.record(JSON.stringify(root));
   scheduleResolve(0);
   describePage();
@@ -417,7 +448,7 @@ function setMode(mode) {
   el("tray").hidden = mode !== "edit";
   document.body.classList.toggle("app-editing", mode === "edit");
   S.page.setMode(mode);
-  if (mode !== "edit") S.sel = null;
+  if (mode !== "edit") { S.sel = null; S.picked = new Set(); }
   renderInspector();
   renderTray();
   updateHistoryButtons();

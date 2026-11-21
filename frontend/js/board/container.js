@@ -103,7 +103,7 @@ export class ContainerView {
 
   find(id) { return this.board ? this.board.find(id) : null; }
 
-  mark(selectedId, targetBoard) { if (this.board) this.board.mark(selectedId, targetBoard); }
+  mark(selected, targetBoard) { if (this.board) this.board.mark(selected, targetBoard); }
 
   /** Re-lay every tab for a new column count. */
   setColumns(columns) {
@@ -111,6 +111,13 @@ export class ContainerView {
     Object.assign(this.container, withColumns(this.container, columns));
     this._showTab();
     this.onChange("layout");
+  }
+
+  /** A new empty tab, shown. */
+  addTab() {
+    if (this.container.tabs.length >= MAX_TABS) return;
+    const tabs = addTab(this.container.tabs);
+    this._setTabs(tabs, tabs[tabs.length - 1].id);
   }
 
   /** Switch to a tab (in edit mode the tab's board also becomes the place new cards go). */
@@ -177,10 +184,7 @@ export class ContainerView {
     const active = this.activeId;
     const add = tool("+", "Add a tab");
     add.disabled = container.tabs.length >= MAX_TABS;
-    add.addEventListener("click", () => {
-      const tabs = addTab(container.tabs);
-      this._setTabs(tabs, tabs[tabs.length - 1].id);
-    });
+    add.addEventListener("click", () => this.addTab());
     const left = tool("‹", "Move this tab left");
     const right = tool("›", "Move this tab right");
     left.addEventListener("click", () => this._setTabs(moveTab(container.tabs, active, -1)));

@@ -162,3 +162,39 @@ test("History: undo/redo, dropping the redo tail, merging a typing run, capping"
   assert.equal(h.undo(), "d");
   assert.equal(h.undo(), null);
 });
+
+/* ---- grouping cards into one box ---- */
+
+import { groupCards as group } from "../js/board/model.js";
+import { collectIds as idsOf, depthOf as deep } from "../js/board/model.js";
+
+const leaf = (id, x, y, w = 4, h = 2) => ({ id, ref: { scope: "node", kind: "field", name: id, node: "n" }, x, y, w, h, collapsed: false, title: null, options: {} });
+
+test("grouping puts the cards in one new box, as they were arranged, and keeps every id", () => {
+  const root = { columns: 12, tabs: [{ id: "p", title: "Run", blocks: [leaf("a", 2, 1), leaf("b", 6, 1), leaf("c", 0, 6)] }] };
+  const out = group(root, ["a", "b"]);
+  const [c, box] = [out.tabs[0].blocks.find((b) => b.id === "c"), out.tabs[0].blocks.find((b) => b.container)];
+  assert.ok(c && box, "the other card stays, the box is new");
+  assert.deepEqual([...idsOf(out.tabs[0].blocks)].sort(), [...idsOf(root.tabs[0].blocks), box.id].sort());
+  const inner = box.container.tabs[0].blocks;
+  assert.deepEqual(inner.map((b) => [b.id, b.x, b.y]), [["a", 0, 0], ["b", 4, 0]]);
+  assert.equal(box.container.columns, 8);
+  assert.equal(box.x, 2);
+  assert.equal(box.container.tabs.length, 1);
+  assert.equal(root.tabs[0].blocks.length, 3, "the input is not changed");
+});
+
+test("grouping inside a box works, refuses cards from different places and too deep a nest", () => {
+  const root = { columns: 12, tabs: [{ id: "p", title: "Run", blocks: [leaf("a", 0, 0), leaf("b", 4, 0)] }] };
+  const once = group(root, ["a"]);
+  const box = once.tabs[0].blocks.find((b) => b.container);
+  const twice = group(once, ["a", "b"].filter((id) => id !== "b"));
+  assert.equal(deep(twice.tabs[0].blocks), 2);
+  assert.equal(group(once, ["a", "b"]), once, "a card inside a box and one outside are not one group");
+  assert.equal(group(root, ["zz"]), root, "an unknown card changes nothing");
+  assert.equal(group(root, []), root);
+  assert.ok(box.id);
+  let deepest = root;
+  for (let i = 0; i < 3; i++) deepest = group(deepest, [deepest.tabs[0].blocks.find((b) => b.ref || b.container).id]);
+  assert.ok(deep(deepest.tabs[0].blocks) <= 3);
+});

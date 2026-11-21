@@ -40,6 +40,22 @@ export class Inspector {
     this.host.replaceChildren();
   }
 
+  /** Several cards are selected: what can be done to them together. */
+  showMany({ count, canGroup }) {
+    const { actions } = this;
+    this.host.hidden = false;
+    this.host.replaceChildren(h("strong", "bd-insp-head", `${count} cards selected`));
+    const group = h("button", "btn btn-secondary btn-small", "Put them in one box");
+    group.type = "button";
+    group.disabled = !canGroup;
+    group.title = canGroup ? "One box with tabs; they become its first tab" : "Only cards on the same tab can be boxed together";
+    group.addEventListener("click", () => actions.group());
+    const remove = h("button", "btn btn-kill btn-small", `Remove ${count} cards`);
+    remove.type = "button";
+    remove.addEventListener("click", () => actions.removeMany());
+    this.host.append(group, remove, h("div", "bd-hint", "Ctrl/Shift-click a card to add or take it out of the selection."));
+  }
+
   /**
    * @param {object} info
    * @param {object} info.block          the selected card
@@ -99,6 +115,19 @@ export class Inspector {
         actions.move(block.id, owner, tabId);
       });
       this.host.append(row("Place in", move));
+    }
+
+    if (block.container) {
+      const add = h("button", "btn btn-secondary btn-small", "Add a tab to this box");
+      add.type = "button";
+      add.addEventListener("click", () => actions.addTab(block.id));
+      this.host.append(add);
+    } else {
+      const group = h("button", "btn btn-secondary btn-small", "Put in a box with tabs");
+      group.type = "button";
+      group.title = "Wraps this card in a box; add tabs and more cards to it afterwards. Ctrl/Shift-click cards to box several together.";
+      group.addEventListener("click", () => actions.group());
+      this.host.append(group);
     }
 
     const remove = h("button", "btn btn-kill btn-small", "Remove card");

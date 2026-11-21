@@ -14,9 +14,9 @@ from graph.registry import NodeRegistry
 from graph.resolve import diagnose_node, resolve_node
 from graph.runtime import GraphRunner
 from engine.generate.artifacts import ArtifactFolder
-from starters import AnimaLoraOptions, SdxlImageOptions, SdxlLoraOptions, anima_lora, sdxl_image, sdxl_lora
+from starters import AnimaImageOptions, AnimaLoraOptions, SdxlImageOptions, SdxlLoraOptions, anima_image, anima_lora, sdxl_image, sdxl_lora
 
-__all__ = ["AnimaLoraOptions", "ArtifactFolder", "DatasetStore", "Environment", "GraphRunner", "ModelLibrary", "NodeRegistry", "SdxlImageOptions", "SdxlLoraOptions", "anima_lora",
+__all__ = ["AnimaImageOptions", "AnimaLoraOptions", "ArtifactFolder", "DatasetStore", "Environment", "GraphRunner", "ModelLibrary", "NodeRegistry", "SdxlImageOptions", "SdxlLoraOptions", "anima_image", "anima_lora",
            "build_catalog", "comfy_folders", "diagnose_node", "library_report", "list_families", "make_runtime", "resolve_node", "sdxl_image", "sdxl_lora"]
 
 

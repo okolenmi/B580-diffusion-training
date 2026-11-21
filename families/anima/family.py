@@ -18,6 +18,7 @@ class AnimaFamily:
     layout = adapters.LAYOUT
     schemes = adapters.SCHEMES
     latent_spec = latents.LATENTS
+    generation = "flow"
     objective = objective.AnimaObjective
     load_text_encoder = staticmethod(conditioning.load_text_encoder)
     conditioning_kit = conditioning.AnimaConditioningKit

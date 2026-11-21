@@ -10,7 +10,8 @@ import torch
 
 from engine.devices import Accelerator, resolve_device, resolve_dtype
 from engine.generate.recipe import Recipe
-from engine.generate.sampling import SAMPLERS, GuidedDenoiser, NoiseTable, SigmaSchedule, initial_noise
+from engine.generate.sampling import SAMPLERS, SigmaSchedule
+from engine.generate.scheme import scheme_for
 from engine.handles import Latents, PromptEncoding
 from families.api.parts import DenoiserPart
 from families.registry import get_family
@@ -31,7 +32,8 @@ class SamplerNode(Node):
         "steps": Port("steps", int, required=False, default=25, minimum=1, maximum=200, group="sampling"),
         "cfg": Port("cfg", float, required=False, default=6.0, minimum=1.0, step=0.5, label="Guidance",
                     doc="How hard the image follows the prompt over the negative one. 1 skips the negative pass.", group="sampling"),
-        "sampler": Port("sampler", str, required=False, default="dpmpp_2m", choices=tuple(SAMPLERS), group="sampling"),
+        "sampler": Port("sampler", str, required=False, default="dpmpp_2m", choices=tuple(SAMPLERS), group="sampling",
+                        doc="dpmpp_2m for SDXL. Anima samples with euler."),
         "scheduler": Port("scheduler", str, required=False, default="normal", choices=tuple(SigmaSchedule.NAMES), group="sampling"),
         "width": Port("width", int, required=False, default=1024, minimum=64, maximum=2048, step=8, unit="px", group="image"),
         "height": Port("height", int, required=False, default=1024, minimum=64, maximum=2048, step=8, unit="px", group="image"),
@@ -49,16 +51,22 @@ class SamplerNode(Node):
         encoding: PromptEncoding = inputs["encoding"]
         if encoding.family is not get_family(part.family_id):
             raise ValueError("Sampler: the prompt was encoded for a different model family than the denoiser")
+        family = get_family(part.family_id)
         width, height = int(inputs.get("width") or 1024), int(inputs.get("height") or 1024)
-        if width % 8 or height % 8:
-            raise ValueError(f"Sampler: the size {width}x{height} must be a multiple of 8")
+        multiple = family.latent_spec.pixel_multiple
+        if width % multiple or height % multiple:
+            raise ValueError(f"Sampler: the size {width}x{height} must be a multiple of {multiple} for this model")
         steps, batch = int(inputs.get("steps") or 25), int(inputs.get("batch") or 1)
         recipes = tuple(Recipe(prompt=encoding.prompt, negative=encoding.negative_prompt, seed=int(inputs.get("seed") or 0) + i, steps=steps,
                                cfg=float(inputs.get("cfg") or 6.0), sampler=inputs.get("sampler") or "dpmpp_2m",
                                scheduler=inputs.get("scheduler") or "normal", width=width, height=height,
                                eps_scale=float(inputs.get("eps_scale") or 1.0)) for i in range(batch))
         first = recipes[0]
-        family = get_family(part.family_id)
+        scheme = scheme_for(family)
+        try:
+            scheme.check(first)
+        except ValueError as error:
+            raise ValueError(f"Sampler: {error}") from error
         device = resolve_device(self.context.settings.get("device.default"))
         precision = part.dtype if part.dtype != "auto" else self.context.settings.get("precision.denoiser")
         with self.context.task("Loading the denoiser"):
@@ -66,7 +74,7 @@ class SamplerNode(Node):
         try:
             apply_merges(family, denoiser, part.merges, lambda: self.context.env.service("models"), self.context.task)
             denoiser.eval()
-            latents = self._sample(denoiser, encoding, recipes, first, device)
+            latents = self._sample(denoiser, encoding, recipes, first, device, scheme, family.latent_spec)
         finally:
             del denoiser
             gc.collect()
@@ -75,8 +83,8 @@ class SamplerNode(Node):
         return {"latents": Latents(latents, recipes, {"model": part.source.path.rsplit("/", 1)[-1], "adapters": adapters,
                                                       "recipes": [asdict(r) for r in recipes]})}
 
-    def _sample(self, denoiser: Any, encoding: PromptEncoding, recipes: tuple[Recipe, ...], first: Recipe, device: str) -> torch.Tensor:
-        table = NoiseTable()
+    def _sample(self, denoiser: Any, encoding: PromptEncoding, recipes: tuple[Recipe, ...], first: Recipe, device: str,
+                scheme: Any, spec: Any) -> torch.Tensor:
         size, batch = (first.height, first.width), len(recipes)
         positive = encoding.condition(size, batch).to(device)
         negative = encoding.condition(size, batch, negative=True).to(device)
@@ -91,10 +99,8 @@ class SamplerNode(Node):
                 done += 1
             return denoiser.predict(x_in.to(device), t.to(device), positive if is_positive else negative).float()
 
-        sigmas = SigmaSchedule(first.scheduler, table).sigmas(first.steps)
-        noise = torch.cat([initial_noise(r.seed, (1, 4, r.height // 8, r.width // 8), float(sigmas[0]), table) for r in recipes]).to(device)
         cfg = 1.0 if first.prompt == first.negative else first.cfg  # equal prompts predict equal noise: the second pass would change nothing
         with torch.no_grad(), self.context.task("Sampling", total=total):
-            latents = SAMPLERS[first.sampler]().run(GuidedDenoiser(network, table, cfg, first.eps_scale), noise, sigmas).cpu()
+            latents = scheme.sample(recipes, lambda r: spec.noise_shape(r.height, r.width), network, cfg, device)
         self.context.report(f"node:{self.uid}", {"step": total, "total": total})
         return latents

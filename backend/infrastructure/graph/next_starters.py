@@ -68,15 +68,25 @@ _IMAGE = _Starter(
      ("seed", "Seed", "int", {}, "The first image's seed."),
      ("steps", "Steps", "int", {}, "Denoising steps."),
      ("cfg", "Guidance", "float", {}, "How hard the image follows the prompt."),
-     ("width", "Width", "int", {}, "Pixels, a multiple of 8."),
-     ("height", "Height", "int", {}, "Pixels, a multiple of 8."),
+     ("width", "Width", "int", {}, "Pixels, a multiple of 8 (16 for Anima)."),
+     ("height", "Height", "int", {}, "Pixels, a multiple of 8 (16 for Anima)."),
      ("batch", "Images", "int", {}, "How many images, seeds counting up from the first.")),
     ("model", "output"), tree.SdxlImageOptions, lambda values: tree.sdxl_image(**values).as_dict())
 
 
+_ANIMA_IMAGE = _Starter(
+    "anima-image", "Anima image generation",
+    "The same graph for Anima: its DiT, Qwen3 text encoder and VAE as three Load Model nodes, Euler on the shifted flow line, sizes in multiples of 16.",
+    (("model", "DiT", "string", {"picker": "model_file", "scope": "diffusion_models"}, "The Anima transformer file (it holds the text adapter)."),
+     ("text_encoder", "Text encoder", "string", {"picker": "model_file", "scope": "text_encoders"}, "The Qwen3-0.6B file."),
+     ("vae", "VAE", "string", {"picker": "model_file", "scope": "vae"}, "The Wan 2.1 / Qwen-Image VAE file."),
+     *_IMAGE.fields[1:]),
+    ("model", "text_encoder", "vae", "output"), tree.AnimaImageOptions, lambda values: tree.anima_image(**values).as_dict())
+
+
 class NextStarters(GraphStarters):
     def __init__(self) -> None:
-        self._starters = {starter.name: starter for starter in (_SDXL, _ANIMA, _IMAGE)}
+        self._starters = {starter.name: starter for starter in (_SDXL, _ANIMA, _IMAGE, _ANIMA_IMAGE)}
 
     def starters(self) -> list[dict]:
         listed = []

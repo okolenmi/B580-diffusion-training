@@ -2,7 +2,7 @@
 
     python -m tests.check_generate
 
-Covers the adapter list syntax, the preview pictures a page shows, the starter graph (every wire resolves), the run from prompt to PNG files (shape, seeds,
+Covers the two sampling schemes (noise prediction and rectified flow), the adapter list syntax, the preview pictures a page shows, the starter graph (every wire resolves), the run from prompt to PNG files (shape, seeds,
 the recipe inside each file, stopping), and that the same recipe gives the same pixels alone or in a batch.
 """
 
@@ -128,7 +128,58 @@ def refusals() -> None:
         check(not outcome.ok and "multiple of 8" in str(outcome.error), f"a size that is not a multiple of 8 is refused ({outcome.error})")
 
 
+def anima_starter() -> None:
+    from backend.infrastructure.graph.next_starters import NextStarters
+
+    doc = starters.anima_image(model="dit.safetensors", output="out", text_encoder="q.safetensors", vae="v.safetensors")
+    classes = {spec.uid: (spec.class_name, spec.params) for spec in doc.nodes}
+    check(all(cls in REGISTRY.load()[0] for cls, _ in classes.values()), "every node of the Anima image graph exists")
+    scopes = [p.get("scope") for c, p in classes.values() if c == "LoadModelNode"]
+    check(scopes == ["diffusion_models", "text_encoders", "vae"], f"the DiT, Qwen3 and VAE are three Load Model nodes ({scopes})")
+    wires = {(e.from_node, e.from_port, e.to_node, e.to_port) for e in doc.edges}
+    check(("n_bbbbbb", "qwen3", "n_eeeeee", "encoders") in wires and ("n_cccccc", "vae", "n_gggggg", "vae") in wires, "Qwen3 feeds the prompt, the VAE file feeds the decoder")
+    sampler_params = next(p for c, p in classes.values() if c == "SamplerNode")
+    check((sampler_params["sampler"], sampler_params["scheduler"]) == ("euler", "simple"), "it samples with Euler on the simple schedule")
+    raises(ValueError, lambda: starters.anima_image(model="dit.safetensors", output="out"), "the starter needs the two other files", "text encoder")
+    listed = {s["name"]: s for s in NextStarters().starters()}
+    check("anima-image" in listed and [o["name"] for o in listed["anima-image"]["options"]][:3] == ["model", "text_encoder", "vae"], "the starter is offered with its three model pickers first")
+    check(NextStarters().build("anima-image", {"model": "d", "text_encoder": "q", "vae": "v", "output": "o"})["nodes"], "and builds from the form")
+
+
+def flow_scheme() -> None:
+    import torch
+    from engine.generate.recipe import Recipe
+    from engine.generate.scheme import EpsScheme, FlowScheme, scheme_for
+    from families.registry import get_family
+
+    scheme = FlowScheme(shift=3.0)
+    sigmas = scheme.sigmas(2)
+    check([round(float(v), 4) for v in sigmas] == [1.0, 0.75, 0.0], f"flow positions are the shifted line from 1 to 0 ({sigmas.tolist()})")
+    many = scheme.sigmas(30)
+    check(bool((many[1:] < many[:-1]).all()) and float(many[0]) == 1.0 and float(many[-1]) == 0.0, "30 flow positions fall monotonically from 1 to 0")
+    check(isinstance(scheme_for(get_family("sdxl")), EpsScheme), "SDXL declares the noise-prediction scheme")
+    anima = scheme_for(get_family("anima"))
+    check(isinstance(anima, FlowScheme) and anima.shift == 3.0, "Anima declares the flow scheme with its objective's shift")
+
+    for bad, why in ((Recipe("x", sampler="dpmpp_2m", scheduler="simple"), "dpmpp_2m"), (Recipe("x", sampler="euler", scheduler="karras"), "karras"),
+                     (Recipe("x", sampler="euler", scheduler="simple", eps_scale=1.05), "epsilon")):
+        raises(ValueError, lambda r=bad: scheme.check(r), f"a flow model refuses {why}", why)
+    scheme.check(Recipe("x", sampler="euler", scheduler="simple"))
+
+    # A network that knows the clean sample predicts the velocity (x - x0) / s exactly; Euler then lands on x0 whatever the steps and guidance.
+    x0 = torch.randn(1, 16, 4, 4)
+    for steps, cfg in ((1, 1.0), (7, 4.0)):
+        recipes = (Recipe("x", seed=5, steps=steps, cfg=cfg, sampler="euler", scheduler="simple", width=32, height=32),)
+        out = scheme.sample(recipes, lambda r: (1, 16, 4, 4), lambda x, t, positive: (x - x0) / t.view(-1, 1, 1, 1), cfg, "cpu")
+        check(bool(torch.allclose(out, x0, atol=1e-4)), f"flow Euler recovers the clean sample in {steps} step(s) at guidance {cfg}")
+    check(not torch.equal(scheme.sample(recipes, lambda r: (1, 16, 4, 4), lambda x, t, p: x * 0, 1.0, "cpu"),
+                          scheme.sample((Recipe("x", seed=6, steps=7, sampler="euler", scheduler="simple"),), lambda r: (1, 16, 4, 4), lambda x, t, p: x * 0, 1.0, "cpu")),
+          "another seed starts from other noise")
+
+
 if __name__ == "__main__":
+    anima_starter()
+    flow_scheme()
     adapter_list()
     run_graph()
     preview_housekeeping()

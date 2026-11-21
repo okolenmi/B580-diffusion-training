@@ -353,6 +353,24 @@ class SdxlImageOptions:
     batch: int = 1
 
 
+def _image_graph(b: _Builder, o: SdxlImageOptions, output: str, *, encoder_wires: list[tuple[str, str, str, str]], vae_node: str,
+                 settings: dict | None, overrides: dict[str, dict] | None) -> GraphDoc:
+    """The generation graph both image starters share: the loaders are already in ``b`` (a node named ``model`` holds the denoiser)."""
+    b.add("adapters", "AdapterStackNode", adapters=o.adapters)
+    b.add("prompt", "EncodePromptNode", prompt=o.prompt, negative=o.negative)
+    b.add("sampler", "SamplerNode", seed=o.seed, steps=o.steps, cfg=o.cfg, sampler=o.sampler, scheduler=o.scheduler,
+          width=o.width, height=o.height, batch=o.batch)
+    b.add("decode", "DecodeImageNode")
+    b.add("preview", "PreviewImageNode")
+    b.add("save", "SaveImageNode", directory=output)
+    b.wires += [("model", "denoiser", "adapters", "denoiser"), ("adapters", "denoiser", "sampler", "denoiser"), *encoder_wires,
+                ("prompt", "encoding", "sampler", "encoding"), (vae_node, "vae", "decode", "vae"),
+                ("sampler", "latents", "decode", "latents"), ("decode", "images", "preview", "images"), ("decode", "images", "save", "images")]
+    for name, extra in (overrides or {}).items():
+        b.nodes = [(n, c, {**ps, **extra} if n == name else ps) for n, c, ps in b.nodes]
+    return b.doc(settings or {})
+
+
 def sdxl_image(*, model: str, output: str, settings: dict | None = None, source: tuple[str, dict] | None = None,
                overrides: dict[str, dict] | None = None, **options) -> GraphDoc:
     """SDXL text to image: model, adapter stack, prompt encoding, sampler, VAE decode, a preview for pages and saved PNGs that carry their recipe.
@@ -361,17 +379,37 @@ def sdxl_image(*, model: str, output: str, settings: dict | None = None, source:
     o, b = SdxlImageOptions(**options), _Builder()
     src_class, src_params = source or ("LoadModelNode", {"file": model})
     b.add("model", src_class, **src_params)
-    b.add("adapters", "AdapterStackNode", adapters=o.adapters)
-    b.add("prompt", "EncodePromptNode", prompt=o.prompt, negative=o.negative)
-    b.add("sampler", "SamplerNode", seed=o.seed, steps=o.steps, cfg=o.cfg, sampler=o.sampler, scheduler=o.scheduler,
-          width=o.width, height=o.height, batch=o.batch)
-    b.add("decode", "DecodeImageNode")
-    b.add("preview", "PreviewImageNode")
-    b.add("save", "SaveImageNode", directory=output)
-    b.wires += [("model", "denoiser", "adapters", "denoiser"), ("adapters", "denoiser", "sampler", "denoiser"),
-                ("model", "clip_l", "prompt", "encoders"), ("model", "clip_g", "prompt", "encoders"),
-                ("prompt", "encoding", "sampler", "encoding"), ("model", "vae", "decode", "vae"),
-                ("sampler", "latents", "decode", "latents"), ("decode", "images", "preview", "images"), ("decode", "images", "save", "images")]
-    for name, extra in (overrides or {}).items():
-        b.nodes = [(n, c, {**ps, **extra} if n == name else ps) for n, c, ps in b.nodes]
-    return b.doc(settings or {})
+    return _image_graph(b, o, output, encoder_wires=[("model", "clip_l", "prompt", "encoders"), ("model", "clip_g", "prompt", "encoders")],
+                        vae_node="model", settings=settings, overrides=overrides)
+
+
+@dataclass(frozen=True)
+class AnimaImageOptions(SdxlImageOptions):
+    """The Anima image starter: the SDXL choices with Anima's usual sampling (Euler on the shifted flow line) and its two other files."""
+
+    text_encoder: str = ""
+    vae: str = ""
+    steps: int = 30
+    cfg: float = 4.0
+    sampler: str = "euler"
+    scheduler: str = "simple"
+
+
+def anima_image(*, model: str, output: str, settings: dict | None = None, source: tuple[str, dict] | None = None,
+                overrides: dict[str, dict] | None = None, **options) -> GraphDoc:
+    """Anima text to image: the DiT, Qwen3 and VAE as three Load Model nodes (or one ``source`` that provides all three), then the SDXL graph.
+
+    ``model`` is the DiT file; widths and heights must be multiples of 16."""
+    o, b = AnimaImageOptions(**options), _Builder()
+    if source:
+        b.add("model", source[0], **source[1])
+        text_node = vae_node = "model"
+    else:
+        if not (o.text_encoder and o.vae):
+            raise ValueError("the Anima starter needs the text encoder (Qwen3) and VAE files beside the DiT")
+        b.add("model", "LoadModelNode", scope="diffusion_models", file=model)
+        b.add("text", "LoadModelNode", scope="text_encoders", file=o.text_encoder)
+        b.add("vae", "LoadModelNode", scope="vae", file=o.vae)
+        text_node, vae_node = "text", "vae"
+    return _image_graph(b, o, output, encoder_wires=[(text_node, "qwen3", "prompt", "encoders")], vae_node=vae_node,
+                        settings=settings, overrides=overrides)

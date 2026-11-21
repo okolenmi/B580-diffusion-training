@@ -18,6 +18,7 @@ class SDXLFamily:
     layout = adapters.LAYOUT
     schemes = adapters.SCHEMES
     latent_spec = latents.LATENTS
+    generation = "eps"
     objective = objective.SDXLObjective
     load_text_encoder = staticmethod(conditioning.load_text_encoder)
     conditioning_kit = conditioning.SDXLConditioningKit

@@ -13,10 +13,14 @@ from families.api.detection import Detection
 from families.api.library import SCOPES
 from families.api.parts import ROLE_CLASSES, ROLE_LABELS, make_part
 from families.registry import FAMILY_IDS, detect_file
-from graph import DisplayModule, DynamicShape, Environment, Node, Port, Resolution
+from graph import DisplayModule, DynamicShape, Environment, Group, Node, Port, Resolution
 
 _SERVICE = "models"
 _DTYPES = ("auto", "bf16", "fp16", "fp32")
+
+# Parts that run as their own network and so can have their own dtype; the adapter lives inside the denoiser file.
+_DTYPE_ROLES = ("denoiser", "clip_l", "clip_g", "qwen3", "vae")
+_OWN = {role: f"dtype_{role}" for role in _DTYPE_ROLES}
 
 _OUTPUT_DOC = {
     "denoiser": "The denoising network (UNet or DiT, by family).",
@@ -26,6 +30,13 @@ _OUTPUT_DOC = {
     "vae": "Latent autoencoder.",
     "adapter": "Sub-network stored inside the denoiser file.",
 }
+
+
+def _inputs_for(detection: Detection) -> dict[str, Port]:
+    """The node's ports, with a dtype port only for the parts the file holds."""
+    found = {part.role for part in detection.parts}
+    return {name: port for name, port in LoadModelNode.INPUTS.items()
+            if name not in _OWN.values() or next(r for r, n in _OWN.items() if n == name) in found}
 
 
 def _output_ports(detection: Detection) -> dict[str, Port]:
@@ -54,17 +65,22 @@ class LoadModelNode(Node):
     DISPLAY_NAME = "Load Model"
     CATEGORY = "Model"
     DYNAMIC = DynamicShape(depends_on=("scope", "file", "family"))
+    GROUPS = (Group("model", "Model"), Group("dtypes", "Dtype", collapsed=True, advanced=True))
 
-    memory_fields = ("file", "family", "dtype")
+    memory_fields = ("file", "family", "dtype", *_OWN.values())
     INPUTS = {
-        "scope": Port("scope", str, required=False, default="checkpoints", choices=SCOPES,
+        "scope": Port("scope", str, required=False, default="checkpoints", choices=SCOPES, group="model",
                       doc="Which folder list to browse. It does not decide what the file contains."),
-        "file": Port("file", str, required=False, default="", picker="model_file",
+        "file": Port("file", str, required=False, default="", picker="model_file", group="model",
                      doc="A .safetensors file under the scope's folders (subfolders allowed)."),
-        "family": Port("family", str, required=False, default="auto", choices=("auto", *FAMILY_IDS),
+        "family": Port("family", str, required=False, default="auto", choices=("auto", *FAMILY_IDS), group="model",
                        doc="Leave on auto unless the file matches several families."),
-        "dtype": Port("dtype", str, required=False, default="auto", choices=_DTYPES, advanced=True,
-                      doc="Requested compute dtype. auto follows the graph setting, then the file."),
+        "dtype": Port("dtype", str, required=False, default="auto", choices=_DTYPES, advanced=True, group="dtypes",
+                      doc="Requested compute dtype for every part. auto follows the graph setting, then the file."),
+        **{name: Port(name, str, required=False, default="auto", choices=_DTYPES, advanced=True, group="dtypes",
+                      label=f"{ROLE_LABELS[role]} dtype",
+                      doc=f"Dtype of the {ROLE_LABELS[role]} part alone. auto uses the dtype above.")
+           for role, name in _OWN.items()},
     }
     OUTPUTS: dict[str, Port] = {}
     MODULES = (DisplayModule("status", "line", "Model", value_key="status", size=(12, 1), doc="The model file and the parts it was split into."),)
@@ -72,7 +88,7 @@ class LoadModelNode(Node):
 
     @classmethod
     def resolve(cls, params: dict, env: Environment | None = None) -> Resolution:
-        inputs = dict(cls.INPUTS)
+        inputs = {n: p for n, p in cls.INPUTS.items() if n not in _OWN.values()}
         detection, problem = _detect(params, env)
         if problem:
             return Resolution("error", inputs, {}, message=problem,
@@ -88,7 +104,7 @@ class LoadModelNode(Node):
                          if abs(m.score - detection.matches[0].score) < 1e-9)
             return Resolution("needs_choice", inputs, {}, choices={"family": tied}, focus="family",
                               message=detection.message)
-        return Resolution("ready", inputs, _output_ports(detection), info=detection.summary(),
+        return Resolution("ready", _inputs_for(detection), _output_ports(detection), info=detection.summary(),
                           detail={"family": detection.family_id, "warnings": list(detection.warnings),
                                   "parts": [{"role": p.role, "dtype": p.dtype, "bytes": p.nbytes,
                                              "keys": p.key_count} for p in detection.parts]})
@@ -103,6 +119,11 @@ class LoadModelNode(Node):
             raise ValueError(f"Load Model: {detection.message}")
         library = env.service(_SERVICE)
         path = str(library.resolve(inputs.get("scope") or "checkpoints", inputs["file"]))
-        dtype = inputs.get("dtype") or "auto"
+        everyone = inputs.get("dtype") or "auto"
         self.context.report(f"node:{self.uid}", {"step": 0, "status": detection.summary()})
-        return {p.role: make_part(detection.family_id, path, p, dtype) for p in detection.parts}
+        return {p.role: make_part(detection.family_id, path, p, self._dtype_of(p.role, inputs, everyone)) for p in detection.parts}
+
+    @staticmethod
+    def _dtype_of(role: str, inputs: dict, everyone: str) -> str:
+        own = inputs.get(_OWN.get(role, "")) or "auto"
+        return own if own != "auto" else everyone

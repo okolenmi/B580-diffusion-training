@@ -6,7 +6,7 @@ from typing import Any
 
 import torch
 
-from engine.devices import Accelerator, resolve_device, resolve_dtype
+from engine.devices import Accelerator, part_dtype, resolve_device
 from engine.handles import PromptEncoding
 from families.api.parts import ModelPart
 from families.registry import get_family
@@ -33,7 +33,8 @@ class EncodePromptNode(Node):
             raise ValueError(f"Encode Prompt: the encoders come from different families ({sorted(families)})")
         family = get_family(families.pop())
         device = resolve_device(self.context.settings.get("device.default"))
-        dtype = resolve_dtype(self.context.settings.get("precision.encoders"), torch.float16)
+        setting = self.context.settings.get("precision.encoders")
+        dtype = {role: part_dtype(p.dtype, setting, torch.float16) for role, p in parts.items()}
         prompt, negative = inputs.get("prompt") or "", inputs.get("negative") or ""
         with self.context.task("Encoding the prompt"):
             encoder = family.load_text_encoder(parts, device="cpu", dtype=dtype)

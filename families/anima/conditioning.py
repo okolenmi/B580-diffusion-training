@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from ..api.parts import ModelPart
+from ..api.parts import ModelPart, role_dtype
 from ..general.tensors import read_prefixed
 from .text import QwenConfig, QwenEncoder
 from .tokens import AnimaTokenizer, T5_END
@@ -198,11 +198,12 @@ class AnimaConditioningKit:
 
 
 def load_text_encoder(parts: Mapping[str, ModelPart], tokenizer: AnimaTokenizer | None = None, *, device="cpu",
-                      dtype: torch.dtype = torch.bfloat16, out_dtype: torch.dtype = torch.bfloat16) -> AnimaTextEncoder:
+                      dtype: torch.dtype | Mapping[str, torch.dtype] = torch.bfloat16, out_dtype: torch.dtype = torch.bfloat16) -> AnimaTextEncoder:
     """Build the encoder from the ``qwen3`` part a Load Model node produced."""
     if "qwen3" not in parts:
         raise KeyError("Anima text encoding needs a 'qwen3' part")
     part = parts["qwen3"]
+    dtype = role_dtype(dtype, "qwen3")
     layers = part.info.config.get("layers", QwenConfig.layers)
     if layers != QwenConfig.layers or part.info.config.get("hidden", WIDTH) != WIDTH:
         raise ValueError(f"the qwen3 file has {layers} layers of width {part.info.config.get('hidden')}; Anima uses Qwen3-0.6B")

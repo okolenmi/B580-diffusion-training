@@ -7,7 +7,7 @@ from typing import Any
 
 import torch
 
-from engine.devices import Accelerator, resolve_device, resolve_dtype
+from engine.devices import Accelerator, part_dtype, resolve_device
 from engine.generate.tiling import TiledDecoder
 from engine.handles import Images, Latents
 from engine.runtime.memory import is_out_of_memory
@@ -33,7 +33,7 @@ class DecodeImageNode(Node):
         family = get_family(part.family_id)
         device = resolve_device(self.context.settings.get("device.default"))
         with self.context.task("Loading the VAE"):
-            vae = family.load_vae(part, device=device, dtype=resolve_dtype(self.context.settings.get("precision.vae"), torch.float32))
+            vae = family.load_vae(part, device=device, dtype=part_dtype(part.dtype, self.context.settings.get("precision.vae"), torch.float32))
         pixels = []
         try:
             with torch.no_grad(), self.context.task("Decoding", total=len(latents.recipes)) as task:

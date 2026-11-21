@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import ClassVar
+from collections.abc import Mapping
+from typing import Any, ClassVar
 
 
 class PartKind(str, Enum):
@@ -110,3 +111,8 @@ def make_part(family_id: str, path: str, info: PartInfo, dtype: str = "auto") ->
     if cls is None:
         raise KeyError(f"no part class for role {info.role!r}")
     return cls(family_id, info.role, PartSource(path, info.prefix), info, dtype)
+
+
+def role_dtype(dtype: Any, role: str) -> Any:
+    """A loader's `dtype` is one dtype for every part, or a mapping role -> dtype (each part has its own)."""
+    return dtype[role] if isinstance(dtype, Mapping) else dtype

@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 import torch
 from torch import Tensor
 
-from ..api.parts import ModelPart
+from ..api.parts import ModelPart, role_dtype
 from ..general.clip.checkpoint import to_tower_state
 from ..general.clip.model import CLIP_G, CLIP_L, CLIPConfig, CLIPTextTower
 from ..general.clip.tokenizer import CLIPTokenizer
@@ -219,12 +219,12 @@ def _tower_from_part(part: ModelPart, config: CLIPConfig, dtype: torch.dtype) ->
 
 
 def load_text_encoder(parts: Mapping[str, ModelPart], tokenizer: CLIPTokenizer | None = None, *, device="cpu",
-                      dtype: torch.dtype = torch.float16, out_dtype: torch.dtype = torch.bfloat16,
+                      dtype: torch.dtype | Mapping[str, torch.dtype] = torch.float16, out_dtype: torch.dtype = torch.bfloat16,
                       configs: tuple[CLIPConfig, CLIPConfig] = (CLIP_L, CLIP_G)) -> SDXLTextEncoder:
     """Build the encoder from the ``clip_l`` and ``clip_g`` parts a Load Model node produced."""
     for role in ("clip_l", "clip_g"):
         if role not in parts:
             raise KeyError(f"SDXL text encoding needs a {role!r} part")
-    return SDXLTextEncoder(_tower_from_part(parts["clip_l"], configs[0], dtype),
-                           _tower_from_part(parts["clip_g"], configs[1], dtype),
+    return SDXLTextEncoder(_tower_from_part(parts["clip_l"], configs[0], role_dtype(dtype, "clip_l")),
+                           _tower_from_part(parts["clip_g"], configs[1], role_dtype(dtype, "clip_g")),
                            tokenizer or CLIPTokenizer(), device, out_dtype)

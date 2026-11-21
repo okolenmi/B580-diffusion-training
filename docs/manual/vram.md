@@ -26,7 +26,7 @@ start, about 1.5 GB after the first forward/backward, creeping by ~4 MB per new 
 | Adapter size | `--rank` / `adapter.rank` | Parameters, gradients and optimizer state scale with it. | Capacity. | verified |
 | Fewer trained modules | `adapter.groups`, `include`, `exclude` | Fewer adapter parameters and less backward work. | Capacity/coverage. | untested |
 | Encoders off the card | `conditioner.release_encoders` (default true) | Text encoders live on the host and visit the device only to encode. | Slower first epoch unless the conditioning store is on. | untested |
-| Precision | `--set precision.denoiser/encoders/vae=auto|bf16|fp16|fp32`, `precision.autocast` | Lower precision = less memory. | fp32 is a big jump; quality risk with fp16. | untested |
+| Precision | `--set precision.denoiser/encoders/vae=auto|bf16|fp16|fp32`, `precision.autocast`; Load Model's **Dtype** group (one dtype for the file, then one per part: denoiser, each text encoder, VAE) | Lower precision = less memory. A part's own dtype wins over the node's, the node's over the graph setting. | fp32 is a big jump; quality risk with fp16. | untested |
 | Accumulation instead of batch | `--accumulation N` | Same effective batch with the memory of one micro-batch. | More forward/backward passes; no larger batches' kernel efficiency. | verified |
 | Allocator mode | env `PYTORCH_ALLOC_CONF=expandable_segments:True` | Could reduce stuck fragmentation. | Not known to work on XPU. | verified: peak 8.3 -> 7.1 GB, no speed penalty; now on by default (export `PYTORCH_ALLOC_CONF` to change) |
 

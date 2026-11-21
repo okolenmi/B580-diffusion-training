@@ -252,6 +252,14 @@ def node_cases(fx):
     check(all(isinstance(v, ModelPart) and v.dtype == "bf16" for v in out.values()), "requested dtype travels with the handle")
     check(out["denoiser"].source.path.endswith("sdxl_full.safetensors") and out["denoiser"].source.prefix == "model.diffusion_model.",
           "handle records file and prefix")
+    mixed = LoadModelNode(ExecutionContext(env=env)).build(scope="checkpoints", file="sdxl_full.safetensors", family="auto",
+                                                            dtype="bf16", dtype_vae="fp32", dtype_clip_g="auto")
+    check({r: p.dtype for r, p in mixed.items()} == {"denoiser": "bf16", "clip_l": "bf16", "clip_g": "bf16", "vae": "fp32"},
+          "a part's own dtype wins, auto falls back to the node's")
+    own = [n for n in res.inputs if n.startswith("dtype_")]
+    check(own == ["dtype_denoiser", "dtype_clip_l", "dtype_clip_g", "dtype_vae"], f"a dtype port per part the file holds ({own})")
+    check([n for n in one.inputs if n.startswith("dtype_")] == ["dtype_vae"] and not [n for n in empty.inputs if n.startswith("dtype_")],
+          "no dtype ports for parts that are not there")
     bad = runner.run(one_node({"scope": "checkpoints", "file": "junk.safetensors"}))
     check(not bad.ok and "graph invalid" in bad.error, f"a graph with an unresolvable file is refused before running ({bad.error})")
     raises(ValueError, lambda: LoadModelNode(ExecutionContext(env=env)).build(

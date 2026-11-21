@@ -9,7 +9,7 @@ import torch
 from data.ids import vae_identity
 from data.images import CROP_MODES, SizePolicy
 from data.latent_cache import LatentCache
-from engine.devices import Accelerator, resolve_dtype
+from engine.devices import Accelerator, part_dtype
 from engine.xpu_env import size_cache_for_shapes
 from families.api.header import read_header
 from families.api.parts import VAEPart
@@ -69,7 +69,7 @@ class LatentCacheNode(Node):
             residency = getattr(self.context.runtime, "residency", None)
             if residency is not None:
                 residency.ensure_started()
-            dtype = resolve_dtype(self.context.settings.get("precision.vae"), torch.float32)
+            dtype = part_dtype(part.dtype, self.context.settings.get("precision.vae"), torch.float32)
             with self.context.task("Loading the VAE"):
                 codec = family.load_vae(part, device=device, dtype=dtype)
             accelerator = Accelerator(device)

@@ -26,6 +26,11 @@ def resolve_dtype(name: str, default: torch.dtype) -> torch.dtype:
     return DTYPES[name]
 
 
+def part_dtype(own: str, setting: str, default: torch.dtype) -> torch.dtype:
+    """What a Load Model part asked for wins over the graph setting; either may be ``auto``."""
+    return resolve_dtype(own if own != "auto" else setting, default)
+
+
 _high_water_mb = 0.0
 
 

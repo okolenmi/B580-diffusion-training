@@ -12,7 +12,7 @@ from data.conditioning_store import ConditioningStore
 from data.ids import weights_identity
 from data.prompts import PromptTable
 from engine.conditioner import Conditioner
-from engine.devices import Accelerator, resolve_device, resolve_dtype
+from engine.devices import Accelerator, part_dtype, resolve_device, resolve_dtype
 from engine.runtime.encoders import OnDemandKit
 from engine.runtime.residents import ModulesResident
 from families.api.header import read_header
@@ -57,7 +57,8 @@ class ConditionerNode(Node):
             raise ValueError(f"Conditioner: the encoders come from different families ({sorted(families)})")
         family = get_family(families.pop())
         device = resolve_device(self.context.settings.get("device.default"))
-        dtype = resolve_dtype(self.context.settings.get("precision.encoders"), torch.float16)
+        setting = self.context.settings.get("precision.encoders")
+        dtype = {role: part_dtype(p.dtype, setting, torch.float16) for role, p in parts.items()}
         out = resolve_dtype(self.context.settings.get("precision.autocast"), torch.bfloat16) if self.context.settings.get("precision.autocast") != "off" else torch.float32
         self.encoder = family.load_text_encoder(parts, device="cpu", dtype=dtype, out_dtype=out)
         accelerator = Accelerator(device)
@@ -86,10 +87,10 @@ class ConditionerNode(Node):
         return DEFAULT_CACHE_MB if setting in (None, AUTO) else int(setting)
 
     @staticmethod
-    def _identity(parts: dict[str, ModelPart], dtype: torch.dtype, out: torch.dtype) -> str:
+    def _identity(parts: dict[str, ModelPart], dtype: dict[str, torch.dtype], out: torch.dtype) -> str:
         """What the stored encodings depend on: the encoder weights, how they are run, and the kit that arranges them."""
-        spec = {"dtype": str(dtype), "out": str(out)}
-        return hashlib.sha256("".join(weights_identity(read_header(p.source.path), p.source.prefix, {**spec, "role": role})
+        return hashlib.sha256("".join(weights_identity(read_header(p.source.path), p.source.prefix,
+                                                       {"dtype": str(dtype[role]), "out": str(out), "role": role})
                                       for role, p in sorted(parts.items())).encode()).hexdigest()[:16]
 
     def on_prompts_changed(self, event: PromptsChanged, ctx) -> None:

@@ -75,6 +75,21 @@ export class Inspector {
       this.host.append(row("Note is", look));
     }
 
+    if (block.ref && block.ref.kind === "field") {
+      const options = block.options || {};
+      const layout = h("select", "cfg-input");
+      layout.append(new Option("Automatic", ""), new Option("Name left, value right", "inline"), new Option("Name above value", "stacked"));
+      layout.value = options.layout || "";
+      layout.addEventListener("change", () => actions.patch(block.id, { options: { ...options, layout: layout.value || undefined } }));
+      this.host.append(row("Layout", layout));
+      const name = h("input", "");
+      name.type = "checkbox";
+      name.checked = !options.hideLabel;
+      name.setAttribute("aria-label", "Show the name");
+      name.addEventListener("change", () => actions.patch(block.id, { options: { ...options, hideLabel: name.checked ? undefined : true } }));
+      this.host.append(row("Show name", name));
+    }
+
     if (targets.length > 1) {
       const move = h("select", "cfg-input");
       for (const t of targets) move.append(new Option(t.label ? `Page › ${t.label}` : "Page", `${t.owner}\u0000${t.tabId}`));

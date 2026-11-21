@@ -233,3 +233,31 @@ test("a note is a block of its own: no target to lose, a free name each time, te
   doc = removeBlock(doc, doc.blocks[0].id);
   assert.equal(addNoteBlock(doc).blocks.filter((b) => b.ref.name === "note1").length, 1);  // the freed name comes back
 });
+
+/* ---- how a field card lays itself out ---- */
+
+import { cardStyle, fieldLayout, isMultiline } from "../js/board/model.js";
+
+test("small values are inline; text, lists and pickers are stacked; the card's own layout wins", () => {
+  const field = { ref: { kind: "field" } };
+  assert.equal(fieldLayout(field, { type: "int" }), "inline");
+  assert.equal(fieldLayout(field, { type: "float" }), "inline");
+  assert.equal(fieldLayout(field, { type: "bool" }), "inline");
+  assert.equal(fieldLayout(field, { type: "str", choices: ["a", "b"] }), "inline");
+  assert.equal(fieldLayout(field, { type: "str" }), "stacked");
+  assert.equal(fieldLayout(field, { type: "str", picker: "model_file" }), "stacked");
+  assert.equal(fieldLayout(field, { type: "str", ui: { widget: "textarea" } }), "stacked");
+  assert.equal(fieldLayout(field, { type: "list" }), "stacked");
+  assert.equal(fieldLayout({ ...field, options: { layout: "stacked" } }, { type: "int" }), "stacked");
+  assert.equal(fieldLayout({ ...field, options: { layout: "inline" } }, { type: "str" }), "inline");
+});
+
+test("a multi-line field is a bare card unless the card has a look of its own", () => {
+  const area = { type: "str", ui: { widget: "textarea" } };
+  assert.equal(isMultiline(area), true);
+  assert.equal(isMultiline({ type: "int" }), false);
+  assert.equal(cardStyle({ ref: { kind: "field" } }, area), "bare");
+  assert.equal(cardStyle({ ref: { kind: "field" } }, { type: "int" }), "plain");
+  assert.equal(cardStyle({ ref: { kind: "field" }, style: "accent" }, area), "accent");
+  assert.equal(cardStyle({ ref: { kind: "display" } }, area), "plain");
+});

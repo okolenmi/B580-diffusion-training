@@ -213,5 +213,8 @@ Needs the server running from the project's own Python (the sandbox's is too old
 ## 103. Load Model dtype per part (about 10 minutes)
 Open an SDXL checkpoint in Load Model, *Dtype* group: set the denoiser to bf16 and the VAE to fp32, the text encoders left on auto, and train or generate a few steps. The VRAM readout should differ from the all-bf16 run by about the VAE's size, and the conditioning cache (when persisted) must rebuild once after changing a text encoder's dtype. Report anything that still ignores a part's own dtype.
 
+## 104. Apps field cards on a real model folder (about 5 minutes)
+Make an app from the SDXL image starter with your models folder configured. The *File* card of Load Model must be a drop-down of your checkpoints (as on the node), the Prompt and Negative cards a title with a plain text area under it (no box around), numbers (steps, cfg, seed) a name on the left and the value on the right. In *Edit*, select a card: *Layout* switches between the two, *Show name* hides the name. Report anything that does not look right at your window size or on the phone view.
+
 ## Reading a bundle automatically
 `python -m accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m perf hwcheck` without running anything.

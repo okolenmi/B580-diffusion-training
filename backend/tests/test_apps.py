@@ -206,6 +206,7 @@ g = GraphDefinition(GraphDoc(
 m = describe.execute(g)
 by_id = {n["id"]: n for n in m.nodes}
 wfields = {f["name"]: f for f in by_id[W1]["fields"]}
+check("ui" in wfields["steps"], "a card's field carries the port's ui hints (a text area, a slider)")
 check(set(wfields) == {"steps", "tag"}, f"the widget's own ports are its fields (got {sorted(wfields)})")
 check(wfields["steps"]["value"] == 5 and wfields["steps"]["has_value"], "current value is reported")
 check(wfields["tag"]["has_value"] is False, "an unset param says so")

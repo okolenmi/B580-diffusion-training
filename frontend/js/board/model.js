@@ -121,6 +121,27 @@ export function titleFor(block, modules) {
 
 const JSON_TYPES = new Set(["list", "dict", "tuple"]);
 
+/** A value that needs room to be typed in: a text area, or a list/dict as JSON. */
+export function isMultiline(descriptor) {
+  return !!descriptor && ((descriptor.ui && descriptor.ui.widget === "textarea") || JSON_TYPES.has(descriptor.type));
+}
+
+/** How a field card lays out its name and control: `inline` (name left, control right) or `stacked` (name above). Small values
+    are inline; text, lists and pickers are stacked, since their control wants the width. A card's own `options.layout` wins. */
+export function fieldLayout(block, descriptor) {
+  const own = block.options && block.options.layout;
+  if (own === "inline" || own === "stacked") return own;
+  if (!descriptor || isMultiline(descriptor) || descriptor.picker) return "stacked";
+  const inline = descriptor.type === "int" || descriptor.type === "float" || descriptor.type === "bool" || (descriptor.choices && descriptor.choices.length);
+  return inline ? "inline" : "stacked";
+}
+
+/** The look a card has when its `style` is unset: a multi-line text field is just its name and the text area, with no box around. */
+export function cardStyle(block, descriptor) {
+  if (block.style) return block.style;
+  return block.ref && block.ref.kind === "field" && isMultiline(descriptor) ? "bare" : "plain";
+}
+
 /** Suggested [w, h] for a new block, in grid units, clamped to `columns`. */
 export function defaultSize(ref, modules, columns) {
   const { descriptor } = findTarget(ref, modules);
@@ -131,7 +152,7 @@ export function defaultSize(ref, modules, columns) {
   } else if (ref.kind === "action") {
     [w, h] = [3, 2];
   } else if (descriptor) {
-    if (JSON_TYPES.has(descriptor.type)) h = 3;
+    if (isMultiline(descriptor)) h = Math.max(2, Math.ceil(((descriptor.ui && descriptor.ui.rows) || 3) * 0.45) + 1); // text lines are shorter than grid rows
   }
   if (columns < 8) w = columns;
   return [Math.max(1, Math.min(w, columns)), Math.max(1, h)];

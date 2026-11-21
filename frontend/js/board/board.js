@@ -43,7 +43,7 @@ import {
   cellDelta, columnWidth, effH, flowOrder, keyNudge, moveTo, resizeTo, resolve, setCollapsed,
 } from "./layout.js";
 import {
-  addBlock, addContainerBlock, addNodeSection, addNoteBlock, collectIds, findTarget, patchBlock, removeBlock, titleFor,
+  addBlock, addContainerBlock, addNodeSection, addNoteBlock, cardStyle, collectIds, findTarget, patchBlock, removeBlock, titleFor,
 } from "./model.js";
 
 export const ROW_PX = 48;
@@ -292,7 +292,9 @@ export class Board {
     const stable = descriptor
       ? JSON.stringify(descriptor, (k, v) => (k === "value" || k === "has_value" ? undefined : v))
       : "none";
-    return `${st ? st.status : "ok"}|${this.modules ? "m" : "-"}|${node ? node.stream : ""}|${stable}`;
+    // A field card draws its own name and layout, so those are part of what it is.
+    const look = block.ref.kind === "field" ? `|${titleFor(block, this.modules).title}|${JSON.stringify((block.options && [block.options.layout, block.options.hideLabel]) || "")}` : "";
+    return `${st ? st.status : "ok"}|${this.modules ? "m" : "-"}|${node ? node.stream : ""}|${stable}${look}`;
   }
 
   _createEntry(block) {
@@ -344,8 +346,11 @@ export class Board {
   _renderHeader(entry) {
     const { block } = entry;
     const t = titleFor(block, this.modules);
-    if (!entry.renaming) entry.title.textContent = t.title;
-    entry.sub.textContent = t.subtitle;
+    // A field card's own name is drawn in its body (beside or above the control); its header says where the value lives.
+    const isField = !block.container && block.ref.kind === "field";
+    entry.el.classList.toggle("is-field", isField);
+    if (!entry.renaming) entry.title.textContent = isField ? t.subtitle : t.title;
+    entry.sub.textContent = isField ? "" : t.subtitle;
     const st = this.statuses[block.id];
     const label = st && st.status !== "ok" ? STATUS_TEXT[st.status] || st.status : "";
     entry.badge.hidden = !label;
@@ -353,7 +358,7 @@ export class Board {
     entry.badge.title = st ? st.detail : "";
     entry.badge.dataset.status = st ? st.status : "";
     entry.el.dataset.status = st ? st.status : "ok";
-    entry.el.dataset.style = block.style || "plain";
+    entry.el.dataset.style = cardStyle(block, isField ? findTarget(block.ref, this.modules).descriptor : null);
     entry.el.classList.toggle("is-collapsed", !!block.collapsed);
     entry.body.hidden = !!block.collapsed;
   }
@@ -398,7 +403,7 @@ export class Board {
       }
       const siblings = node ? node.fields : this.modules.graph_fields;
       const field = buildFieldControl({
-        block, descriptor, siblings, doc: this.doc,
+        block, descriptor, siblings, doc: this.doc, label: titleFor(block, this.modules).title,
         onChange: (origin) => { this.refreshFields(); this.onChange(origin); },
         onNote: this.onNote,
       });
@@ -551,7 +556,7 @@ export class Board {
     const input = h("input", "bd-rename");
     input.type = "text";
     input.maxLength = 120;
-    input.value = entry.title.textContent;
+    input.value = titleFor(block, this.modules).title;
     input.setAttribute("aria-label", "Block title");
     entry.title.replaceChildren(input);
     input.focus();

@@ -12,7 +12,7 @@ A flat board (a view inside a graph document) is `{mode: "page" | "monitor", col
 (it is a titled section with one tab, or a tabbed card with several); containers nest at most 3 deep and are not allowed in a flat board.
 
 A card is `{id, x, y, w, h, collapsed, title, style?, options, ref | container}`. `ref` is `{scope: "node" | "graph" | "note", kind: "field" | "display" | "action" |
-"note", name, node?}`; `node` is the node uid and only for scope `node`. `style` is one of `plain`, `outlined`, `accent`, `bare`.
+"note", name, node?}`; `node` is the node uid and only for scope `node`. `style` is one of `plain`, `outlined`, `accent`, `bare`; unset, a multi-line text field is `bare` and everything else `plain`.
 
 Limits: columns 1..24 (default 12); at most 200 cards in a document, containers included; at most 12 tabs in a container; ids `[A-Za-z0-9_-]{1,40}`,
 unique across the whole document (tab ids unique within their container); a card must fit its container's grid (`x + w <= columns`); `options` at most
@@ -23,6 +23,11 @@ Card kinds the editor writes (all inside the shapes above, so the backend stores
 A **section** is a card with a `container` of one tab; a **node form** is a section holding one field card per free, non-advanced field of a node
 (ordinary cards: binding and exposure are unchanged). Moving a card into another tab keeps its id, so the document stays valid. The page's own
 tabs are `root.tabs`.
+
+A **field card** draws the name of its value and the control the graph editor would draw for that port (`frontend/js/graph/widgets.js`, one place for
+both): a model file is chosen from the server's list, a prompt is a text area, a number has its bounds. `options.layout` is `inline` (name left,
+value right: the default for numbers, switches and short choices) or `stacked` (name above the value: text, lists, pickers); `options.hideLabel`
+leaves the name out. The backend sends each field with the port's `ui` hints so the page can choose.
 
 Editor-only state is not stored: the selected card, the active tab of each container, undo history (snapshots of `root`, so a value typed into a
 field is not undone) and the phone preview.

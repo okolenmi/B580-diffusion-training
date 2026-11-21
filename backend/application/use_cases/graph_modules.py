@@ -51,7 +51,7 @@ def _field_dict(port: dict, params: dict, wired: bool) -> dict[str, Any]:
     return {
         **{key: port.get(key) for key in (
             "name", "type", "required", "doc", "default", "choices", "picker", "visible_when", "widget_only",
-            "label", "group", "advanced", "unit", "minimum", "maximum", "step")},
+            "label", "group", "advanced", "unit", "minimum", "maximum", "step", "ui")},
         "wired": wired,
         "has_value": name in params,
         "value": params.get(name),

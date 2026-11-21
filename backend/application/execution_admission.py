@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 from .errors import MemoryUnavailableError
 from .graph_peak_source import PeakSource
+from .host_ram_admission import HostRamAdmission
 from .memory_admission import LedgerSource, admit, pending_owner
 from .memory_ledger import Grant
 from ..domain.graph import GraphDefinition
@@ -26,9 +27,10 @@ class Claim:
 
 
 class ExecutionAdmission:
-    def __init__(self, *, ledger: LedgerSource, peak_source: PeakSource) -> None:
+    def __init__(self, *, ledger: LedgerSource, peak_source: PeakSource, host_ram: HostRamAdmission | None = None) -> None:
         self._ledger = ledger
         self._peak_source = peak_source
+        self._host_ram = host_ram
 
     def memory_for(self, graph: GraphDefinition, overrides: dict | None) -> EffectiveMemory:
         """The effective settings and the demand known now (stated beats observed)."""
@@ -44,6 +46,9 @@ class ExecutionAdmission:
 
     def claim(self, memory: EffectiveMemory) -> Claim:
         """Reserve for a run with these settings, or raise ``MemoryUnavailableError`` with the breakdown."""
+        ceiling = memory.ram_max_mb
+        if self._host_ram is not None and isinstance(ceiling, (int, float)) and not isinstance(ceiling, bool):
+            self._host_ram.check(float(ceiling))  # nothing is held yet, so a refusal has nothing to hand back
         ledger = self._ledger()
         exploratory = memory.demand_source == "unknown"
         if ledger is None:

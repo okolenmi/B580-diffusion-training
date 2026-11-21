@@ -24,8 +24,8 @@ Hardware results are not guessed here: `TESTING.md` (root) lists what still has 
 
 ## Declared but not working
 
-- Graph setting `memory.ram_max_mb` is in the registry and the editor and is recorded with the run, but nothing enforces it
-  (`manual/persistence-and-unbuilt.md`); no host-memory sensing exists yet.
+- Graph setting `memory.ram_max_mb` (a stated host-RAM ceiling) is checked at admission and enforced by the child; built and CPU-tested, never run on a
+  real child process or a real training (`TESTING.md` 101). `auto` is not checked. See `internals/memory.md`, "Host memory".
 
 ## Not built
 

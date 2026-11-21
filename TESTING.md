@@ -199,5 +199,12 @@ Make an app from the SDXL LoRA starter (Apps, new, pick the graph): the first pa
 4. Stop a training mid-run, then look at *Runs*: stopped, with the values; an error run shows its message in red.
 Report anything that blanks, jumps or lags in the cards, and any status sentence that stays stale after the run ends.
 
+## 101. Host RAM ceiling `memory.ram_max_mb` (about 20 minutes, a real child process)
+Needs the server running from the project's own Python (the sandbox's is too old to start a child). In an App or the graph editor set `memory.ram_max_mb` and run a short training:
+1. **Enforced**: set a ceiling clearly below what the run needs (try 3000 MB with the SDXL model; `top` shows the python child's RES). The run must end as **error** with "host memory: the run holds N MB, over its ceiling of 3000 MB", not as a plain stop, and the adapter/outputs written before that must be intact. Note how long after crossing the ceiling it stops (it ends at the next safe point; a model load in progress is not interrupted). Report N against what `top` showed.
+2. **Counted right**: with a ceiling just above the real use (peak RES minus the mapped checkpoint is about right) the run must complete; if it stops although `top` shows less, send the numbers: the count is `RssAnon + RssShmem`, not RES.
+3. **Admission**: set a ceiling above the machine's RAM: the start is refused at once (409, "host memory: ... the machine can give ..."). Start one run with a ceiling of about 60% of the RAM, then a second the same: the second waits as *planned* (queue card) and starts when the first ends.
+4. `auto` (the default) must behave exactly as before.
+
 ## Reading a bundle automatically
 `python -m accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m perf hwcheck` without running anything.

@@ -33,6 +33,7 @@ from backend.application.ports.graph_execution_repository import (
     GraphExecutionRepository,
 )
 from backend.application.ports.graph_library import GraphLibrary
+from backend.application.ports.host_memory import HostMemory
 from backend.application.ports.graph_runtime import GraphRuntime
 from backend.application.ports.monitor_bus import MonitorBus as MonitorBusPort
 from backend.application.memory_admission import (
@@ -575,6 +576,7 @@ def build_services(
     device_probe: DeviceProbe | None = None,
     venv_inspector: VenvInspector | None = None,
     tokenizer_files: TokenizerFiles | None = None,
+    host_memory: HostMemory | None = None,
 ) -> ApplicationServices:
     """Wire the use cases against fakes (the composition root's twin).
 
@@ -704,6 +706,7 @@ def build_services(
         # no dataset, so every fingerprint here is unknown -- exactly what
         # these tests claimed before the read half existed, never a zero peak.
         peak_source=fixture_peak_source.observed,
+        host_memory=host_memory,
     )
     describe_modules = DescribeGraphModules(catalog=contract_catalog)
     resolve_board = ResolveBoard(describe=describe_modules, runtime=graph_runtime)

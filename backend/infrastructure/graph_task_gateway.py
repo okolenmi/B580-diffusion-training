@@ -98,6 +98,8 @@ class SubprocessGraphTaskGateway(GraphTaskGateway):
             command += ["--memory-adaptive"]
         if launch.vram_min_mb:
             command += ["--vram-min-mb", str(launch.vram_min_mb)]
+        if launch.ram_max_mb is not None:
+            command += ["--ram-max-mb", str(launch.ram_max_mb)]
         return command
 
     def _build_env(self) -> dict[str, str]:

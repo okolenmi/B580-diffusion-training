@@ -25,11 +25,13 @@ import threading
 from ..dto import GraphExecutionSummaryDTO, to_execution_summary_dto
 from ..errors import GraphInvalidError, MemoryUnavailableError
 from ..execution_admission import ExecutionAdmission
+from ..host_ram_admission import HostRamAdmission
 from ..graph_peak_source import PeakSource
 from ..memory_admission import LedgerSource, graph_owner
 from .rename_graph_execution import clean_name
 from ..ports.clock import Clock
 from ..ports.execution_launcher import ExecutionLauncher
+from ..ports.host_memory import HostMemory
 from ..lifecycle_writer import ExecutionLifecycleWriter
 from ..ports.graph_execution_repository import GraphExecutionRepository
 from ..ports.graph_runtime import GraphRuntime, IssueSeverity, issue_to_dict
@@ -55,6 +57,7 @@ class StartGraphExecution:
         clock: Clock,
         memory_ledger: LedgerSource,
         peak_source: PeakSource,
+        host_memory: HostMemory | None = None,
     ) -> None:
         self._executions = executions
         self._writer = writer
@@ -66,7 +69,9 @@ class StartGraphExecution:
         # provider may still answer None -- the device total unknown --
         # and then every start is refused explicitly rather than
         # admitted unchecked.
-        self._admission = ExecutionAdmission(ledger=memory_ledger, peak_source=peak_source)
+        # Host RAM is checked only for a stated ``memory.ram_max_mb``; without a reader nothing is checked.
+        host_ram = None if host_memory is None else HostRamAdmission(host_memory, self._promised_ram)
+        self._admission = ExecutionAdmission(ledger=memory_ledger, peak_source=peak_source, host_ram=host_ram)
         self._lock = threading.Lock()
 
     def execute(
@@ -122,6 +127,15 @@ class StartGraphExecution:
                     break
                 started += 1
         return started
+
+    def _promised_ram(self) -> dict[str, float]:
+        """The host-memory ceilings the live runs were admitted with, by claim owner."""
+        promised: dict[str, float] = {}
+        for execution in self._executions.list_unfinished():
+            ceiling = None if execution.memory is None else execution.memory.ram_max_mb
+            if isinstance(ceiling, (int, float)) and not isinstance(ceiling, bool):
+                promised[graph_owner(execution.require_id())] = float(ceiling)
+        return promised
 
     def _anything_live_or_planned(self) -> bool:
         return self._executions.find_active() is not None or bool(self._executions.list_planned())

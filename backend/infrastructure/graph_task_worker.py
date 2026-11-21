@@ -45,6 +45,7 @@ from typing import Literal
 from ..python_floor import require_python
 from .admission.graph_memory import CHECK_UNKNOWN
 from .device_probe import DeviceProbe
+from .host_ram_guard import HostRamGuard
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,12 @@ def _build_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="the graph's declared floor; an adaptive run refuses below it",
     )
+    p.add_argument(
+        "--ram-max-mb",
+        type=float,
+        default=None,
+        help="host-memory ceiling: the run is asked to stop when the process holds more (absent = no ceiling)",
+    )
     return p
 
 
@@ -132,7 +139,7 @@ def build_runtime(writer, registry=None, memory=None, env=None, commands=None):
     )
 
 
-def run_execution(graph, writer, cancel: threading.Event, runtime):
+def run_execution(graph, writer, cancel: threading.Event, runtime, guard: HostRamGuard | None = None):
     """Run one graph, reporting every record through ``writer``.
 
     The single producer, shared by both gateways. A child process builds a
@@ -146,7 +153,7 @@ def run_execution(graph, writer, cancel: threading.Event, runtime):
 
     Returns the runtime's outcome. A failing *graph* is a normal outcome,
     recorded and returned; a failing *harness* raises, so the caller
-    decides whether that deserves an error exit.
+    decides whether that deserves an error exit. A ``guard`` that stopped the run turns the stop into an error naming why.
     """
     outcome = runtime.execute(
         graph,
@@ -159,7 +166,8 @@ def run_execution(graph, writer, cancel: threading.Event, runtime):
             "duration_ms": result.duration_ms,
         }),
     )
-    writer.outcome(error=outcome.error, results_count=len(outcome.results))
+    error = outcome.error or (guard.breach if guard is not None else None)
+    writer.outcome(error=error, results_count=len(outcome.results))
     return outcome
 
 
@@ -331,7 +339,7 @@ class MemoryTelemetry:
     """
 
     def __init__(self, device, writer, memory, backstop, cancel,
-                 interval_s: float = MEMORY_TELEMETRY_INTERVAL_S) -> None:
+                 interval_s: float = MEMORY_TELEMETRY_INTERVAL_S, guard: HostRamGuard | None = None) -> None:
         if interval_s <= 0:
             raise ValueError(
                 f"interval_s must be positive, got {interval_s!r}"
@@ -341,6 +349,7 @@ class MemoryTelemetry:
         self._memory = memory
         self._backstop = backstop
         self._cancel = cancel
+        self._guard = guard
         self._interval_s = interval_s
         self._thread = threading.Thread(
             target=self._loop,
@@ -368,6 +377,9 @@ class MemoryTelemetry:
         # stop costs no extra frame here -- stop() writes the final
         # one itself.
         while not self._cancel.wait(self._interval_s):
+            # Before the device frame: a CPU run has no device frames, and the ceiling is about the host.
+            if self._guard is not None:
+                self._guard.check()
             self._frame()
 
     def start(self) -> None:
@@ -514,11 +526,12 @@ def main(argv: list[str] | None = None) -> int:
         # included, which is the child's longest stretch of device-quiet
         # time and would otherwise be the one part of the process no frame covers.
         dispatcher = ActionDispatcher(_EventReporter(writer))
-        with MemoryTelemetry(device_ctx, writer, memory, backstop, cancel), _commands_for(args.commands, dispatcher):
+        guard = None if args.ram_max_mb is None else HostRamGuard(args.ram_max_mb, cancel)
+        with MemoryTelemetry(device_ctx, writer, memory, backstop, cancel, guard=guard), _commands_for(args.commands, dispatcher):
             outcome = run_execution(
-                graph, writer, cancel, build_runtime(writer, memory=memory, commands=dispatcher)
+                graph, writer, cancel, build_runtime(writer, memory=memory, commands=dispatcher), guard
             )
-            return 1 if outcome.error else 0
+            return 1 if outcome.error or (guard is not None and guard.breach) else 0
     except Exception as exc:  # noqa: BLE001 -- the server needs to hear about this
         writer.outcome(error=f"{type(exc).__name__}: {exc}", results_count=0)
         traceback.print_exc(file=sys.stderr)

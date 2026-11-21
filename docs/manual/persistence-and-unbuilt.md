@@ -10,8 +10,7 @@ Part of the trainer manual (`../MANUAL.md` has the short version). Status: `veri
 
 ## Declared but not implemented
 
-`memory.ram_max_mb` is in the registry and the editor and is recorded with the run, but nothing enforces it (no host-memory sensing exists yet).
-Setting it changes nothing. Step graph capture is the trainer's `graph` port, not a graph setting. Block swap (denoiser blocks held on the host)
+Step graph capture is the trainer's `graph` port, not a graph setting. Block swap (denoiser blocks held on the host)
 is not built and has no setting; see `internals/memory.md`, "Open".
 Read by code: `memory.vram_max_mb`, `memory.vram_min_mb`, `memory.margin_mb`, `memory.strict`, `device.default`, `precision.*`,
 ``runtime.residency.calibration_steps`, `runtime.empty_cache_every_n_steps`,

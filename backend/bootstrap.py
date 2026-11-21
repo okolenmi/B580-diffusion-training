@@ -82,6 +82,7 @@ from .infrastructure.server_restart import ExecServerRestarter
 from .infrastructure.clock import SystemClock
 from .infrastructure.file_artifact_store import FileArtifactStore
 from .infrastructure.file_command_channel import FileCommandChannel
+from .infrastructure.host_memory import ProcHostMemory
 from .infrastructure.image_libraries import FsImageLibraries
 from .infrastructure.events.callback_event_bus import CallbackEventBus
 from .infrastructure.file_asset_store import FileSystemAssetStore
@@ -296,6 +297,7 @@ def build_container(settings: Settings) -> Container:
         # reported peaks under, and a preview keyed differently would
         # quote a peak belonging to some other configuration.
         peak_source=graph_peak_source.observed,
+        host_memory=ProcHostMemory(),
     )
     describe_modules = DescribeGraphModules(catalog=node_catalog)
     resolve_board = ResolveBoard(describe=describe_modules, runtime=graph_runtime)

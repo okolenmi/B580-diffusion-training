@@ -195,6 +195,8 @@ class GraphExecutionSupervisor(ExecutionLauncher):
             and effective.vram_max_mb == "auto"
         )
         vram_min_mb = float(effective.vram_min_mb) if effective is not None else 0.0
+        ram_ceiling = None if effective is None else effective.ram_max_mb
+        ram_max_mb = float(ram_ceiling) if isinstance(ram_ceiling, (int, float)) and not isinstance(ram_ceiling, bool) else None
         missing = [
             name
             for name, value in (
@@ -221,6 +223,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
             memory_grant_mb=memory_grant_mb,
             memory_adaptive=memory_adaptive,
             vram_min_mb=vram_min_mb,
+            ram_max_mb=ram_max_mb,
         )
         try:
             pid = self._gateway.spawn(launch)

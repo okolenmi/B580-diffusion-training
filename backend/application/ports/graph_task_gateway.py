@@ -76,6 +76,8 @@ class GraphTaskLaunch:
     #: The graph's declared floor (MemorySettings.vram_min_mb). An adaptive
     #: run still refuses below it. 0 = no floor beyond the child's own.
     vram_min_mb: float = 0.0
+    #: Host-memory ceiling in MB (``memory.ram_max_mb`` when stated, else None): the child stops itself when it holds more.
+    ram_max_mb: float | None = None
     #: Folder the run reads a page's actions from (``infrastructure/command_inbox``); None = the run takes none.
     command_dir: Path | None = None
 

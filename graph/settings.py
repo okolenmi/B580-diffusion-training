@@ -103,7 +103,9 @@ CORE_SETTINGS: tuple[SettingSpec, ...] = (
     SettingSpec("memory.strict", "Strict budget", "bool", True, group="Memory", advanced=True,
                 doc="Going over the budget is a bug in a node, not something to train through."),
     SettingSpec("memory.ram_max_mb", "RAM budget", "float", AUTO, allow_auto=True, unit="MB",
-                minimum=256, group="Memory", advanced=True, doc="Host-memory ceiling; recorded with the run."),
+                minimum=256, group="Memory", advanced=True, doc="Most host RAM this run may hold (its private and shared anonymous memory; mapped files do not count). A start is refused or "
+                    "waits when the machine cannot give it (what is available now, and the total less a reserve less the ceilings of running "
+                    "graphs); the run is asked to stop at its next safe point when it holds more. auto = no limit and no check."),
     SettingSpec("device.default", "Device", "str", "xpu", group="Device",
                 doc="Where nodes compute unless one declares an override. torch device strings, e.g. xpu, cpu."),
     SettingSpec("precision.denoiser", "Denoiser precision", "choice", "auto", choices=_PRECISIONS, group="Device",

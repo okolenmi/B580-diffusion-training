@@ -62,7 +62,8 @@ class MemorySettings:
     it). `vram_max_mb` is the ceiling it wants; ``"auto"`` means
     "everything that is free". `strict` (default True) means exceeding the
     budget is a bug in a node, not a condition to train through.
-    `ram_max_mb` is carried and validated now, enforced later.
+    `ram_max_mb` is the host-memory ceiling of the run: checked at admission (``application/host_ram_admission.py``) and
+    enforced by the child (``infrastructure/host_ram_guard.py``); ``auto`` is neither.
     `device` names the accelerator this graph runs on -- carried and
     validated now, and read by the child's physical check (MEM-05) to
     know which card to ask; ``for_device``'s own dispatch decides what an

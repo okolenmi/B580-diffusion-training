@@ -37,6 +37,12 @@ A stated budget below what the first training step needs cannot be rescued by le
 ## Why the SDXL text encoders weigh 1.5 GB
 Two encoders: CLIP-L (about 0.25 GB) and OpenCLIP-bigG (about 1.3 GB). They could be loaded one at a time when the budget is small, but the larger one alone is most of the load, so that saves only about 0.17 GB and costs a second round trip; the model parking above is the lever that actually frees room.
 
+## Host memory (`memory.ram_max_mb`)
+A run's ceiling on the host RAM it holds. `auto` (the default) has no limit and no check, as before. A stated value is used twice:
+* **Admission** (`application/host_ram_admission.py`, called from `ExecutionAdmission.claim` before the card's ledger): the run needs `ceiling <= min(available, total - reserve - promised)`, where *available* is the kernel's `MemAvailable` (it sees every other program), *reserve* is 1024 MB kept for the system and *promised* is the sum of the stated ceilings of the runs alive (read from their rows). Host RAM is not a ledger: no claim is held, so a refusal has nothing to hand back. A refusal is a 409 `memory_unavailable` with `details.reason = host_memory`; when running graphs hold promises it is worth waiting for and the planned-run pump retries it, otherwise it is final. A machine that cannot report RAM (no `/proc`) is not checked.
+* **The child** (`infrastructure/host_ram_guard.py`, driven by the telemetry thread once a second): when the process holds more than the ceiling it sets the run's stop event, and the outcome is written as an error naming the numbers (not as a quiet stop). It is cooperative like every stop: a node in the middle of a big allocation or load is not interrupted, the run ends at its next safe point, and the Stop button's SIGKILL escalation still applies. An unreadable process is not over (unknown is not a number).
+What counts is `RssAnon + RssShmem` of `/proc/<pid>/status` (private and shared anonymous memory, which includes pinned host copies); file-backed pages, such as a memory-mapped checkpoint, are reclaimable and left out. The in-process gateway (tests) has no telemetry thread and enforces nothing.
+
 ## Open (port or build when measurement says it pays)
 
 NF4 frozen weights (old `nf4_weight_store`, `nf4_lora_layer`; measured on the B580 as 16-20% slower for 180-1361 MB, so only where memory is the binding constraint); block swap; activation offload to the host; oneDNN

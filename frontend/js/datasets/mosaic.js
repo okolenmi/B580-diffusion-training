@@ -145,10 +145,11 @@ export class Mosaic {
 
   paintSelection() {
     const { selection } = this.state;
-    this.grid.classList.toggle("picking", selection.size > 0);
+    this.grid.classList.toggle("picking", selection.ticked);
     for (const [id, tile] of this.tiles) {
       const on = selection.has(id);
       tile.classList.toggle("on", on);
+      tile.classList.toggle("ticked", on && selection.ticked);
       tile.setAttribute("aria-selected", String(on));
     }
   }

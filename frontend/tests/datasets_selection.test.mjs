@@ -52,3 +52,19 @@ test("fill takes ids that are not loaded, clear empties and forgets the anchor",
   s.range(order, "b");
   assert.deepEqual(s.list(), ["b"]);
 });
+
+test("a plain click selects without ticking; the box, shift and select-all tick", () => {
+  const s = new Selection();
+  s.only("a");
+  assert.equal(s.ticked, false);
+  s.toggle("b");
+  assert.equal(s.ticked, true);
+  s.only("c");
+  assert.equal(s.ticked, false);
+  s.range(["a", "b", "c", "d"], "a");
+  assert.equal(s.ticked, true);
+  s.clear();
+  assert.equal(s.ticked, false);
+  s.fill(["x", "y"]);
+  assert.equal(s.ticked, true);
+});

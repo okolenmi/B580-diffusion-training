@@ -18,6 +18,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from .bootstrap import build_container
+from .infrastructure.console_reveal import ConsoleReveal
+from .infrastructure.console_reveal import install as install_console_reveal
 from .infrastructure.planned_runs_pump import PlannedRunsPump
 from .config import Settings
 from .presentation.app import create_app
@@ -96,7 +98,11 @@ def main(argv: list[str] | None = None) -> int:
     # One access line per request buries the lines that matter (a page polls several routes a second);
     # BACKEND_ACCESS_LOG=1 brings them back for the rare case of checking whether a request arrived.
     access_log = os.environ.get("BACKEND_ACCESS_LOG", "").lower() in ("1", "true", "yes", "on")
-    uvicorn.run(app, host=settings.host, port=settings.port, log_level="info", access_log=access_log)
+    # Built by hand (what uvicorn.run does) because uvicorn's logging set-up drops handlers installed before it, and the
+    # reveal has to be attached to its loggers afterwards.
+    config = uvicorn.Config(app, host=settings.host, port=settings.port, log_level="info", access_log=access_log)
+    install_console_reveal(ConsoleReveal.for_this_process())
+    uvicorn.Server(config).run()
     return 0
 
 

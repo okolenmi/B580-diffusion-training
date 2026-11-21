@@ -206,5 +206,9 @@ Needs the server running from the project's own Python (the sandbox's is too old
 3. **Admission**: set a ceiling above the machine's RAM: the start is refused at once (409, "host memory: ... the machine can give ..."). Start one run with a ceiling of about 60% of the RAM, then a second the same: the second waits as *planned* (queue card) and starts when the first ends.
 4. `auto` (the default) must behave exactly as before.
 
+## 102. Server console comes back on an error; dataset click (about 5 minutes, Windows)
+1. Start the server with `run_server_windows.bat` (classic console, then once more inside Windows Terminal), minimise its window, and cause an error (start a run with a model path that does not exist, or a graph that fails). The window must restore **without taking keyboard focus**. Minimise it again and cause another error within 30 seconds: it must stay minimised (the reveal is throttled); after 30 seconds it comes back again. Report which terminal restored and which did not.
+2. `/datasets`: a plain click on a picture only outlines it and shows its caption in the side panel, no tick in the corner. Clicking the corner box, Ctrl/Shift-click or *Select all* ticks (picture dims, box filled).
+
 ## Reading a bundle automatically
 `python -m accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m perf hwcheck` without running anything.

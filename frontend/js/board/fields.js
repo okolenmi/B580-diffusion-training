@@ -5,9 +5,9 @@
    graph editor's own (`graph/widgets.js` `buildControl`), built from the same port description the backend sent, so a model file is
    chosen from the server's list, a prompt is a text area and a number has its bounds exactly as on the node.
 
-   Layout (`fieldLayout`, pure, in model.js): `inline` puts the name at the left and the control at the right (small values),
-   `stacked` puts the name above the control (text, lists, pickers). A card's `options.layout` overrides the automatic choice and
-   `options.hideLabel` leaves the name out.
+   Layout (`fieldLayout`, pure, in model.js): `inline` is one row, the name at the left and the control at the right (what a
+   one-line value is inside a box); `stacked` is just the control, the card's title tab above it carries the name. A card's
+   `options.layout` overrides the automatic choice and `options.hideLabel` leaves the name out.
    --------------------------------------------------------------------------- */
 
 import { fieldValues, isVisible } from "../graph/ports.js";
@@ -31,19 +31,23 @@ const h = (tag, cls, text) => {
  * @param {string} args.label       the name shown (the card's title, else the field's label)
  * @param {(origin: string) => void} args.onChange  called after a value commit
  * @param {(msg: string, kind?: string) => void} [args.onNote]
- * @returns {{el: HTMLElement, refresh: () => void}}
+ * @param {boolean} [args.nested]  the card is inside a box
+ * @returns {{el: HTMLElement, refresh: () => void, label: HTMLElement | null, layout: string}}
  */
-export function buildFieldControl({ block, descriptor, siblings, doc, label, onChange, onNote }) {
+export function buildFieldControl({ block, descriptor, siblings, doc, label, nested = false, onChange, onNote }) {
   const ref = block.ref;
-  const layout = fieldLayout(block, descriptor);
+  const layout = fieldLayout(block, descriptor, nested);
   const holder = h("div", `bd-field bd-field-${layout}`);
-  const name = h("label", "bd-flabel", label);
-  name.title = descriptor.doc || label;
-  name.hidden = !!(block.options && block.options.hideLabel);
+  // Stacked, the card's title tab is the name; only a row draws it beside the control.
+  const name = layout === "inline" ? h("label", "bd-flabel", label) : null;
+  if (name) {
+    name.title = descriptor.doc || label;
+    name.hidden = !!(block.options && block.options.hideLabel);
+  }
   const control = h("div", "bd-control");
   const hint = h("div", "bd-hint");
   hint.hidden = true;
-  holder.append(name, control, hint);
+  holder.append(...(name ? [name] : []), control, hint);
 
   const node = ref.scope === "node" ? ((doc.graph && doc.graph.nodes) || []).find((n) => n.id === ref.node) : null;
   const params = () => (node ? node.params || {} : {});
@@ -68,6 +72,6 @@ export function buildFieldControl({ block, descriptor, siblings, doc, label, onC
     note: onNote,
   }));
   refresh();
-  return { el: holder, refresh };
+  return { el: holder, refresh, label: name, layout };
 }
 

@@ -24,10 +24,15 @@ A **section** is a card with a `container` of one tab; a **node form** is a sect
 (ordinary cards: binding and exposure are unchanged). Moving a card into another tab keeps its id, so the document stays valid. In the editor, Ctrl/Shift-click selects several cards of one tab and **Put them in one box** wraps them in a new section (one tab, cards as arranged) that takes their place (`groupCards`, model.js); a box then gets more tabs from its strip or the inspector. The page's own
 tabs are `root.tabs`.
 
-A **field card** draws the name of its value and the control the graph editor would draw for that port (`frontend/js/graph/widgets.js`, one place for
-both): a model file is chosen from the server's list, a prompt is a text area, a number has its bounds. `options.layout` is `inline` (name left,
-value right: the default for numbers, switches and short choices) or `stacked` (name above the value: text, lists, pickers); `options.hideLabel`
-leaves the name out. The backend sends each field with the port's `ui` hints so the page can choose.
+Every card is a box with a compact **title tab** on its top-left corner (folder-tab shape: rounded on top, square where it meets the box); `options.tone`
+(`blue teal green amber red violet gray`, absent = neutral) colours the tab and outlines the box in the same colour. `style` changes the box (`plain`,
+`outlined`, `accent`; `bare` has no frame and, in use mode, no tab).
+
+A **field card** draws the control the graph editor would draw for that port (`frontend/js/graph/widgets.js`, one place for both): a model file is chosen
+from the server's list, a prompt is a text area, a number has its bounds. The backend sends each field with the port's `ui` hints so the page can choose.
+Its layout (`fieldLayout`, model.js): a one-line value **inside a box** is a *row*, "name: value" on one line without a tab (as in a form; a status
+sentence a node reports is a row too); a one-line value **on the page** has the title tab and the value in the box below; a text area or list is always the
+tab over a box, and the text area is the box itself. `options.layout` (`inline` | `stacked`) overrides this; `options.hideLabel` leaves the name out.
 
 Editor-only state is not stored: the selected card, the active tab of each container, undo history (snapshots of `root`, so a value typed into a
 field is not undone) and the phone preview.

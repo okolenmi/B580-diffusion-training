@@ -43,7 +43,7 @@ import {
   cellDelta, columnWidth, effH, flowOrder, keyNudge, moveTo, resizeTo, resolve, setCollapsed,
 } from "./layout.js";
 import {
-  addBlock, addContainerBlock, addNodeSection, addNoteBlock, cardStyle, collectIds, findTarget, patchBlock, removeBlock, titleFor,
+  addBlock, addContainerBlock, addNodeSection, addNoteBlock, collectIds, fieldLayout, findTarget, patchBlock, removeBlock, titleFor,
 } from "./model.js";
 
 export const ROW_PX = 48;
@@ -103,7 +103,7 @@ export class Board {
     this._pending = new Set();
     this._raf = 0;
 
-    this.root = h("div", "bd-grid");
+    this.root = h("div", nested ? "bd-grid is-nested" : "bd-grid");
     this.empty = h("div", "bd-grid-empty");
     container.append(this.root, this.empty);
 
@@ -293,9 +293,10 @@ export class Board {
     const stable = descriptor
       ? JSON.stringify(descriptor, (k, v) => (k === "value" || k === "has_value" ? undefined : v))
       : "none";
-    // A field card draws its own name and layout, so those are part of what it is.
+    // A field card in a row draws its own name, so the name and the layout are part of what it is.
     const look = block.ref.kind === "field" ? `|${titleFor(block, this.modules).title}|${JSON.stringify((block.options && [block.options.layout, block.options.hideLabel]) || "")}` : "";
-    return `${st ? st.status : "ok"}|${this.modules ? "m" : "-"}|${node ? node.stream : ""}|${stable}${look}`;
+    const row = block.ref.kind === "display" ? `|${this._isRow(block)}|${titleFor(block, this.modules).title}` : "";
+    return `${st ? st.status : "ok"}|${this.modules ? "m" : "-"}|${node ? node.stream : ""}|${stable}${look}${row}`;
   }
 
   _createEntry(block) {
@@ -347,11 +348,12 @@ export class Board {
   _renderHeader(entry) {
     const { block } = entry;
     const t = titleFor(block, this.modules);
-    // A field card's own name is drawn in its body (beside or above the control); its header says where the value lives.
-    const isField = !block.container && block.ref.kind === "field";
-    entry.el.classList.toggle("is-field", isField);
-    if (!entry.renaming) entry.title.textContent = isField ? t.subtitle : t.title;
-    entry.sub.textContent = isField ? "" : t.subtitle;
+    if (!entry.renaming) entry.title.textContent = t.title;
+    entry.sub.textContent = t.subtitle;
+    const row = this._isRow(block);
+    entry.el.classList.toggle("is-row", row);
+    entry.el.classList.toggle("is-untitled", !!(block.options && block.options.hideLabel));
+    entry.el.dataset.tone = (block.options && block.options.tone) || "";
     const st = this.statuses[block.id];
     const label = st && st.status !== "ok" ? STATUS_TEXT[st.status] || st.status : "";
     entry.badge.hidden = !label;
@@ -359,9 +361,20 @@ export class Board {
     entry.badge.title = st ? st.detail : "";
     entry.badge.dataset.status = st ? st.status : "";
     entry.el.dataset.status = st ? st.status : "ok";
-    entry.el.dataset.style = cardStyle(block, isField ? findTarget(block.ref, this.modules).descriptor : null);
+    entry.el.dataset.style = block.style || "plain";
     entry.el.classList.toggle("is-collapsed", !!block.collapsed);
     entry.body.hidden = !!block.collapsed;
+  }
+
+  /** A one-line value laid out as a row ("name: value") has no title tab: its name is part of the row. */
+  _isRow(block) {
+    if (block.container || block.ref.scope === "note") return false;
+    const st = this.statuses[block.id];
+    const { descriptor } = findTarget(block.ref, this.modules);
+    if (!descriptor || (st && st.status === "wired")) return false;
+    if (block.ref.kind === "field") return fieldLayout(block, descriptor, this.nested) === "inline";
+    // A sentence a node reports ("what it is doing") has the same shape: a name and one line.
+    return block.ref.kind === "display" && descriptor.kind === "line" && (this.nested || block.h < 2);
   }
 
   _disposeContent(entry) {
@@ -404,11 +417,13 @@ export class Board {
       }
       const siblings = node ? node.fields : this.modules.graph_fields;
       const field = buildFieldControl({
-        block, descriptor, siblings, doc: this.doc, label: titleFor(block, this.modules).title,
+        block, descriptor, siblings, doc: this.doc, label: titleFor(block, this.modules).title, nested: this.nested,
         onChange: (origin) => { this.refreshFields(); this.onChange(origin); },
         onNote: this.onNote,
       });
       entry.field = field;
+      // A row has no header to drag by: its name does that.
+      if (field.label) field.label.addEventListener("pointerdown", (ev) => this._startDrag(ev, entry, "move"));
       entry.body.append(field.el);
       return;
     }
@@ -443,7 +458,17 @@ export class Board {
       module: descriptor, state: state || emptyState(), ctx: this.ctx,
     });
     entry.tick = descriptor.kind === "status";
-    entry.body.append(entry.display.el);
+    if (this._isRow(block)) {
+      const label = h("label", "bd-flabel", titleFor(block, this.modules).title);
+      label.addEventListener("pointerdown", (ev) => this._startDrag(ev, entry, "move"));
+      const control = h("div", "bd-control");
+      control.append(entry.display.el);
+      const wrap = h("div", "bd-field bd-field-inline bd-field-line");
+      wrap.append(label, control);
+      entry.body.append(wrap);
+    } else {
+      entry.body.append(entry.display.el);
+    }
     entry.display.update();
   }
 

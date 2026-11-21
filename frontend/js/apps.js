@@ -448,7 +448,7 @@ function setMode(mode) {
   el("tray").hidden = mode !== "edit";
   document.body.classList.toggle("app-editing", mode === "edit");
   S.page.setMode(mode);
-  if (mode !== "edit") { S.sel = null; S.picked = new Set(); }
+  if (mode !== "edit") { S.sel = null; S.picked = new Set(); S.page.mark(new Set(), null); }
   renderInspector();
   renderTray();
   updateHistoryButtons();

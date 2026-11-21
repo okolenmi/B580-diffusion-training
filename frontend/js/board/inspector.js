@@ -6,6 +6,8 @@
    document, then asks for `show` again.
    --------------------------------------------------------------------------- */
 
+import { TONES } from "./model.js";
+
 const STYLES = [
   ["plain", "Plain"], ["outlined", "Outlined"], ["accent", "Accent"], ["bare", "No frame"],
 ];
@@ -83,6 +85,24 @@ export class Inspector {
     style.addEventListener("change", () => actions.patch(block.id, { style: style.value === "plain" ? undefined : style.value }));
     this.host.append(row("Look", style));
 
+    // The colour of the title tab (the dot in front of the name on a one-line row).
+    const swatches = h("div", "bd-swatches");
+    swatches.setAttribute("role", "radiogroup");
+    swatches.setAttribute("aria-label", "Title colour");
+    const current = (block.options && block.options.tone) || "";
+    for (const tone of ["", ...TONES]) {
+      const b = h("button", "bd-swatch");
+      b.type = "button";
+      b.dataset.tone = tone;
+      b.title = tone || "none";
+      b.setAttribute("role", "radio");
+      b.setAttribute("aria-checked", String(tone === current));
+      b.setAttribute("aria-label", tone || "No colour");
+      b.addEventListener("click", () => actions.patch(block.id, { options: { ...(block.options || {}), tone: tone || undefined } }));
+      swatches.append(b);
+    }
+    this.host.append(row("Title colour", swatches));
+
     if (block.ref && block.ref.scope === "note") {
       const look = h("select", "cfg-input");
       look.append(new Option("Text", "text"), new Option("Heading", "heading"));
@@ -94,7 +114,7 @@ export class Inspector {
     if (block.ref && block.ref.kind === "field") {
       const options = block.options || {};
       const layout = h("select", "cfg-input");
-      layout.append(new Option("Automatic", ""), new Option("Name left, value right", "inline"), new Option("Name above value", "stacked"));
+      layout.append(new Option("Automatic (a row in a box, a tab on the page)", ""), new Option("One row: name, value", "inline"), new Option("Title tab above the value", "stacked"));
       layout.value = options.layout || "";
       layout.addEventListener("change", () => actions.patch(block.id, { options: { ...options, layout: layout.value || undefined } }));
       this.host.append(row("Layout", layout));

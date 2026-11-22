@@ -16,7 +16,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends
 
 from ...application.memory_admission import admit
-from ...application.ports.environment import CachedDeviceProbe
+from ...infrastructure.environment.cached_probe import CachedDeviceProbe
 from ...application.services import ApplicationServices
 from ...application.use_cases.install_packages import JobNotFound, InstallJobNotFound
 from ..deps import get_services

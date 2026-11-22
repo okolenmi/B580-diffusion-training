@@ -24,11 +24,7 @@ from urllib.parse import unquote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backend.application.ports.environment import (
-    DeviceProbe,
-    DeviceReport,
-    MetadataPackageInventory,
-)
+from backend.application.ports.environment import DeviceProbe, DeviceReport
 from backend.application.ports.graph_execution_repository import (
     GraphExecutionRepository,
 )

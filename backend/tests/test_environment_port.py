@@ -25,14 +25,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backend.application.ports.environment import (  # noqa: E402
-    IMPORT_NAMES,
-    DeviceProbe,
-    DeviceReport,
-    MetadataPackageInventory,
-    TorchDeviceProbe,
-    _last_json_object,
-)
+from backend.application.ports.environment import IMPORT_NAMES, DeviceProbe, DeviceReport
+from backend.infrastructure.environment.torch_probe import _last_json_object
+from backend.infrastructure.environment.package_inventory import MetadataPackageInventory
+from backend.infrastructure.environment.torch_probe import TorchDeviceProbe
 from backend.application.ports.requirements_manifest import REQUIREMENTS  # noqa: E402
 from backend.tests.support import (  # noqa: E402
     FakeDeviceProbe,

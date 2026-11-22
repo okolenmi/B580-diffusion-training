@@ -20,10 +20,8 @@ from ..application.limits import (
     DEVICE_REFRESH_MIN_SECONDS,
     READINESS_CACHE_SECONDS,
 )
-from ..application.ports.environment import (
-    CachedDeviceProbe,
-    TorchDeviceProbe,
-)
+from ..infrastructure.environment.cached_probe import CachedDeviceProbe
+from ..infrastructure.environment.torch_probe import TorchDeviceProbe
 from ..infrastructure.settings_store import SqliteSettingsStore
 from ..infrastructure.workspace import WorkspaceLayout
 

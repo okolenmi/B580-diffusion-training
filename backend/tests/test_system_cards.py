@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backend.application.ports.environment import TorchDeviceProbe
+from backend.infrastructure.environment.torch_probe import TorchDeviceProbe
 from backend.application.ports.system_cards import SystemCards
 from backend.tests.support import check, finish
 

@@ -35,11 +35,8 @@ from backend.application.limits import (  # noqa: E402
     DEVICE_REFRESH_MIN_SECONDS,
     READINESS_CACHE_SECONDS,
 )
-from backend.application.ports.environment import (  # noqa: E402
-    CachedDeviceProbe,
-    DeviceProbe,
-    DeviceReport,
-)
+from backend.application.ports.environment import DeviceProbe, DeviceReport
+from backend.infrastructure.environment.cached_probe import CachedDeviceProbe
 from backend.tests.support import check, finish  # noqa: E402
 
 

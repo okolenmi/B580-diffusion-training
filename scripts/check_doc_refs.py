@@ -59,7 +59,7 @@ _EXT = re.compile(r"\.(py|md|toml|sh|json|jsonl|safetensors|csv|png|txt|yaml|yml
 _ROOTS = frozenset({
     "nodes", "backend", "docs", "scripts", "manager",
     "archive", "datasets", "paths.py", "run_tests.py",
-    "run_server_linux.sh", "monitor_bus.py",
+    "run_server_linux.sh",
     "requirements.txt", "requirements-dev.txt",
     "pyproject.toml", "README.md",
     # retired: referencing these means pointing at a move

@@ -17,7 +17,7 @@ mechanisms in `internals/`.
 | `perf/`, `accept/`, `lab/` | the performance lab, the acceptance lab, the experiment lab (each has `python -m <name>`) | see `scripts/check_imports.py --list` |
 | `backend/` | the web server: `domain`, `application` (use cases, ports), `infrastructure` (adapters, the graph child process), `presentation` (FastAPI routes) | its own layers; torch never at import |
 | `frontend/` | plain JS pages: `/graph` (editor and monitor), `/datasets`, `/apps`, settings, setup | talks to `/api/v1` only |
-| root modules | `run.py` (command line), `console.py`, `starters.py` (the graphs the line and the editor start from), `paths.py`, `monitor_bus.py` (used by the backend) | |
+| root modules | `run.py` (command line), `console.py`, `starters.py` (the graphs the line and the editor start from), `paths.py` | |
 
 `scripts/check_imports.py` enforces the layering (`--list` prints the table).
 

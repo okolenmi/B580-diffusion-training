@@ -23,7 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGES = ("accept", "data", "engine", "families", "graph", "lab", "nodes", "perf", "tests")
 MODULES = ("console", "run", "starters")
-NOT_OURS = {"manager", "backend", "core", "frontend", "scripts", "monitor_bus", "paths"}
+NOT_OURS = {"manager", "backend", "core", "frontend", "scripts", "paths"}
 #: The only files that import ComfyUI, and what they must do to keep our folders from shadowing it.
 COMFY_SCRIPTS = {"accept/comfy_forward.py", "accept/comfy_render.py"}
 COMFY_GUARD = "os.path.dirname(here)"

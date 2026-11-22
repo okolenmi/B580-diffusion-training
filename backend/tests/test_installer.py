@@ -15,7 +15,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backend.application.ports.package_installer import InstallError, InstallRequest, PackageInstaller, PipInstaller
+from backend.application.ports.package_installer import InstallError, InstallRequest, PackageInstaller
+from backend.infrastructure.pip_installer import PipInstaller
 from backend.application.ports.requirements_manifest import REQUIREMENTS, TORCH_INDEX_URL
 from backend.application.ports.settings_store import SettingsChanges
 from backend.application.ports.tokenizer_files import check_content

@@ -60,9 +60,9 @@ from ..application.use_cases.image_libraries import (
 from ..application.use_cases.node_shapes import GetNodeCatalog, ListImageLibraries, ListModelFiles, ResolveNode
 from ..application.use_cases.starters import BuildStarter, ListStarters
 from ..infrastructure.graph.next_starters import NextStarters
-from ..application.ports.tokenizer_files import HubTokenizerFiles
-from ..application.ports.venv_inspection import LocalVenvInspector
-from ..application.ports.package_installer import PipInstaller
+from ..infrastructure.hub_tokenizer_files import HubTokenizerFiles
+from ..infrastructure.local_venv_inspector import LocalVenvInspector
+from ..infrastructure.pip_installer import PipInstaller
 
 from .graph_kit import GraphKit
 from .infrastructure import Infrastructure

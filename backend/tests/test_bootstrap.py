@@ -1,6 +1,6 @@
 """The bootstrap: stdlib-only, no-op when it should be, and honest when not.
 
-`backend/bootstrap.py` has one property that everything else follows from:
+`backend/first_run.py` has one property that everything else follows from:
 **it must run on the machine where the server cannot start.** So the first
 thing checked here is that it imports nothing outside the standard library
 and nothing from this project that imports a third-party package. That is
@@ -39,7 +39,7 @@ HERE = Path(__file__).resolve().parent
 # ==========================================================================
 print("-- stdlib only, or it cannot run where it is needed --")
 
-tree = ast.parse((HERE.parent / "bootstrap.py").read_text(encoding="utf-8"))
+tree = ast.parse((HERE.parent / "first_run.py").read_text(encoding="utf-8"))
 imported: set[str] = set()
 for node in ast.walk(tree):
     if isinstance(node, ast.Import):

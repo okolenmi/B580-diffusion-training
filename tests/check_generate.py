@@ -129,8 +129,6 @@ def refusals() -> None:
 
 
 def anima_starter() -> None:
-    from backend.infrastructure.graph.next_starters import NextStarters
-
     doc = starters.anima_image(model="dit.safetensors", output="out", text_encoder="q.safetensors", vae="v.safetensors")
     classes = {spec.uid: (spec.class_name, spec.params) for spec in doc.nodes}
     check(all(cls in REGISTRY.load()[0] for cls, _ in classes.values()), "every node of the Anima image graph exists")
@@ -141,9 +139,6 @@ def anima_starter() -> None:
     sampler_params = next(p for c, p in classes.values() if c == "SamplerNode")
     check((sampler_params["sampler"], sampler_params["scheduler"]) == ("euler", "simple"), "it samples with Euler on the simple schedule")
     raises(ValueError, lambda: starters.anima_image(model="dit.safetensors", output="out"), "the starter needs the two other files", "text encoder")
-    listed = {s["name"]: s for s in NextStarters().starters()}
-    check("anima-image" in listed and [o["name"] for o in listed["anima-image"]["options"]][:3] == ["model", "text_encoder", "vae"], "the starter is offered with its three model pickers first")
-    check(NextStarters().build("anima-image", {"model": "d", "text_encoder": "q", "vae": "v", "output": "o"})["nodes"], "and builds from the form")
 
 
 def flow_scheme() -> None:

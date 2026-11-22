@@ -68,6 +68,10 @@ status, _, _ = asgi_request(app, "/api/v1/starters/sdxl-lora", method="POST", js
 check(status == 422, "missing model, dataset and output are refused")
 status, _, _ = asgi_request(app, "/api/v1/starters/sdxl-lora", method="POST", json_body={"options": {"model": "m", "dataset": "d", "output": "o", "warp": 1}})
 check(status == 422, "an option the form does not have is refused")
+by_name = {s["name"]: s for s in listed["starters"]}
+check("anima-image" in by_name and [o["name"] for o in by_name["anima-image"]["options"]][:3] == ["model", "text_encoder", "vae"], "the Anima image starter is offered with its three model pickers first")
+status, _, built = asgi_request(app, "/api/v1/starters/anima-image", method="POST", json_body={"options": {"model": "d", "text_encoder": "q", "vae": "v", "output": "o"}})
+check(status == 200 and built["nodes"], "and builds from the form")
 status, _, _ = asgi_request(app, "/api/v1/starters/none", method="POST", json_body={"options": {}})
 check(status == 404, "an unknown starter is a 404")
 

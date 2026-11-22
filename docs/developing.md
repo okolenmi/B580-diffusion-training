@@ -19,7 +19,7 @@ Layout and flow: `architecture.md`. What exists: `status.md`.
 | `families/general`, `families/<name>` | `families/api`, `graph`, torch; a family only itself | other families, nodes, engine, backend |
 | `data`, `engine` | `graph`, `families/api`, `families/registry`; `engine` also `data` | nodes, backend, a concrete family |
 | `nodes` | `graph`, `data`, `engine`, `families/api`, `families/registry`, `perf` | a concrete family, backend |
-| `backend` | its own layers (`domain` ← `application` ← `infrastructure`, `presentation`); `graph`, `families/api` | torch at import time |
+| `backend` | its own layers (`domain` ← `application` ← `infrastructure`, `presentation`; `bootstrap` and `wiring` build the concrete objects and may import all of them); `graph`, `families/api` | torch at import time |
 | `frontend` | itself; talks to `/api/v1` | anything Python by name |
 
 Inside a package imports are relative, between packages absolute. ComfyUI is never imported by production code; the two parity scripts in

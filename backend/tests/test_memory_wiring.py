@@ -1000,9 +1000,9 @@ def test_child_reported_peaks_land_in_the_store() -> None:
     # dropped -- a race that surfaced about one gate run in five under
     # load, in the test only. Same assertion, waited for.
     check(
-        wait_until(lambda: supervisor._peak_seen == {}, timeout=10.0),
+        wait_until(lambda: supervisor._recorder._peak_seen == {}, timeout=10.0),
         f"the per-run rise bookkeeping is released with the run "
-        f"(got {supervisor._peak_seen})",
+        f"(got {supervisor._recorder._peak_seen})",
     )
 
 
@@ -1068,7 +1068,7 @@ def test_peak_filing_guards() -> None:
     # of every row written before this package existed).
     keyless = GraphExecution.create(graph=valid_graph(), created_at=NOW)
     repo.add(keyless)
-    supervisor._record_peak(keyless.id, {"peak_mb": 9000.0})
+    supervisor._recorder.record_peak(keyless.id, {"peak_mb": 9000.0})
     check(
         store.calls == [],
         "unknown fingerprint -> nothing filed (the watcher has no key, "
@@ -1089,20 +1089,20 @@ def test_peak_filing_guards() -> None:
         {"peak_mb": -4.0},
         {"peak_mb": float("nan")},
     ):
-        supervisor._record_peak(keyed.id, dict(payload))
+        supervisor._recorder.record_peak(keyed.id, dict(payload))
     check(
         store.calls == [],
         f"malformed / non-positive peaks are refused, not stored "
         f"(got {store.calls})",
     )
-    supervisor._record_peak(keyed.id, {"peak_mb": 1000.0})
+    supervisor._recorder.record_peak(keyed.id, {"peak_mb": 1000.0})
     check(store.calls == [("fp-guards", 1000.0)], "a measured peak is filed")
-    supervisor._record_peak(keyed.id, {"peak_mb": 900.0})
+    supervisor._recorder.record_peak(keyed.id, {"peak_mb": 900.0})
     check(
         store.calls == [("fp-guards", 1000.0)],
         "a lower frame for the same run costs no statement",
     )
-    supervisor._record_peak(keyed.id, {"peak_mb": 1200.0})
+    supervisor._recorder.record_peak(keyed.id, {"peak_mb": 1200.0})
     check(
         store.calls == [("fp-guards", 1000.0), ("fp-guards", 1200.0)],
         "and the next rise is filed again",
@@ -1126,7 +1126,7 @@ def test_peak_filing_guards() -> None:
         scratch_dir=root / "scratch2",
         make_tail=ExecutionEventTail,
     )
-    boom._record_peak(keyed.id, {"peak_mb": 2000.0})
+    boom._recorder.record_peak(keyed.id, {"peak_mb": 2000.0})
     check(True, "a store that raises cannot abort the watcher (it logged)")
 
 

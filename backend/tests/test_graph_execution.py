@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.application.event_publisher import EventPublisher
 from backend.application.graph_supervisor import GraphExecutionSupervisor
+from backend.application.execution_finisher import ExecutionFinisher
 from backend.application.lifecycle_writer import ExecutionLifecycleWriter
 from backend.application.errors import (
     MemoryUnavailableError,
@@ -1047,7 +1048,7 @@ def _retry_case(where: str) -> list[str]:
         scratch_dir=Path(tempfile.mkdtemp(prefix="backend-retry-scratch-")),
     )
     for i in range(N_RETRY_NODES):
-        supervisor._record_node(
+        supervisor._recorder.record_node(
             row.id,
             {"node_id": f"n{i}", "ok": True, "outputs": {}, "error": None,
              "duration_ms": 1.0},
@@ -1338,7 +1339,7 @@ tail_paths["log"].write_text(
     encoding="utf-8",
 )
 
-tail = tail_supervisor._with_log_tail(tail_row.id, "exited without an outcome")
+tail = tail_supervisor._finisher.with_log_tail(tail_row.id, "exited without an outcome")
 check("the card fell over" in tail,
       f"the traceback reaches the row ({tail[-60:]!r})")
 check("starting" not in tail,
@@ -1359,22 +1360,22 @@ check(tail.rstrip().endswith("RuntimeError: the card fell over"),
 # `finally` of a run that has already failed, so a reader that raised would
 # replace a real error with an internal one.
 tail_paths["log"].unlink()
-check(tail_supervisor._with_log_tail(tail_row.id, "plain") == "plain",
+check(tail_supervisor._finisher.with_log_tail(tail_row.id, "plain") == "plain",
       "a log that is not there degrades to the plain error rather than raising")
 
 tail_paths["log"].write_bytes(b"\xff\xfe\x80 not utf-8 \x81\n")
-binary_tail = tail_supervisor._with_log_tail(tail_row.id, "plain")
+binary_tail = tail_supervisor._finisher.with_log_tail(tail_row.id, "plain")
 check(binary_tail != "plain",
       "a log of invalid UTF-8 does not raise either -- a traceback from a "
       "dying process can contain a partial line")
 
 # And the size bound is a real bound.
-tail_paths["log"].write_text("x" * (GraphExecutionSupervisor.LOG_TAIL_BYTES * 3),
+tail_paths["log"].write_text("x" * (ExecutionFinisher.LOG_TAIL_BYTES * 3),
                              encoding="utf-8")
-big = tail_supervisor._with_log_tail(tail_row.id, "plain")
-check(len(big) <= GraphExecutionSupervisor.LOG_TAIL_BYTES + 400,
+big = tail_supervisor._finisher.with_log_tail(tail_row.id, "plain")
+check(len(big) <= ExecutionFinisher.LOG_TAIL_BYTES + 400,
       f"a large log is cut to the bound ({len(big)} chars for a "
-      f"{GraphExecutionSupervisor.LOG_TAIL_BYTES * 3}-byte log)")
+      f"{ExecutionFinisher.LOG_TAIL_BYTES * 3}-byte log)")
 
 
 # -- explicit delete removes the kept logs too ------------------------------

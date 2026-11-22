@@ -1,57 +1,39 @@
 """GraphExecutionSupervisor -- watches one graph run, wherever it runs.
 
-WP-22 moved graph execution out of this process. The run itself happens in
-a child (``SubprocessGraphTaskGateway``) or on a thread here
-(``InProcessGraphTaskGateway``); either way the supervisor's job is the
-same and is the same in one implementation:
+The run itself happens in a child (``SubprocessGraphTaskGateway``) or on a thread here (``InProcessGraphTaskGateway``);
+the supervisor's job is the same for both:
 
-1. write the graph somewhere the child can read it, spawn, and record the
-   pid **before** starting the watcher -- so a stop arriving while the row
-   is still ``queued`` reaches a process that exists;
-2. watch the run by *tailing its event file*. Node records are
-   CAS-persisted and announced exactly as they were when the callback
-   fired in-process; monitor records go onto this server's own bus, which
-   is what keeps a dashboard opened mid-run able to see the history;
-3. finalise from the child's own ``outcome`` record -- so "the graph
-   failed" is distinguishable from "the child died", which without the
-   record is the difference between a message and a shrug;
-4. escalate a stop that the child ignored to a hard kill after the grace
-   period, then best-effort fail the row rather than leaving it
-   ``running`` (which blocks the single-active check until the next
-   restart). Startup reconciliation covers whatever even that misses.
+1. write the graph where the child can read it, spawn, and record the pid **before** starting the watcher, so a stop
+   arriving while the row is still ``queued`` reaches a process that exists;
+2. watch the run by *tailing its event file*: node records are persisted and announced, monitor records go onto this
+   server's own bus (which is what lets a dashboard opened mid-run see the history);
+3. finalise from the child's own ``outcome`` record, so "the graph failed" is distinguishable from "the child died";
+4. escalate a stop the child ignored to a hard kill after the grace period, then fail the row rather than leaving it
+   ``running`` (which blocks the single-active check until the next restart).
 
-Everything durable goes through the repository CAS, so races resolve
-deterministically: a stop that wins the row first means this watcher
-finds the row already terminal and publishes nothing.
-
-Allocator memory is not this class's business -- ``run_execution``
-releases it in its own ``finally``, in whichever process ran the graph
-(docs 08 S-05). The *server-side* admission claim (MEM-03's ledger,
-``reserved_mb``) is: every watcher path funnels through ``_finish`` and
-``_release``, so the claim goes back exactly when the child actually
-stops, under whatever owner it was renamed to. The same watcher is also
-where a child's reported memory peaks get filed (MEM-04 #2): a ``memory``
-record's ``peak_mb`` goes into the peak store under the fingerprint key
-admission stored on the row -- one writer, monotonic, only on a rise.
+The record handling, the process stopping and the terminal write are collaborators (``ExecutionRecorder``,
+``ChildStopper``, ``ExecutionFinisher``); this class owns the pid table and the watcher loop. Everything durable goes
+through the repository CAS, so races resolve deterministically: a stop that wins the row first means the watcher finds
+it terminal and publishes nothing. The admission claim goes back exactly when the child actually stops, because every
+watcher path funnels through ``_finish`` and ``_release``.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import math
 import threading
 from pathlib import Path
-from typing import Any
 
-from ..domain.events import GraphExecutionProgressed
 from ..domain.graph import GraphDefinition, NodeResult
-from ..domain.modules import GRAPH_STREAM, node_stream_id, run_stream_id
 from ..domain.value_objects import ExecutionId, GraphStatus
-from .memory_admission import LedgerSource, graph_owner, release
+from .memory_admission import LedgerSource
 from .ports.graph_task_stream import EventKind
 from .ports.peak_store import PeakStore
+from .child_stopper import ChildStopper
 from .event_publisher import EventPublisher
+from .execution_finisher import ExecutionFinisher
+from .execution_recorder import ExecutionRecorder
 from .lifecycle_writer import ExecutionLifecycleWriter
 from .ports.clock import Clock
 from .ports.execution_launcher import ExecutionLauncher, RecordedOutcome
@@ -81,58 +63,31 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         max_record_attempts: int = 3,
     ) -> None:
         self._executions = executions
-        # CAS-then-announce lives in the writer; ``events`` is for
-        # telemetry only.
         self._writer = writer
         self._gateway = gateway
-        self._events = events
         self._clock = clock
-        # Where claims are handed back (``_release``). None only where
-        # the container has no ledger at all -- and then no claim can
-        # exist either, because a start without a ledger refuses before
-        # it reserves. Both composition roots always pass one.
-        self._memory_ledger = memory_ledger
-        # Where a child's reported peaks are filed (MEM-04 #2, see
-        # ``_record_peak``). None only in tests that do not exercise
-        # peaks -- a run whose peaks are not recorded still runs; both
-        # composition roots pass the store.
-        self._peak_store = peak_store
-        # Where the per-execution graph.json and events.jsonl live. Not
-        # the runs dir: these are supervision scratch, and a run row's
-        # artifacts are a different thing with a different lifetime.
         self._scratch_dir = scratch_dir
         self._poll_interval = poll_interval
-        # Long enough for a stopping run to flush its event file and let
-        # the runtime release device memory, short enough that a wedged
-        # run does not hold a card forever. The retired training route
-        # used the same figure for the same reason (docs 07 F-12).
-        self._stop_grace = stop_grace
-        # How many consecutive poll failures the watcher rides out before it
-        # gives up on a run it is otherwise watching. One transient error --
-        # "database is locked" during another writer's transaction -- must
-        # not cost the run its supervisor; a persistent one must not cost
-        # the server a thread that retries forever.
+        # How many consecutive poll failures the watcher rides out before giving up on a run it is otherwise watching.
+        # One transient error (a locked database) must not cost the run its supervisor; a persistent one must not
+        # cost the server a thread that retries forever.
         self._max_poll_failures = max_poll_failures
-        # How many times one node's result is persisted before it is
-        # given up on. Separate from the poll bound because the two
-        # failures are not recoverable in the same way: a failed poll can
-        # simply be repeated, while a failed *record* cannot -- see
-        # `_record_node`.
-        self._max_record_attempts = max_record_attempts
-        self._monitor_bus = monitor_bus
-        # How to open a reader over a run's event file. Injected because
-        # "a file" is infrastructure and this is application: the class that
-        # reads JSONL off disk does not belong in a file that must not
-        # import infrastructure. The composition root passes the real one.
+        # How to open a reader over a run's event file. Injected because "a file" is infrastructure and this is
+        # application, which must not import infrastructure.
         self._make_tail = make_tail
+        self._recorder = ExecutionRecorder(
+            executions=executions, writer=writer, events=events, clock=clock, monitor_bus=monitor_bus,
+            peak_store=peak_store, max_record_attempts=max_record_attempts,
+        )
+        self._stopper = ChildStopper(gateway=gateway, grace=stop_grace)
+        self._finisher = ExecutionFinisher(
+            executions=executions, writer=writer, clock=clock, memory_ledger=memory_ledger,
+            log_path_for=lambda execution_id: self._paths_for(execution_id)["log"],
+        )
         self._lock = threading.Lock()
         self._pids: dict[ExecutionId, int] = {}
         self._stop_requested: set[ExecutionId] = set()
         self._replaying: set[ExecutionId] = set()
-        # The peak this run has already had filed, so frames that repeat
-        # it cost no statement (see ``_record_peak``). Popped in
-        # ``_release`` with everything else the watcher forgets.
-        self._peak_seen: dict[ExecutionId, float] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -152,79 +107,13 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         paths = self._paths_for(execution_id)
         paths["events"].parent.mkdir(parents=True, exist_ok=True)
         paths["graph"].write_text(json.dumps(graph.as_dict()), encoding="utf-8")
-        # The event file starts empty, every time, before the child is
-        # spawned. Records are appended (one write(2) per record, so a
-        # SIGKILL cannot tear the last one), which means a *new* run at a
-        # path that still holds an old run's records would inherit them --
-        # and that is not the unreachable case it looks like: delete the
-        # database and row ids start again at 1, so the next execution 1
-        # lands on the previous execution 1's file. The watcher then reads
-        # 6000 node records for a 3000-node graph, the row grows past the
-        # domain's "no more results than nodes" rule, and every subsequent
-        # read *and* write of it raises, leaving the row stuck running
-        # forever. Observed live.
-        #
-        # Adoption is the case this must not touch, and does not: `adopt`
-        # never comes through here, and it is exactly the one path that
-        # needs the old records kept.
+        # The event file starts empty every time, before the spawn. Records are appended, so a new run at a path that
+        # still holds an old run's records would inherit them: row ids restart after a database reset, and the watcher
+        # would then read more node records than the graph has nodes, which the domain refuses to load. Adoption never
+        # comes through here, and is the one path that needs the old records kept.
         paths["events"].write_text("", encoding="utf-8")
-        self._clear_streams(graph)
-
-        # The child's memory picture (MEM-05 #1), read off the row
-        # because that is the only place it exists: admission stored
-        # the grant and the effective values there, and
-        # ``launch(execution_id, graph)`` is not told either. Unknown is
-        # a named state, not a zero -- the launch still proceeds and
-        # the child warns instead of checking against nothing.
-        execution = self._executions.get(execution_id)
-        memory_grant_mb = execution.reserved_mb if execution is not None else None
-        memory_budget_mb = (
-            execution.memory.demand_mb
-            if execution is not None and execution.memory is not None
-            else None
-        )
-        # "auto" with nothing remembered about this graph is a *ceiling*
-        # (everything the ledger can give), and on a shared card that
-        # ceiling is routinely above what is physically free. The child
-        # adapts such a run to the real free memory; a stated or
-        # remembered demand is still checked exactly.
-        effective = execution.memory if execution is not None else None
-        memory_adaptive = bool(
-            effective is not None
-            and effective.demand_source == "unknown"
-            and effective.vram_max_mb == "auto"
-        )
-        vram_min_mb = float(effective.vram_min_mb) if effective is not None else 0.0
-        ram_ceiling = None if effective is None else effective.ram_max_mb
-        ram_max_mb = float(ram_ceiling) if isinstance(ram_ceiling, (int, float)) and not isinstance(ram_ceiling, bool) else None
-        missing = [
-            name
-            for name, value in (
-                ("--memory-grant-mb", memory_grant_mb),
-                ("--memory-budget-mb", memory_budget_mb),
-            )
-            if value is None
-        ]
-        if missing:
-            logger.warning(
-                "execution %s: launching without %s; the child will treat "
-                "them as unknown rather than check against nothing",
-                execution_id,
-                " and ".join(missing),
-            )
-
-        launch = GraphTaskLaunch(
-            execution_id=execution_id,
-            graph_path=paths["graph"],
-            event_path=paths["events"],
-            log_path=paths["log"],
-            command_dir=paths.get("commands"),
-            memory_budget_mb=memory_budget_mb,
-            memory_grant_mb=memory_grant_mb,
-            memory_adaptive=memory_adaptive,
-            vram_min_mb=vram_min_mb,
-            ram_max_mb=ram_max_mb,
-        )
+        self._recorder.clear_streams(graph)
+        launch = self._launch_request(execution_id, paths)
         try:
             pid = self._gateway.spawn(launch)
         except Exception:
@@ -245,6 +134,48 @@ class GraphExecutionSupervisor(ExecutionLauncher):
             name=f"backend-graph-watch-{execution_id}",
             daemon=True,
         ).start()
+
+    def _launch_request(self, execution_id: ExecutionId, paths: dict[str, Path]) -> GraphTaskLaunch:
+        """What the child is told, including its memory picture, read off the row (the only place it exists).
+
+        Unknown is a named state, not a zero: the launch still proceeds, and the child warns instead of checking
+        against nothing.
+        """
+        execution = self._executions.get(execution_id)
+        effective = execution.memory if execution is not None else None
+        memory_grant_mb = execution.reserved_mb if execution is not None else None
+        memory_budget_mb = effective.demand_mb if effective is not None else None
+        # "auto" with nothing remembered about the graph is a *ceiling* (all the ledger can give), routinely above what
+        # a shared card has free: the child adapts such a run to the real free memory, while a stated or remembered
+        # demand is checked exactly.
+        memory_adaptive = bool(
+            effective is not None and effective.demand_source == "unknown" and effective.vram_max_mb == "auto"
+        )
+        vram_min_mb = float(effective.vram_min_mb) if effective is not None else 0.0
+        ram_ceiling = None if effective is None else effective.ram_max_mb
+        is_number = isinstance(ram_ceiling, (int, float)) and not isinstance(ram_ceiling, bool)
+        missing = [
+            name
+            for name, value in (("--memory-grant-mb", memory_grant_mb), ("--memory-budget-mb", memory_budget_mb))
+            if value is None
+        ]
+        if missing:
+            logger.warning(
+                "execution %s: launching without %s; the child will treat them as unknown rather than check "
+                "against nothing", execution_id, " and ".join(missing),
+            )
+        return GraphTaskLaunch(
+            execution_id=execution_id,
+            graph_path=paths["graph"],
+            event_path=paths["events"],
+            log_path=paths["log"],
+            command_dir=paths.get("commands"),
+            memory_budget_mb=memory_budget_mb,
+            memory_grant_mb=memory_grant_mb,
+            memory_adaptive=memory_adaptive,
+            vram_min_mb=vram_min_mb,
+            ram_max_mb=float(ram_ceiling) if is_number else None,
+        )
 
     def _paths_for(self, execution_id: ExecutionId) -> dict[str, Path]:
         base = self._scratch_dir / f"execution_{execution_id}"
@@ -296,7 +227,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
                     # A run that finished while no server was watching
                     # still reported its peak; the reconcile drain files
                     # it under the row's key, same as the steady watcher.
-                    self._record_peak(execution_id, event.payload)
+                    self._recorder.record_peak(execution_id, event.payload)
                 elif event.kind is EventKind.OUTCOME:
                     said_how_it_ended = True
                     raw = event.payload.get("error")
@@ -329,7 +260,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         # grace period ends and the watcher escalates itself, so there is
         # exactly one place that decides a run is not stopping.
         threading.Thread(
-            target=self._escalate,
+            target=self._stopper.escalate,
             args=(execution_id, pid),
             name=f"backend-graph-stop-{execution_id}",
             daemon=True,
@@ -411,17 +342,6 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         pids = self._gateway.find_running_all(execution_id)
         return bool(pids)
 
-    def _escalate(self, execution_id: ExecutionId, pid: int) -> None:
-        """Hard-kill a run that ignored a cooperative stop."""
-        threading.Event().wait(self._stop_grace)
-        if not self._gateway.is_alive(pid):
-            return
-        logger.warning(
-            "graph execution %s (pid %s) ignored the stop for %.0fs; killing",
-            execution_id, pid, self._stop_grace,
-        )
-        self._gateway.kill(pid)
-
     # ------------------------------------------------------------------
     # The watcher
     # ------------------------------------------------------------------
@@ -491,7 +411,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
                     # cycle that fails loses no records, and the row read
                     # below happens after the batch has been applied rather
                     # than before it, which makes no difference to that.
-                    outcomes += self._apply(execution_id, tail.poll(), catch_up)
+                    outcomes += self._recorder.apply(execution_id, tail.poll(), catch_up)
                     execution = self._executions.get(execution_id)
                     if catch_up and tail.caught_up:
                         # Exactly caught up, not "a poll came back empty": a
@@ -514,7 +434,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
                         # reporting an outcome". Observed live on a
                         # 3000-node graph: the event file ended with a clean
                         # outcome, and the row said the process crashed.
-                        outcomes += self._apply(execution_id, tail.poll(), catch_up)
+                        outcomes += self._recorder.apply(execution_id, tail.poll(), catch_up)
                         break
                     if execution is None or execution.status.is_terminal:
                         # The stop path owns the outcome now; its writer said
@@ -536,13 +456,13 @@ class GraphExecutionSupervisor(ExecutionLauncher):
                 "watcher for graph execution %s can no longer continue",
                 execution_id,
             )
-            abandoned = self._abandon(execution_id, pid)
+            abandoned = self._stopper.abandon(execution_id, pid)
             if abandoned:
                 # The child may well have finished as it was being stopped,
                 # and its own record is better evidence than our failure to
                 # watch it -- the same reasoning as the drain above.
                 try:
-                    outcomes += self._apply(execution_id, tail.poll(), catch_up)
+                    outcomes += self._recorder.apply(execution_id, tail.poll(), catch_up)
                 except Exception:  # noqa: BLE001 -- already giving up
                     logger.exception(
                         "final drain after abandoning execution %s failed",
@@ -557,336 +477,6 @@ class GraphExecutionSupervisor(ExecutionLauncher):
                 abandoned=abandoned,
             )
 
-    def _abandon(self, execution_id: ExecutionId, pid: int) -> bool:
-        """Stop a run we have lost the ability to watch. True if it was live.
-
-        This exists for one invariant: **a row is never terminal while its
-        child is alive.** A terminal row releases the single-active check,
-        so writing one for a run that is still holding the card is how two
-        trainers end up on one 12 GB device -- and an unwatched run is also
-        a run the API can no longer stop, because ``cancel`` needs the pid
-        this watcher was holding.
-
-        So when the watcher gives up, it does not simply write the row off.
-        It asks the child to stop, escalates to a kill if that is ignored,
-        and only then lets the row be finalised -- with a note that says
-        supervision failed rather than claiming the process died.
-
-        Returns ``False`` when the child had already gone, which is the
-        ordinary case: a watcher that breaks because liveness said no has
-        nothing to abandon.
-        """
-        try:
-            if not self._gateway.is_alive(pid):
-                return False
-        except Exception:  # noqa: BLE001 -- liveness is what failed
-            # Assume the worst. The alternative is leaving a process that
-            # holds the card unaccounted for, on the strength of a check
-            # that did not answer.
-            logger.warning(
-                "could not determine whether pid %s is alive; treating it as "
-                "alive and stopping it", pid,
-            )
-
-        logger.error(
-            "graph execution %s can no longer be supervised; stopping its "
-            "child (pid %s) rather than leaving it running unobserved",
-            execution_id, pid,
-        )
-        try:
-            self._gateway.request_stop(pid)
-        except Exception:  # noqa: BLE001 -- escalate regardless
-            logger.exception("asking pid %s to stop failed", pid)
-        threading.Event().wait(self._stop_grace)
-        try:
-            still_running = self._gateway.is_alive(pid)
-        except Exception:  # noqa: BLE001 -- liveness is what failed
-            # Liveness has already failed once on this run, so a second
-            # failure here is expected rather than surprising. It must not
-            # be read as "so it probably stopped": not knowing is the one
-            # state in which the card is still held and the run is still
-            # unstoppable through the API. Unknown means alive.
-            logger.warning(
-                "cannot tell whether pid %s stopped; killing it rather than "
-                "leaving it unaccounted for", pid,
-            )
-            still_running = True
-        if still_running:
-            logger.warning(
-                "pid %s did not stop within %.0fs of supervision failing; "
-                "killing", pid, self._stop_grace,
-            )
-            try:
-                self._gateway.kill(pid)
-            except Exception:  # noqa: BLE001 -- nothing further to try
-                logger.exception("killing pid %s failed", pid)
-        return True
-
-    def _apply(
-        self, execution_id: ExecutionId, events, catch_up: bool
-    ) -> list[dict]:
-        """Apply one batch of records; return the outcome records in it.
-
-        A batch, rather than a record, because that is what a poll
-        returns and because the two calls the watcher makes of it -- the
-        steady one and the final drain -- must apply records identically.
-        """
-        outcomes: list[dict] = []
-        for event in events:
-            kind = event.kind
-            if kind is EventKind.NODE:
-                if not catch_up:
-                    self._record_node(execution_id, event.payload)
-            elif kind is EventKind.MONITOR:
-                self._republish_monitor(execution_id, event.payload)
-            elif kind is EventKind.MEMORY:
-                self._record_peak(execution_id, event.payload)
-                self._republish_memory(execution_id, event.payload)
-            else:  # OUTCOME
-                outcomes.append(event.payload)
-        return outcomes
-
-    def _record_node(self, execution_id: ExecutionId, payload: dict) -> None:
-        """Persist a finished node's result and announce its progress.
-
-        Re-fetches the row on every attempt (the authoritative status lives
-        there, not in this thread's memory) and never raises into the
-        watcher.
-
-        **Why it retries.** A record that fails to persist is gone, not
-        deferred. `tail.poll()` advances its offset as it hands over a
-        batch, so by the time a node's result is being written the record
-        exists only in this call -- the watcher cannot re-read it and the
-        retry above it re-polls an empty tail. So a single "database is
-        locked" during a write cost the run that step's result, silently:
-        the row still finished, the child's own `outcome` still reported
-        the full count, and the two simply disagreed.
-
-        Measured on a run writing 40 node records, one injected failure at
-        each position of the poll cycle: 0 results lost when it landed
-        outside the write, 1 lost when it landed inside -- and no field of
-        the row recorded the loss. Losing one step of a long run to a locked
-        database is not a rounding error, so the write is retried.
-
-        The retry is idempotent rather than blind, because "the write
-        failed" does not mean "the row is unchanged": `commit` swaps the row
-        and *then* publishes, so a failure in the second half leaves the
-        first half done. Re-reading the row and skipping when this node's
-        result is already on it is what makes repeating safe -- and the
-        event is emitted outside the retry for the same reason.
-        """
-        node_id = str(payload.get("node_id", ""))
-        duration_ms = float(payload.get("duration_ms") or 0.0)
-        committed = False
-        already_stored = False
-        failure: Exception | None = None
-
-        for attempt in range(1, self._max_record_attempts + 1):
-            try:
-                execution = self._executions.get(execution_id)
-                if execution is None or execution.status is not GraphStatus.RUNNING:
-                    return  # stopped/deleted mid-run; drop this sample
-                if any(r.node_id == node_id for r in execution.results):
-                    # Already stored. `commit` is a compare-and-swap *and*
-                    # then a publish, so it can fail after the row was
-                    # already updated -- and the retry then re-read the row,
-                    # finds this node's result on it, and appends a second
-                    # copy. Measured against the real SQLite repository with
-                    # one injected publish failure: 12 nodes produced 35
-                    # stored results, 12 distinct, because every retry
-                    # after the CAS succeeded added another.
-                    #
-                    # A node runs once per execution, so a duplicate
-                    # node_id is never legitimate: the entity already
-                    # refuses a row carrying more results than the graph has
-                    # nodes. Skipping on sight is both the fix and the
-                    # invariant.
-                    already_stored = True
-                    break
-                execution.record_result(
-                    NodeResult(
-                        node_id=node_id,
-                        ok=bool(payload.get("ok")),
-                        outputs=dict(payload.get("outputs") or {}),
-                        error=payload.get("error"),
-                        duration_ms=duration_ms,
-                    ),
-                    at=self._clock.now(),
-                )
-                if not self._writer.commit(execution, expected=GraphStatus.RUNNING):
-                    return  # terminal writer won between get and update
-                committed = True
-                break
-            except Exception as exc:  # noqa: BLE001 -- one step, not the run
-                failure = exc
-                logger.warning(
-                    "recording result for node %r (execution %s) failed on "
-                    "attempt %d/%d: %s: %s",
-                    node_id, execution_id, attempt, self._max_record_attempts,
-                    type(exc).__name__, exc,
-                )
-                if attempt < self._max_record_attempts:
-                    threading.Event().wait(min(0.05 * attempt, 0.5))
-
-        if not committed and not already_stored:
-            # The one honest thing left: say which result is missing, loudly,
-            # rather than leave a short row that looks complete.
-            logger.error(
-                "giving up on node %r of execution %s after %d attempts; "
-                "this run's row will be missing that result (%s: %s)",
-                node_id, execution_id, self._max_record_attempts,
-                type(failure).__name__ if failure else "unknown",
-                failure,
-            )
-            return
-
-        try:
-            self._events.emit(
-                GraphExecutionProgressed(
-                    execution_id=execution_id,
-                    node_id=node_id,
-                    ok=bool(payload.get("ok")),
-                    duration_ms=duration_ms,
-                    occurred_at=self._clock.now(),
-                )
-            )
-        except Exception:  # noqa: BLE001 -- a missed progress ping, not a lost result
-            logger.exception(
-                "announcing progress for node %r (execution %s) failed; the "
-                "result itself is stored", node_id, execution_id,
-            )
-
-    def _republish_monitor(self, execution_id: ExecutionId, payload: dict) -> None:
-        """Put a child's monitor report onto this server's own bus.
-
-        The child's bus is unreachable -- a per-process deque of asyncio
-        queues -- so this is the bridge that makes a dashboard opened
-        mid-run work, including its history, because the file the watcher
-        replays *is* the history.
-        """
-        if self._monitor_bus is None:
-            return
-        try:
-            stream, data = str(payload.get("monitor_id", "")), dict(payload.get("data") or {})
-            self._monitor_bus.report(stream, data)
-            self._monitor_bus.report(run_stream_id(execution_id, stream), data)
-        except Exception:  # noqa: BLE001 -- telemetry must not abort the run
-            logger.exception("republishing a monitor report failed")
-
-    #: The memory-frame keys the graph-scope memory modules read.
-    _MEMORY_FRAME_KEYS = (
-        "t", "reserved_mb", "allocated_mb", "peak_mb", "budget_mb", "event", "mb",
-    )
-
-    def _republish_memory(self, execution_id: ExecutionId, payload: dict) -> None:
-        """Put a child's memory frame onto the graph-scope stream.
-
-        This is the data behind the "Device memory" chart a page can show
-        (``domain/modules.GRAPH_DISPLAYS``): the same frames the peak
-        store already listens to, now also visible live. Guarded like the
-        monitor republish -- telemetry never costs the run's supervision.
-        """
-        if self._monitor_bus is None:
-            return
-        try:
-            frame = {k: payload[k] for k in self._MEMORY_FRAME_KEYS if k in payload}
-            self._monitor_bus.report(GRAPH_STREAM, frame)
-            self._monitor_bus.report(run_stream_id(execution_id, GRAPH_STREAM), frame)
-        except Exception:  # noqa: BLE001 -- telemetry must not abort the run
-            logger.exception("republishing a memory frame failed")
-
-    def _clear_streams(self, graph: GraphDefinition) -> None:
-        """A new run starts with empty widget streams.
-
-        The child's own ``clear`` is a no-op across the process boundary
-        (its bus is not this server's), so the run that is *starting* is
-        the one place that can honestly say "drop the last run's history":
-        otherwise a page opened on the same node ids would draw the new
-        run's line over the old one -- the overlay bug MonitorBus.clear
-        exists to prevent, here for widget streams.
-        """
-        if self._monitor_bus is None:
-            return
-        for stream in (GRAPH_STREAM, *(node_stream_id(n.uid) for n in graph.nodes)):
-            try:
-                self._monitor_bus.clear(stream)
-            except Exception:  # noqa: BLE001 -- a stale chart is not worth a failed launch
-                logger.exception("clearing stream %r failed", stream)
-
-    def _record_peak(self, execution_id: ExecutionId, payload: dict) -> None:
-        """File one child-reported peak in the peak store (MEM-04 #2).
-
-        The child reports numbers; the row's ``memory_json`` carries the
-        fingerprint key admission computed for this run, and the store is
-        keyed by it -- so the same key admission *read* the past under is
-        the key this run's own high-water mark is written under. One
-        statement per rise, and the store's ``MAX`` semantics make a
-        duplicate write harmless anyway.
-
-        Guarded like ``_record_node`` and ``_republish_monitor``: a path
-        inside ``_apply`` never raises into the watcher, so telemetry
-        trouble costs the record, not the run's supervision.
-
-        Two numbers are deliberately *not* filed. A peak of 0 or less
-        means the run never allocated anything (it died before touching
-        the device), and storing it would have admission read back a
-        claim that this configuration needs nothing -- unknown, never
-        zero (task rule 2). And a peak at or below what this run has
-        already had filed is not a rise: the fixed-interval frames after
-        a run stops growing repeat the same number (MEM-05 #4), and they
-        cost nothing once the run has plateaued.
-        """
-        if self._peak_store is None:
-            return
-        # The frame is a child's JSON: its values are untyped, and
-        # float() raising TypeError on None *is* this guard -- the
-        # except below is where "no peak was stated" is handled.
-        raw: Any = payload.get("peak_mb")
-        try:
-            peak = float(raw)
-        except (TypeError, ValueError):
-            logger.warning(
-                "execution %s: memory record without a usable peak_mb (%r); "
-                "not recorded",
-                execution_id, payload.get("peak_mb"),
-            )
-            return
-        if not math.isfinite(peak) or peak <= 0.0:
-            logger.debug(
-                "execution %s: memory record reports no measured peak (%s); "
-                "not recorded",
-                execution_id, peak,
-            )
-            return
-        try:
-            execution = self._executions.get(execution_id)
-            key = (
-                None
-                if execution is None or execution.memory is None
-                else execution.memory.fingerprint_key
-            )
-            if key is None:
-                # Exactly what admission saw: an unknown fingerprint has
-                # no configuration to file a peak under.
-                logger.debug(
-                    "execution %s: peak %s MB not recorded, the graph's "
-                    "fingerprint is unknown",
-                    execution_id, peak,
-                )
-                return
-            risen = self._peak_seen.get(execution_id)
-            if risen is not None and peak <= risen:
-                return  # this run has already reported this much
-            self._peak_store.record(key, peak)
-            self._peak_seen[execution_id] = peak
-        except Exception:  # noqa: BLE001 -- telemetry must not abort the run
-            # The frame itself is gone (the offset already advanced), so
-            # the next frame's number -- no lower than this one for a
-            # healthy run -- is what will be filed instead.
-            logger.exception(
-                "recording a peak for execution %s failed", execution_id
-            )
-
     def _finish(
         self,
         execution_id: ExecutionId,
@@ -895,122 +485,13 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         outcome_error: str | None,
         abandoned: bool = False,
     ) -> None:
-        """Terminal write for one watched run.
-
-        Three sources of truth about how it ended, in priority order, and
-        the order is the whole point:
-
-        * a row already terminal was written by a stop or a reconcile --
-          do nothing, its writer's result stands;
-        * the child's own ``outcome`` record says whether the graph
-          failed, and with what;
-        * no record at all means the process died, which is a different
-          answer from "the graph failed" and must not be reported as a
-          success just because nobody wrote down a problem.
-
-        Note that the record's *existence* is not the same as its
-        contents: a run that finished and a run whose graph failed both
-        wrote one, and only the error inside it separates them.
-        """
+        """Terminal write for one watched run, then forget it."""
         try:
-            execution = self._executions.get(execution_id)
-            if execution is None or execution.status is not GraphStatus.RUNNING:
-                return  # stop request or reconcile beat us to the row
-            at = self._clock.now()
             with self._lock:
                 stopped = execution_id in self._stop_requested
-            # Hand the claim back *before* the row can read terminal, so
-            # the invariant an observer sees is strict: this run's row
-            # only reaches a terminal status once the capacity is free.
-            # Not at the top of `_finish`: `_release` clears
-            # `_stop_requested`, and `stopped` must be read first. The
-            # finally below releases again (idempotent) and covers the
-            # early-return path, where a stop or reconcile already
-            # wrote the row before this watcher got here.
-            release(self._memory_ledger, graph_owner(execution_id))
-            if not saw_outcome:
-                # Which of the two "no outcome" stories is true depends on
-                # whether the child was still there. Saying "crashed, or a
-                # device fault killed it" about a process we ourselves
-                # stopped -- and that was running perfectly well -- is the
-                # wrong answer twice over: it sends the reader to the
-                # execution log for a crash that never happened.
-                #
-                # The log's tail goes INTO the row. That sentence used to
-                # end "see the execution log", and the startup sweep then
-                # deleted that log -- so the only place a user could look
-                # for the traceback of a crashed run was destroyed by the
-                # next server start, and the row said nothing more than
-                # "it died". The row is what survives; the evidence belongs
-                # in it.
-                execution.mark_failed(
-                    at=at,
-                    error=self._with_log_tail(execution_id, (
-                        "supervision of this run failed, so it was stopped; "
-                        "it reported no outcome -- see the server log and "
-                        "the execution log"
-                        if abandoned else
-                        "execution process exited without reporting an "
-                        "outcome (crashed, or a device fault killed it) -- "
-                        "see the execution log"
-                    )),
-                )
-                self._writer.commit(execution, expected=GraphStatus.RUNNING)
-            elif outcome_error is not None:
-                execution.mark_failed(at=at, error=outcome_error)
-                self._writer.commit(execution, expected=GraphStatus.RUNNING)
-            elif stopped:
-                # The child returned normally because it was asked to
-                # stop, and that is not a completed graph.
-                execution.stop(at=at, reason="stop requested")
-                self._writer.commit(execution, expected=GraphStatus.RUNNING)
-            else:
-                execution.mark_finished(at=at)
-                self._writer.commit(execution, expected=GraphStatus.RUNNING)
-        except Exception:  # noqa: BLE001 -- already at the end of the run
-            logger.exception("finalising graph execution %s failed", execution_id)
+            self._finisher.finish(execution_id, saw_outcome, outcome_error, abandoned=abandoned, stopped=stopped)
         finally:
             self._release(execution_id, pid)
-
-    #: How much of a crashed child's log is copied into its row. Four
-    #: kilobytes is a traceback and a bit; a full training log is megabytes
-    #: of progress lines, and a row is not a log file.
-    LOG_TAIL_BYTES = 4096
-
-    def _with_log_tail(self, execution_id: ExecutionId, error: str) -> str:
-        """`error` plus the end of the child's log, or just `error`.
-
-        Bounded, because a row is not a log file and the sweep's retention
-        counts rows. Read from the end: the tail is where a traceback is,
-        and a crashed process can have written a lot before dying.
-
-        Every failure here degrades to "no tail" rather than raising. This
-        runs inside the `finally` of a run that has already failed, and a
-        reader that throws while reporting an unrelated crash would replace
-        a real error message with an internal one. Decoded with
-        ``errors="replace"`` because a traceback from a dying process can
-        contain a partial line, and this must never be the thing that raises.
-        """
-        try:
-            log_path = self._paths_for(execution_id)["log"]
-            size = log_path.stat().st_size
-            with log_path.open("rb") as handle:
-                if size > self.LOG_TAIL_BYTES:
-                    handle.seek(size - self.LOG_TAIL_BYTES)
-                raw = handle.read()
-        except Exception:  # noqa: BLE001 -- evidence is best-effort
-            logger.debug("could not read the log tail for execution %s",
-                         execution_id, exc_info=True)
-            return error
-
-        text = raw.decode("utf-8", errors="replace").strip()
-        if not text:
-            return error
-        return (
-            f"{error}\n\n"
-            f"--- last {min(size, self.LOG_TAIL_BYTES)} bytes of the "
-            f"execution log ---\n{text}"
-        )
 
     def _release(self, execution_id: ExecutionId, pid: int) -> None:
         """Forget a finished run: its pid, its stop marker, its claim,
@@ -1028,12 +509,12 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         idempotent, so a row finalised twice (watcher racing a stop)
         still releases exactly the one claim.
         """
-        release(self._memory_ledger, graph_owner(execution_id))
+        self._finisher.release_claim(execution_id)
+        self._recorder.forget(execution_id)
         with self._lock:
             self._pids.pop(execution_id, None)
             self._stop_requested.discard(execution_id)
             self._replaying.discard(execution_id)
-            self._peak_seen.pop(execution_id, None)
         reap = getattr(self._gateway, "reap", None)
         if reap is not None:
             reap(pid)

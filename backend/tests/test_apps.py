@@ -27,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from backend.application.graph_supervisor import GraphExecutionSupervisor
+from backend.application.execution_recorder import ExecutionRecorder
 from backend.application.app_binding import apply_values, exposed_fields
 from backend.domain.graph import Edge, GraphDefinition, NodeSpec
 from backend.domain.modules import GRAPH_STREAM, node_stream_id, run_stream_id
@@ -330,20 +330,20 @@ check(out.error is None and [f["step"] for f in widget_frames] == [1, 2, 3],
       f"a node with live views reports on node:<uid> (got {out.error}, {widget_frames})")
 check(widget_frames[0] == {"step": 1, "total_steps": 3, "loss": 1.0, "status": "step 1 of 3"}, "the node's own dict is the frame")
 
-sup = GraphExecutionSupervisor.__new__(GraphExecutionSupervisor)
+recorder = ExecutionRecorder.__new__(ExecutionRecorder)
 bus = RecordingMonitorBus()
-sup._monitor_bus = bus
-sup._republish_memory(7, {"kind": "memory", "t": 12.5, "reserved_mb": 100.0, "allocated_mb": 50.0,
+recorder._monitor_bus = bus
+recorder.republish_memory(7, {"kind": "memory", "t": 12.5, "reserved_mb": 100.0, "allocated_mb": 50.0,
                        "peak_mb": 120.0, "budget_mb": 9000.0, "backstop": "enforced", "event": None})
 memory_frame = {"t": 12.5, "reserved_mb": 100.0, "allocated_mb": 50.0, "peak_mb": 120.0, "budget_mb": 9000.0, "event": None}
 check(bus.reports == [(GRAPH_STREAM, memory_frame), (run_stream_id(7, GRAPH_STREAM), memory_frame)],
       f"memory frames are republished on the graph stream and the run's own, minus noise (got {bus.reports})")
-sup._clear_streams(GraphDefinition.from_dict(full_graph))
+recorder.clear_streams(GraphDefinition.from_dict(full_graph))
 check(bus.cleared[0] == GRAPH_STREAM and f"node:{W1}" in bus.cleared and f"node:{SU}" in bus.cleared,
       f"a starting run clears the graph stream and every node's (got {bus.cleared})")
-sup._monitor_bus = None
-sup._republish_memory(7, {"t": 1})
-sup._clear_streams(GraphDefinition())
+recorder._monitor_bus = None
+recorder.republish_memory(7, {"t": 1})
+recorder.clear_streams(GraphDefinition())
 check(True, "no bus: both are no-ops")
 
 # ==========================================================================

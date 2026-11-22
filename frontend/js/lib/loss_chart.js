@@ -65,6 +65,8 @@
    tab keeps working exactly as it did.
    --------------------------------------------------------------------------- */
 
+import { averageOf, formatAxisLabel, formatLinearTick, formatMovement, formatNum, linearTicks, niceNum } from "./chart_format.js";
+
 class LossChart {
   constructor(canvas, options) {
     this.canvas = canvas;
@@ -157,15 +159,7 @@ class LossChart {
   }
 
   _reduce(values) {
-    if (this.averageMethod === "median") {
-      const sorted = [...values].sort((a, b) => a - b), mid = sorted.length >> 1;
-      return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-    }
-    if (this.averageMethod === "ema") {
-      const alpha = 2 / (this.smoothWindow + 1);
-      return values.reduce((acc, v) => acc + alpha * (v - acc));
-    }
-    return values.reduce((a, b) => a + b, 0) / values.length;
+    return averageOf(values, this.averageMethod, this.smoothWindow);
   }
 
   /* What the hover tooltip calls the average at ``point``: the same method over whatever the window holds there, so
@@ -404,61 +398,6 @@ class LossChart {
     return plotT + plotH * 0.25 + centerH * (1 - frac);
   }
 
-  static _formatNum(v) {
-    if (v >= 1000) return v.toFixed(1); // MB/ms magnitudes: 9123.4, not 9123.4568
-    if (v >= 1) return v.toFixed(4);
-    if (v >= 0.01) return v.toFixed(5);
-    return v.toExponential(2);
-  }
-
-  static _formatAxisLabel(v) {
-    if (!isFinite(v) || v === 0) return "0";
-    const av = Math.abs(v);
-    const rounded = Number(av.toPrecision(2));
-    const s = (rounded >= 1000 || rounded < 0.0001) ? rounded.toExponential(1) : String(rounded);
-    return v < 0 ? "-" + s : s;
-  }
-
-  /* Evenly spaced ticks over [min, max] at a nice step (~6 of them).
-     Only used by the linear scale: nice numbers are already clean (50,
-     200, 500), so their labels print exactly -- _formatAxisLabel's 2-sig
-     digit rounding would turn a 8850 tick into "8900" and collide with
-     the next one. */
-  static _linearTicks(min, max) {
-    if (!isFinite(min) || !isFinite(max) || !(max > min)) return isFinite(max) ? [max] : [];
-    const step = LossChart._niceNum((max - min) / 6, true);
-    if (!(step > 0)) return [min, max];
-    const out = [];
-    for (let t = Math.ceil(min / step) * step; t <= max + step * 1e-6; t += step) {
-      out.push(Math.round(t * 1e9) / 1e9); // undo float drift so labels stay exact
-    }
-    return out;
-  }
-
-  static _formatLinearTick(v) {
-    if (!isFinite(v)) return "";
-    const r = Math.round(v);
-    if (Math.abs(v - r) < 1e-9) return String(r);
-    return String(Math.round(v * 100) / 100);
-  }
-
-  /* Movement = end average - begin average: signed, 2 significant
-     digits. This is the number that says progress (negative, loss
-     coming down) or regress at a glance, without reading the squiggle. */
-  static _formatMovement(v) {
-    if (v == null || !isFinite(v)) return "";
-    return (v < 0 ? "\u2212" : "+") + Math.abs(v).toPrecision(2);
-  }
-
-  static _niceNum(range, round) {
-    if (range <= 0) return 1;
-    const exp = Math.floor(Math.log10(range));
-    const frac = range / Math.pow(10, exp);
-    let nice;
-    if (round) nice = (frac < 1.5) ? 1 : (frac < 3) ? 2 : (frac < 7) ? 5 : 10;
-    else nice = (frac <= 1) ? 1 : (frac <= 2) ? 2 : (frac <= 5) ? 5 : 10;
-    return nice * Math.pow(10, exp);
-  }
 
   _draw() {
     const { canvas, ctx } = this;
@@ -502,20 +441,20 @@ class LossChart {
     ctx.textBaseline = "middle";
     const linear = this.scale === "linear";
     const ticks = linear
-      ? LossChart._linearTicks(range.fullMin, range.fullMax)
+      ? linearTicks(range.fullMin, range.fullMax)
       : [range.fullMax, range.linMax, range.linMin, range.fullMin]
           .filter((v, i, arr) => isFinite(v) && arr.findIndex(o => Math.abs(o - v) <= Math.abs(v) * 1e-6 + 1e-12) === i);
     for (const tick of ticks) {
       const py = yPos(tick);
       if (py >= plotT - 0.5 && py <= plotB + 0.5) {
         ctx.beginPath(); ctx.moveTo(plotL, py); ctx.lineTo(plotR, py); ctx.stroke();
-        ctx.fillText(linear ? LossChart._formatLinearTick(tick) : LossChart._formatAxisLabel(tick), plotL - 6, py);
+        ctx.fillText(linear ? formatLinearTick(tick) : formatAxisLabel(tick), plotL - 6, py);
       }
     }
 
     // x axis
     ctx.beginPath(); ctx.moveTo(plotL, plotB); ctx.lineTo(plotR, plotB); ctx.stroke();
-    let xStep = LossChart._niceNum((xMax - xMin) / 8, true);
+    let xStep = niceNum((xMax - xMin) / 8, true);
     if (xStep <= 0) xStep = 1;
     ctx.textAlign = "center"; ctx.textBaseline = "top";
     for (let xs = Math.ceil(xMin / xStep) * xStep; xs <= xMax + xStep * 0.01; xs += xStep) {
@@ -636,7 +575,7 @@ class LossChart {
     let lx = plotL + 4, ly = plotT - 8, row = 0;
     for (const s of this.series) {
       const tr = this.trend ? this._trends[s.key] : null;
-      const deltaTxt = tr ? LossChart._formatMovement(tr.movement) : "";
+      const deltaTxt = tr ? formatMovement(tr.movement) : "";
       const deltaW = deltaTxt ? ctx.measureText(deltaTxt).width + 6 : 0;
       const labelW = ctx.measureText(s.label).width;
       if (lx + 16 + labelW + deltaW > plotR && row === 0) { lx = plotL + 4; ly = plotT + 8; row = 1; }
@@ -692,8 +631,8 @@ class LossChart {
       if (v == null) continue;
       const avg = this._averageAt(best, s.key);
       const text = this.showAverage && avg != null
-        ? `${s.label}: ${LossChart._formatNum(avg)}  (step ${LossChart._formatNum(v)})`
-        : `${s.label}: ${LossChart._formatNum(v)}`;
+        ? `${s.label}: ${formatNum(avg)}  (step ${formatNum(v)})`
+        : `${s.label}: ${formatNum(v)}`;
       lines.push({ text, color: s.color });
     }
 

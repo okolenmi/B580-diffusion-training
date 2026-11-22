@@ -21,6 +21,7 @@
      fabricated zeros.
    --------------------------------------------------------------------------- */
 
+import { fmt, fmtDuration, fmtMB, toCsv } from "./lib/monitor_format.js";
 import { LossChart } from "./lib/loss_chart.js";
 import { nonfiniteText, setValue } from "./lib/value.js";
 import { el } from "./lib/dom.js";
@@ -214,7 +215,7 @@ class MonitorDashboard {
       this.budget = data.vram_budget_mb;
       this.vramChart.setReferenceLines([{
         value: this.budget,
-        label: "budget " + this.fmtMB(this.budget),
+        label: "budget " + fmtMB(this.budget),
         color: "#ff5252",
       }]);
     }
@@ -284,15 +285,15 @@ class MonitorDashboard {
     const step = data.total_steps ? `${data.step} / ${data.total_steps}` : String(data.step);
     e.step.textContent = step;
     // A diverged loss arrives as null plus a `nonfinite` marker (docs 07
-    // F-03): say so loudly instead of the em dash this.fmt() gives null,
+    // F-03): say so loudly instead of the em dash fmt() gives null,
     // which would read as "nothing measured here".
     const lossKind = data.nonfinite && data.nonfinite.loss;
     if (lossKind) setValue(e.loss, nonfiniteText(lossKind), true);
-    else setValue(e.loss, this.fmt(data.loss), false);
+    else setValue(e.loss, fmt(data.loss), false);
     e.smoothed.textContent = this.chart.points.length && this.chart.points[this.chart.points.length - 1].smoothed != null
-      ? this.fmt(this.chart.points[this.chart.points.length - 1].smoothed) : "\u2014";
+      ? fmt(this.chart.points[this.chart.points.length - 1].smoothed) : "\u2014";
     if (this.stats.best != null) {
-      e.best.textContent = this.fmt(this.stats.best);
+      e.best.textContent = fmt(this.stats.best);
       e.best.title = `lowest raw loss seen this session, at step ${this.stats.bestStep}`;
     }
     // Per-t bucket rows: each shows the latest *measured* value --
@@ -328,7 +329,7 @@ class MonitorDashboard {
         this.setBar(s.r.bar, null, bucketMax);
         continue;
       }
-      s.r.val.textContent = s.stale ? `${this.fmt(s.v)} @${s.step}` : this.fmt(s.v);
+      s.r.val.textContent = s.stale ? `${fmt(s.v)} @${s.step}` : fmt(s.v);
       s.r.val.classList.toggle("mon-stale", s.stale);
       s.r.val.title = s.stale
         ? `last measured at step ${s.step}; this window had no sample in ${s.r.range}`
@@ -352,14 +353,14 @@ class MonitorDashboard {
 
     if (data.vram_reserved_mb !== undefined) {
       e.memorySection.classList.remove("mon-hidden");
-      e.vram.textContent = this.fmtMB(data.vram_reserved_mb);
+      e.vram.textContent = fmtMB(data.vram_reserved_mb);
       const bits = [];
       if (data.vram_allocated_mb !== undefined) {
-        bits.push("alloc " + this.fmtMB(data.vram_allocated_mb));
+        bits.push("alloc " + fmtMB(data.vram_allocated_mb));
       }
       if (this.budget != null) {
         const pct = (data.vram_reserved_mb / this.budget) * 100;
-        bits.push("budget " + this.fmtMB(this.budget) + " \u00b7 " + pct.toFixed(0) + "%");
+        bits.push("budget " + fmtMB(this.budget) + " \u00b7 " + pct.toFixed(0) + "%");
         // Meter fill = pressure band: accent while comfortable, amber
         // approaching it, red at/over it. Width caps at 100% but the
         // sub-line always prints the true percentage.
@@ -372,7 +373,7 @@ class MonitorDashboard {
       e.vramSub.textContent = bits.join(" \u00b7 ");
     }
     if (this.stats.peakVram != null) {
-      e.vramPeak.textContent = this.fmtMB(this.stats.peakVram);
+      e.vramPeak.textContent = fmtMB(this.stats.peakVram);
     }
 
     if (data.total_steps) {
@@ -382,7 +383,7 @@ class MonitorDashboard {
     }
 
     const elapsedS = (now - this.firstEventTime) / 1000;
-    e.elapsed.textContent = this.fmtDuration(elapsedS);
+    e.elapsed.textContent = fmtDuration(elapsedS);
 
     if (this.recentRates.length >= 2) {
       const first = this.recentRates[0], last = this.recentRates[this.recentRates.length - 1];
@@ -391,7 +392,7 @@ class MonitorDashboard {
       e.rate.textContent = rate > 0 ? rate.toFixed(2) : "\u2014";
       if (rate > 0 && data.total_steps) {
         const remaining = (data.total_steps - data.step) / rate;
-        e.eta.textContent = this.fmtDuration(remaining);
+        e.eta.textContent = fmtDuration(remaining);
       }
     }
   }
@@ -400,18 +401,7 @@ class MonitorDashboard {
      of keys in first-seen order, missing keys empty -- never imputed. */
   exportCsv() {
     if (this.rawHistory.length === 0) return;
-    const cols = [];
-    for (const r of this.rawHistory) {
-      for (const k of Object.keys(r)) if (!cols.includes(k)) cols.push(k);
-    }
-    const esc = (v) => {
-      if (v === undefined || v === null) return "";
-      const s = String(v);
-      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
-    };
-    const lines = [cols.join(",")];
-    for (const r of this.rawHistory) lines.push(cols.map((c) => esc(r[c])).join(","));
-    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const blob = new Blob([toCsv(this.rawHistory)], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     const lastStep = this.rawHistory[this.rawHistory.length - 1].step;
@@ -599,22 +589,6 @@ class MonitorDashboard {
       this.relockAt(pts[Math.min(idx + n - 1, pts.length - 1)].step);
     }
     this.applyView();
-  }
-
-  fmt(v) {
-    if (v === undefined || v === null) return "\u2014";
-    return v >= 1 ? v.toFixed(4) : v >= 0.001 ? v.toFixed(5) : v.toExponential(2);
-  }
-
-  fmtMB(v) {
-    if (v === undefined || v === null) return "\u2014";
-    return v >= 1024 ? (v / 1024).toFixed(1) + " GB" : Math.round(v) + " MB";
-  }
-
-  fmtDuration(seconds) {
-    if (!isFinite(seconds) || seconds < 0) return "\u2014";
-    const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = Math.floor(seconds % 60);
-    return h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`;
   }
 }
 

@@ -12,7 +12,7 @@ from data.noise import Noiser, TimestepPolicy
 from data.padding import FILLS
 from engine.step.balance import TimeBalance
 from families.api.parts import DenoiserPart
-from families.registry import get_family
+from ..family_lookup import family_of
 from graph import AddonSlot, EventOut, Group, Node, Port
 from graph.events import EpochEnding, EpochStarted, PromptsChanged
 from .handles import LatentSet, PromptTable
@@ -101,7 +101,7 @@ class NoiserNode(Node):
 
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
-        family = get_family(inputs["denoiser"].family_id)
+        family = family_of(self.context, inputs["denoiser"].family_id)
         given = {"parameterization": inputs.get("parameterization") or "eps", "zero_terminal_snr": bool(inputs.get("zero_terminal_snr")),
                  "shift": inputs.get("shift"), "scale": inputs.get("scale")}
         objective = family.objective(**{name: given[name] for name in family.objective.OPTIONS})

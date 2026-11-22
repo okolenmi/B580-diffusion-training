@@ -9,7 +9,7 @@ import torch
 from engine.devices import Accelerator, part_dtype, resolve_device
 from engine.handles import PromptEncoding
 from families.api.parts import ModelPart
-from families.registry import get_family
+from ..family_lookup import family_of
 from graph import Node, Port
 
 
@@ -31,7 +31,7 @@ class EncodePromptNode(Node):
         families = {p.family_id for p in parts.values()}
         if len(families) != 1:
             raise ValueError(f"Encode Prompt: the encoders come from different families ({sorted(families)})")
-        family = get_family(families.pop())
+        family = family_of(self.context, families.pop())
         device = resolve_device(self.context.settings.get("device.default"))
         setting = self.context.settings.get("precision.encoders")
         dtype = {role: part_dtype(p.dtype, setting, torch.float16) for role, p in parts.items()}

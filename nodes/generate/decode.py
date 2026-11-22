@@ -12,7 +12,7 @@ from engine.generate.tiling import TiledDecoder
 from engine.handles import Images, Latents
 from engine.runtime.memory import is_out_of_memory
 from families.api.parts import VAEPart
-from families.registry import get_family
+from ..family_lookup import family_of
 from graph import Node, Port
 
 
@@ -30,7 +30,7 @@ class DecodeImageNode(Node):
         self.validate_inputs(inputs)
         part: VAEPart = inputs["vae"]
         latents: Latents = inputs["latents"]
-        family = get_family(part.family_id)
+        family = family_of(self.context, part.family_id)
         device = resolve_device(self.context.settings.get("device.default"))
         with self.context.task("Loading the VAE"):
             vae = family.load_vae(part, device=device, dtype=part_dtype(part.dtype, self.context.settings.get("precision.vae"), torch.float32))

@@ -14,7 +14,7 @@ from engine.handles import TrainableDenoiser
 from engine.runtime.checkpointing import ActivationCheckpointer
 from families.api.adapters import GateWindow, TrainableSelection
 from families.api.parts import DenoiserPart
-from families.registry import get_family
+from ..family_lookup import family_of
 from graph import Group, Node, Port
 from .merges import apply_merges
 
@@ -145,7 +145,7 @@ class InjectAdapterNode(Node):
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
         part: DenoiserPart = inputs["denoiser"]
-        family = get_family(part.family_id)
+        family = family_of(self.context, part.family_id)
         device = resolve_device(self.context.settings.get("device.default"))
         precision = part.dtype if part.dtype != "auto" else self.context.settings.get("precision.denoiser")
         dtype = resolve_dtype(precision, torch.bfloat16)

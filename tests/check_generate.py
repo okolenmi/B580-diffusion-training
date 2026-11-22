@@ -10,9 +10,7 @@ from __future__ import annotations
 
 import tempfile
 import threading
-from contextlib import ExitStack
 from pathlib import Path
-from unittest import mock
 
 import starters
 from engine.devices import Accelerator
@@ -21,7 +19,6 @@ from engine.generate.recipe import ImageStore
 from engine.runtime.factory import make_runtime
 from graph import GraphRunner, NodeRegistry
 from graph.node import Environment
-from nodes.generate import decode, encode, sampler
 from nodes.model.adapter_stack import parse_stack
 from console import NodeTrace
 from .pipeline_nodes import TinyFamily
@@ -51,13 +48,13 @@ class Trace:
 def execute(doc, stop_after: int | None = None, artifacts: Path | None = None):
     cancel = threading.Event()
     trace = Trace(stop_after, cancel)
-    env = Environment(services={"artifacts": ArtifactFolder(artifacts)} if artifacts else {})
+    services = {"families": lambda _id: FAMILY}
+    if artifacts:
+        services["artifacts"] = ArtifactFolder(artifacts)
+    env = Environment(services=services)
     runner = GraphRunner(REGISTRY, reporter=trace, env=env, runtime_factory=make_runtime, observer=NodeTrace(doc, Accelerator("cpu"), None))
-    with ExitStack() as stack:
-        for module in (encode, sampler, decode):
-            stack.enter_context(mock.patch.object(module, "get_family", lambda _id: FAMILY))
-        validation = runner.validate(doc)
-        outcome = runner.run(doc, cancel)
+    validation = runner.validate(doc)
+    outcome = runner.run(doc, cancel)
     return validation, outcome, trace
 
 

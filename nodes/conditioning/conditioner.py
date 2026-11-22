@@ -17,7 +17,7 @@ from engine.runtime.encoders import OnDemandKit
 from engine.runtime.residents import ModulesResident
 from families.api.header import read_header
 from families.api.parts import ModelPart
-from families.registry import get_family
+from ..family_lookup import family_of
 from graph import EventIn, Group, Node, Port
 from graph.settings import AUTO
 from graph.events import PromptsChanged
@@ -55,7 +55,7 @@ class ConditionerNode(Node):
         families = {p.family_id for p in parts.values()}
         if len(families) != 1:
             raise ValueError(f"Conditioner: the encoders come from different families ({sorted(families)})")
-        family = get_family(families.pop())
+        family = family_of(self.context, families.pop())
         device = resolve_device(self.context.settings.get("device.default"))
         setting = self.context.settings.get("precision.encoders")
         dtype = {role: part_dtype(p.dtype, setting, torch.float16) for role, p in parts.items()}

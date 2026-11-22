@@ -14,7 +14,7 @@ from engine.generate.sampling import SAMPLERS, SigmaSchedule
 from engine.generate.scheme import scheme_for
 from engine.handles import Latents, PromptEncoding
 from families.api.parts import DenoiserPart
-from families.registry import get_family
+from ..family_lookup import family_of
 from graph import DisplayModule, Group, Node, Port
 from nodes.model.merges import apply_merges
 
@@ -49,9 +49,9 @@ class SamplerNode(Node):
         self.validate_inputs(inputs)
         part: DenoiserPart = inputs["denoiser"]
         encoding: PromptEncoding = inputs["encoding"]
-        if encoding.family is not get_family(part.family_id):
+        if encoding.family is not family_of(self.context, part.family_id):
             raise ValueError("Sampler: the prompt was encoded for a different model family than the denoiser")
-        family = get_family(part.family_id)
+        family = family_of(self.context, part.family_id)
         width, height = int(inputs.get("width") or 1024), int(inputs.get("height") or 1024)
         multiple = family.latent_spec.pixel_multiple
         if width % multiple or height % multiple:

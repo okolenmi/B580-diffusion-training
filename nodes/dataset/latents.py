@@ -13,7 +13,7 @@ from engine.devices import Accelerator, part_dtype
 from engine.xpu_env import size_cache_for_shapes
 from families.api.header import read_header
 from families.api.parts import VAEPart
-from families.registry import get_family
+from ..family_lookup import family_of
 from graph import Group, Node, Port
 from .handles import ImageSet, LatentSet
 
@@ -49,7 +49,7 @@ class LatentCacheNode(Node):
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)
         part: VAEPart = inputs["vae"]
-        family = get_family(part.family_id)
+        family = family_of(self.context, part.family_id)
         spec = family.latent_spec
         policy = SizePolicy(base=inputs.get("base") or 1024, mode=inputs.get("mode") or "fit",
                             multiple=int(inputs.get("step") or 8), max_aspect=inputs.get("max_aspect") or 2.0)

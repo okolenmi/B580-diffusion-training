@@ -14,9 +14,7 @@ import io
 import shutil
 import tempfile
 import threading
-from contextlib import ExitStack
 from pathlib import Path
-from unittest import mock
 
 import starters
 from data.store import DatasetStore
@@ -25,9 +23,6 @@ from engine.runtime.factory import make_runtime
 from console import NodeTrace
 from graph import ActionDispatcher, GraphDoc, GraphRunner, NodeRegistry
 from graph.node import Environment
-from nodes.conditioning import conditioner
-from nodes.dataset import batching, latents
-from nodes.model import inject_adapter
 from .check_data import make_images
 from .pipeline_nodes import TinyFamily
 import torch
@@ -67,13 +62,10 @@ def execute(store: DatasetStore, doc: GraphDoc, stop_after: int | None = None, f
     cancel = threading.Event()
     trace = Trace(stop_after, cancel, on_step)
     node_trace = NodeTrace(doc, Accelerator("cpu"), None)
-    runner = GraphRunner(REGISTRY, reporter=trace, env=Environment(services={"datasets": store}), runtime_factory=make_runtime,
+    runner = GraphRunner(REGISTRY, reporter=trace, env=Environment(services={"datasets": store, "families": lambda _id: family()}), runtime_factory=make_runtime,
                          observer=node_trace, commands=commands)
-    with ExitStack() as stack:
-        for module in (conditioner, inject_adapter, latents, batching):
-            stack.enter_context(mock.patch.object(module, "get_family", lambda _id: family()))
-        validation = runner.validate(doc)
-        outcome = runner.run(doc, cancel)
+    validation = runner.validate(doc)
+    outcome = runner.run(doc, cancel)
     return validation, outcome, trace
 
 

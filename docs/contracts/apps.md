@@ -3,7 +3,7 @@
 An **App** is a published, versioned page over a frozen copy of a graph: the way a workflow is used by someone who should not have to meet the node
 canvas. A **board** is the grid of cards that both an App and a graph's *views* (`graph-json.md`) are made of. Code: `backend/domain/board.py`,
 `backend/domain/app.py`, `backend/application/app_binding.py`, `backend/presentation/api/apps.py` and `boards.py`; the frontend engine is
-`frontend/js/board/`, the page `frontend/js/apps.js`.
+`frontend/js/board/`, the page `frontend/js/apps.js` (entry) and `frontend/js/apps/` (document, selection, run tracker, tray, toolbar, page controller).
 
 ## Board
 

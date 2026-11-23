@@ -97,3 +97,12 @@ test("logError on a plain Error uses its message", () => {
   assert.equal(lines()[0].textContent, "kaboom");
   assert.equal(lines()[0].className, "console-line error");
 });
+test("an error line announces itself so the docked console can open; other kinds do not", () => {
+  reset();
+  const seen = [];
+  globalThis.window = { dispatchEvent: (e) => seen.push(e.type) };
+  log("fine", "info");
+  log("Graph invalid: 1 issue(s).", "error");
+  delete globalThis.window;
+  assert.deepEqual(seen, ["console:attention"]);
+});

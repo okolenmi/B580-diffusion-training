@@ -18,6 +18,8 @@ import { el } from "./dom.js";
 import { errText } from "./errors.js";
 
 export const MAX_CONSOLE_LINES = 60;
+/** Fired on `window` when an error line is written: the docked system console listens and opens itself, so a failure is seen. */
+export const CONSOLE_ATTENTION = "console:attention";
 /**
  * How many lines the strip keeps. Oldest go first: the interesting line
  * is the one that just happened, and a page that has been open for an
@@ -41,6 +43,7 @@ export function log(message, kind = "info") {
     out.removeChild(out.firstChild);
   }
   out.scrollTop = out.scrollHeight;
+  if (kind === "error" && typeof window !== "undefined") window.dispatchEvent(new Event(CONSOLE_ATTENTION));
 }
 
 /**

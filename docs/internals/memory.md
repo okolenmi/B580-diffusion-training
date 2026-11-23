@@ -11,6 +11,7 @@ predicts out-of-memory; the allocator's own peak understates it.
 |---|---|---|
 | Text encoders on the host except while encoding (`OnDemandKit`); the device cache is emptied when they leave | one round trip per epoch | `engine/runtime/encoders.py`, Conditioner node |
 | VAE released and the device cache emptied after the latent cache is built | none | Latent Cache node |
+| Generation: the denoiser stays on the card after sampling; it goes to the host only when a load does not fit the budget or a decode runs out of memory, and the decode then retries before tiling | none while it fits | `engine/generate/shelf.py`, Sampler, Decode Image |
 | Frozen weights in bf16, loaded straight to the device (meta construction, no fp32 copy) | none | `families/sdxl/denoiser.py` |
 | Activation checkpointing: residual blocks always, transformer blocks by `attention_fraction` | recompute of the chosen blocks | `engine/runtime/checkpointing.py` |
 | Fused optimizer (no gradient pile-up), grouped updates, int8 optimizer state | small | `engine/optim` |

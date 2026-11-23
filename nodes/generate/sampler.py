@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import gc
 from dataclasses import asdict
 from typing import Any
 
 import torch
 
-from engine.devices import Accelerator, resolve_device, resolve_dtype
+from engine.devices import resolve_device, resolve_dtype
 from engine.generate.recipe import Recipe
 from engine.generate.sampling import SAMPLERS, SigmaSchedule
 from engine.generate.scheme import scheme_for
@@ -17,6 +16,7 @@ from families.api.parts import DenoiserPart
 from ..family_lookup import family_of
 from graph import DisplayModule, Group, Node, Port
 from nodes.model.merges import apply_merges
+from .shelf_access import shelf_of
 
 
 class SamplerNode(Node):
@@ -69,16 +69,23 @@ class SamplerNode(Node):
             raise ValueError(f"Sampler: {error}") from error
         device = resolve_device(self.context.settings.get("device.default"))
         precision = part.dtype if part.dtype != "auto" else self.context.settings.get("precision.denoiser")
-        with self.context.task("Loading the denoiser"):
-            denoiser = family.load_denoiser(part, device=device, dtype=resolve_dtype(precision, torch.bfloat16))
+        shelf = shelf_of(self.context, device)
+        key = (part.family_id, part.source.path, part.source.prefix, precision, part.merges)
+
+        def load() -> Any:
+            with self.context.task("Loading the denoiser"):
+                return family.load_denoiser(part, device="cpu", dtype=resolve_dtype(precision, torch.bfloat16))
+
+        def prepare(loaded: Any) -> None:
+            apply_merges(family, loaded, part.merges, lambda: self.context.env.service("models"), self.context.task)
+            loaded.eval()
+
+        denoiser = shelf.acquire(key, load, prepare)
         try:
-            apply_merges(family, denoiser, part.merges, lambda: self.context.env.service("models"), self.context.task)
-            denoiser.eval()
             latents = self._sample(denoiser, encoding, recipes, first, device, scheme, family.latent_spec)
         finally:
+            shelf.done(key, denoiser)
             del denoiser
-            gc.collect()
-            Accelerator(device).empty_cache()
         adapters = [{"file": m.file, "strength": m.strength} for m in part.merges]
         return {"latents": Latents(latents, recipes, {"model": part.source.path.rsplit("/", 1)[-1], "adapters": adapters,
                                                       "recipes": [asdict(r) for r in recipes]})}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from ..devices import Accelerator, resolve_device
 from .determinism import Determinism
@@ -16,6 +17,7 @@ class Runtime:
 
     residency: ResidencyManager
     determinism: Determinism
+    denoisers: Any = None  # the generation nodes' shelf of kept denoisers (engine.generate.shelf), made by the first Sampler
 
 
 def make_runtime(context) -> Runtime:

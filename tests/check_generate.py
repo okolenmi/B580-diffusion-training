@@ -19,7 +19,7 @@ from engine.generate.recipe import ImageStore
 from engine.runtime.factory import make_runtime
 from graph import GraphRunner, NodeRegistry
 from graph.node import Environment
-from nodes.model.adapter_stack import parse_stack
+from nodes.model.adapter_stack import adapter_rows, parse_stack
 from console import NodeTrace
 from .pipeline_nodes import TinyFamily
 from .support import check, raises
@@ -67,6 +67,11 @@ def adapter_list() -> None:
     check(parse_stack("x=-0.5") == [("x", -0.5)], "a negative strength is allowed")
     raises(ValueError, lambda: parse_stack("x=loud"), "a strength that is not a number is refused", "line 1")
     raises(ValueError, lambda: parse_stack("=0.5"), "a line without a file name is refused", "no file name")
+    rows = [{"file": "a.safetensors", "strength": 0.8, "on": True}, {"file": "b.safetensors", "strength": 1, "on": False}, {"file": "c.safetensors", "strength": "0.3"}]
+    check(adapter_rows(rows) == [("a.safetensors", 0.8), ("c.safetensors", 0.3)], "the list control's rows give the adapters that are on, in order")
+    check(adapter_rows(None) == [] and adapter_rows("a.safetensors=2") == [("a.safetensors", 2.0)], "no rows is no adapters; a graph saved with the text form still reads")
+    raises(ValueError, lambda: adapter_rows([{"file": "a", "strength": "loud"}]), "a strength that is not a number is refused", "not a strength")
+    raises(ValueError, lambda: adapter_rows([{"strength": 1}]), "a row without a file is refused", "no file")
 
 
 def run_graph() -> None:

@@ -342,7 +342,7 @@ class SdxlImageOptions:
 
     prompt: str = ""
     negative: str = ""
-    adapters: str = ""
+    adapters: tuple = ()  # (file, strength) pairs or {file, strength, on} rows, under the loras folder
     seed: int = 0
     steps: int = 25
     cfg: float = 6.0
@@ -353,10 +353,17 @@ class SdxlImageOptions:
     batch: int = 1
 
 
+def _adapter_row(item) -> dict:
+    if isinstance(item, dict):
+        return item
+    file, strength = (item, 1.0) if isinstance(item, str) else item
+    return {"file": file, "strength": strength, "on": True}
+
+
 def _image_graph(b: _Builder, o: SdxlImageOptions, output: str, *, encoder_wires: list[tuple[str, str, str, str]], vae_node: str,
                  settings: dict | None, overrides: dict[str, dict] | None) -> GraphDoc:
     """The generation graph both image starters share: the loaders are already in ``b`` (a node named ``model`` holds the denoiser)."""
-    b.add("adapters", "AdapterStackNode", adapters=o.adapters)
+    b.add("adapters", "AdapterStackNode", adapters=[_adapter_row(a) for a in o.adapters])
     b.add("prompt", "EncodePromptNode", prompt=o.prompt, negative=o.negative)
     b.add("sampler", "SamplerNode", seed=o.seed, steps=o.steps, cfg=o.cfg, sampler=o.sampler, scheduler=o.scheduler,
           width=o.width, height=o.height, batch=o.batch)

@@ -583,6 +583,74 @@ def xpu_environment():
                 os.environ[key] = value
 
 
+def denoiser_shelf():
+    """Generation keeps its denoisers on the card, and moves them only when the budget needs the room."""
+    from engine.generate import shelf as shelf_module
+
+    class Fake:
+        def __init__(self, mb):
+            self.mb, self.where, self.moves = mb, "cpu", []
+
+        def module(self):
+            return self
+
+        def to(self, where):
+            self.where = where
+            self.moves.append(where)
+
+    class Seen(shelf_module.ModulesResident):
+        """Sizes and places come from the fake instead of tensors."""
+
+        def footprint_bytes(self):
+            return int(self.modules[0].mb * MB) if self.modules[0].where != "cpu" else 0
+
+        def size_bytes(self):
+            return int(self.modules[0].mb * MB)
+
+        def offload(self):
+            self.modules[0].where = "cpu"
+            device.ours -= self.modules[0].mb
+
+        def reload(self, device_name=None):
+            self.modules[0].where = self.home
+            device.ours += self.modules[0].mb
+
+    real = shelf_module.ModulesResident
+    shelf_module.ModulesResident = Seen
+    try:
+        device = FakeDevice(total=12000, foreign=600, ours=0)
+        m = manager(device, limit_mb=10000)
+        shelf = shelf_module.DenoiserShelf(m, "xpu")
+
+        def loaded(mb):
+            def load():
+                return Fake(mb)
+
+            def prepare(d):
+                device.ours += d.mb
+            return load, prepare
+
+        first = shelf.acquire("a", *loaded(5000))
+        check(first.where == "xpu" and shelf.acquire("a", *loaded(5000)) is first, "a denoiser stays on the card and the next sampler with the same key gets the same one")
+        shelf.done("a", first)
+        check(first.where == "xpu" and any(r["name"].startswith("sampler denoiser") for r in m.ledger()), "a finished sampler leaves its denoiser on the card, claimed in the ledger")
+        second = shelf.acquire("b", *loaded(3000))
+        check(first.where == "xpu" and second.where == "xpu", "both stay while the budget holds them")
+        third = shelf.acquire("c", *loaded(4000))
+        check(third.where == "xpu" and "cpu" in (first.where, second.where), "a load that does not fit moves a held denoiser to the host first")
+        check(shelf.yield_room() and first.where == second.where == third.where == "cpu", "a decode that runs out of memory sends every held denoiser to the host")
+        check(not shelf.yield_room(), "nothing is left to move the second time")
+        again = shelf.acquire("a", *loaded(5000))
+        check(again is first and first.where == "xpu", "a denoiser sent to the host comes back when a sampler wants it again")
+
+        transient = shelf_module.DenoiserShelf(None, "xpu")
+        one = transient.acquire("x", *loaded(100))
+        transient.done("x", one)
+        check(transient.acquire("x", *loaded(100)) is not one, "without a residency manager nothing is kept")
+    finally:
+        shelf_module.ModulesResident = real
+
+
 def deterministic_mode():
     from engine.runtime.determinism import Determinism
 
@@ -824,4 +892,4 @@ def tuned_checkpointing():
 
 
 if __name__ == "__main__":
-    run(limits, pressure, making_room, borrowing_the_model, room_by_physical_limit, one_margin, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_budget, allocator_cap, graph_room, out_of_memory_retry, breakdown, attribution, checkpoint_density, on_demand_encoders, sampling, xpu_environment, training, tuned_checkpointing, planning_with_fixed_cost, cache_thrash, measured_placement, measured_checkpointing_in_trainer, deterministic_mode)
+    run(limits, pressure, making_room, borrowing_the_model, room_by_physical_limit, one_margin, footprints, cached_blocks_are_not_pressure, claims_and_ledger, planning, persistent_first, allocator_budget, allocator_cap, graph_room, out_of_memory_retry, breakdown, attribution, checkpoint_density, on_demand_encoders, sampling, xpu_environment, training, tuned_checkpointing, planning_with_fixed_cost, cache_thrash, measured_placement, measured_checkpointing_in_trainer, deterministic_mode, denoiser_shelf)

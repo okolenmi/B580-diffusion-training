@@ -17,6 +17,8 @@
    "auto" choice next to its number.
    --------------------------------------------------------------------------- */
 
+import { adapterListControl } from "./adapter_list.js";
+
 const JSON_TYPES = new Set(["list", "dict", "tuple"]);
 
 const make = (tag, className, attrs = {}) => {
@@ -162,6 +164,7 @@ function textControl(spec, { value, onDraft, onCommit }) {
 
 export function buildControl(spec, ctx) {
   const choices = spec.choices && spec.choices.length ? spec.choices : null;
+  if (spec.ui?.widget === "adapter_list") return adapterListControl(spec, ctx);
   if (spec.picker) return pickerControl(spec, ctx);
   if (choices) return selectControl(spec, ctx, choices);
   if (spec.type === "bool") return boolControl(spec, ctx);

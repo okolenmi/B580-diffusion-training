@@ -233,12 +233,16 @@ function mountConsole() {
     apply();
     persist();
   });
-  fab.addEventListener("click", () => {
+  const open = () => {
     state.min = false;
     apply();
     persist();
     document.getElementById("console-output").scrollTop = 1e9;
-  });
+  };
+  fab.addEventListener("click", open);
+  // An error line opens the docked console; an open one is left alone.
+  window.addEventListener("console:attention", // fired by lib/log.js (this file has no imports)
+     () => { if (state.min) open(); });
 
   /* drag by the header (the minimize button stays clickable).
      Start from the element's LIVE position, not persisted state: stored

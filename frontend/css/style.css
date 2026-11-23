@@ -314,3 +314,20 @@ input[type="checkbox"]:checked::after {
 @media (max-width: 1000px) {
     .content-area { padding: 1.5rem; }
 }
+
+/* adapter list control (graph/adapter_list.js) */
+.adl { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.adl-rows { display: flex; flex-direction: column; gap: 4px; }
+.adl-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.adl-row.is-off .adl-name { opacity: 0.5; text-decoration: line-through; }
+.adl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.adl-name small, .adl-item small { color: var(--text-dim); }
+.adl-strength { width: 4.5rem; flex: none; }
+.adl-btn { flex: none; padding: 0 6px; line-height: 1.6; cursor: pointer; background: none; border: 1px solid transparent; border-radius: 4px; color: var(--text-dim); }
+.adl-btn:hover { border-color: var(--border, var(--text-dim)); color: inherit; }
+.adl-add { align-self: flex-start; }
+.adl-picker { display: flex; flex-direction: column; gap: 4px; }
+.adl-found { max-height: 14rem; overflow: auto; display: flex; flex-direction: column; border: 1px solid var(--border, var(--text-dim)); border-radius: 4px; }
+.adl-item { text-align: left; padding: 4px 8px; background: none; border: 0; color: inherit; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.adl-item:hover { background: var(--hover, rgba(128, 128, 128, 0.2)); }
+.adl-empty { padding: 4px 8px; color: var(--text-dim); font-size: 0.9em; }

@@ -132,6 +132,7 @@ export class LibraryState extends EventTarget {
 
   select(id, how) {
     if (how === "toggle") this.selection.toggle(id);
+    else if (how === "tick") this.selection.tick(id);
     else if (how === "range") this.selection.range(this.order, id);
     else this.selection.only(id);
     this.emit("selection");

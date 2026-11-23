@@ -68,3 +68,20 @@ test("a plain click selects without ticking; the box, shift and select-all tick"
   s.fill(["x", "y"]);
   assert.equal(s.ticked, true);
 });
+
+test("a checkbox click beside a plain selection ticks that image alone", () => {
+  const s = new Selection();
+  s.only("a");
+  s.tick("c");
+  assert.deepEqual(s.list(), ["c"]);
+  assert.equal(s.ticked, true);
+});
+
+test("once something is ticked, the checkbox toggles like ctrl-click", () => {
+  const s = new Selection();
+  s.tick("a");
+  s.tick("c");
+  assert.deepEqual(s.list().sort(), ["a", "c"]);
+  s.tick("a");
+  assert.deepEqual(s.list(), ["c"]);
+});

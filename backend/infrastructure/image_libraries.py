@@ -136,7 +136,10 @@ class FsImageLibraries(ImageLibraries):
                 buffer = io.BytesIO()
                 picture.convert("RGB").save(buffer, "WEBP", quality=80)
             cached.parent.mkdir(parents=True, exist_ok=True)
-            cached.write_bytes(buffer.getvalue())
+            # Written aside and renamed: a parallel request for the same thumbnail never reads a half-written file.
+            partial = cached.with_name(f"{cached.name}.{uuid.uuid4().hex[:6]}.part")
+            partial.write_bytes(buffer.getvalue())
+            partial.replace(cached)
         return cached.read_bytes(), "image/webp"
 
     def edit_captions(self, name: str, *, ids: list[str] | None, set_name: str, query: str, channel: str, mode: str, text: str, find: str) -> int:

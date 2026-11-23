@@ -157,6 +157,8 @@ body.ds-open .page-body { flex: 1; min-height: 0; margin-top: 14px; }
 }
 .tile img { display: block; width: 100%; height: 100%; object-fit: cover; transition: filter var(--dur-fast); user-select: none; }
 .tile:hover { box-shadow: 0 0 0 2px var(--text-dim); }
+.tile.broken img { visibility: hidden; }
+.tile.broken::before { content: "not loaded"; position: absolute; inset: 0; display: grid; place-items: center; font-size: var(--fs-xs, 11px); color: var(--text-dim); border: 1px dashed var(--border, var(--text-dim)); }
 .tile.on { box-shadow: 0 0 0 3px var(--accent); }
 .tile.ticked img { filter: brightness(0.82); }
 .tile.bare::after { content: ""; position: absolute; right: 0; bottom: 0; left: 0; height: 3px; background: var(--warn); }

@@ -26,6 +26,17 @@ export class Selection {
     this.ticked = false;
   }
 
+  /** A click on an image's checkbox. Beside a plain selection (not ticked) it starts the ticked set with this image alone:
+      the quietly selected one was never ticked, so it must not join. Once something is ticked it toggles like ctrl-click. */
+  tick(id) {
+    if (!this.ticked) {
+      this.only(id);
+      this.ticked = true;
+      return;
+    }
+    this.toggle(id);
+  }
+
   toggle(id) {
     if (!this.ids.delete(id)) this.ids.add(id);
     this.anchor = id;

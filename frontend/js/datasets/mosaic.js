@@ -7,6 +7,7 @@ import { CHANNELS, datasets } from "./client.js";
 import { icon } from "./icons.js";
 import { rowsLayout } from "./layout.js";
 import { ColumnPacker, inset, readingOrder } from "./packing.js";
+import { ThumbQueue } from "./thumb_queue.js";
 
 const THUMB = 384;
 const GAP = 6;
@@ -27,11 +28,13 @@ export class Mosaic {
     this.packer = null; // the balanced layout keeps its columns while pictures are only appended
     this.cells = [];
     this.packKey = "";
+    this.queue = new ThumbQueue();
     this.grid = h("div", { class: "mosaic", role: "listbox", "aria-multiselectable": "true" });
     this.sentinel = h("div", { class: "mosaic-end" });
     this.empty = h("div", { class: "mosaic-empty", hidden: true });
     this.scroller = h("div", { class: "mosaic-scroll", tabindex: "0", "aria-label": "Images" }, this.grid, this.sentinel, this.empty);
     root.append(this.scroller);
+    this.watcher = this.makeWatcher();
 
     this.grid.addEventListener("click", (e) => this.click(e));
     this.grid.addEventListener("dblclick", (e) => { const id = this.idAt(e); if (id) this.openViewer(id); });
@@ -108,6 +111,8 @@ export class Mosaic {
     const ids = items.map((i) => i.id);
     const continues = this.shown.length > 0 && this.shown.length <= ids.length && this.shown.every((id, n) => id === ids[n]);
     if (!continues) {
+      this.watcher.disconnect();
+      this.queue = new ThumbQueue();
       this.grid.replaceChildren();
       this.tiles.clear();
       this.packer = null;
@@ -116,6 +121,7 @@ export class Mosaic {
       const tile = this.makeTile(item);
       this.tiles.set(item.id, tile);
       this.grid.append(tile);
+      this.watcher.observe(tile);
     }
     this.shown = ids;
     this.layout();
@@ -127,10 +133,43 @@ export class Mosaic {
   makeTile(item) {
     const dots = h("span", { class: "tile-dots" }, ...CHANNELS.map((c) => h("i", { "data-channel": c })));
     const tile = h("div", { class: "tile", role: "option", "data-id": item.id, draggable: true },
-      h("img", { src: datasets.imageUrl(this.state.name, item.id, THUMB), alt: "", loading: "lazy", draggable: false }),
+      h("img", { alt: "", decoding: "async", draggable: false }),
       h("button", { class: "tile-check", tabindex: "-1", title: "Select", "aria-label": "Select" }, icon("check", 14)),
       dots, h("div", { class: "tile-cap" }));
     return tile;
+  }
+
+  /* Thumbnails are fetched by this class, not by `loading="lazy"`: only tiles near the visible part are wanted, a few at a
+     time, nearest first, so scrolling a long way never leaves hundreds of requests queued for pictures already scrolled
+     past, and a request that fails is retried instead of leaving an empty card. */
+  makeWatcher() {
+    return new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const id = entry.target.dataset.id;
+        if (entry.isIntersecting) this.queue.want(id); else this.queue.unwant(id);
+      }
+      this.pump();
+    }, { root: this.scroller, rootMargin: `${AHEAD}px 0px` });
+  }
+
+  pump() {
+    const centre = this.scroller.scrollTop + this.scroller.clientHeight / 2;
+    const at = (id) => { const t = this.tiles.get(id); return t ? t.offsetTop + t.offsetHeight / 2 : Infinity; };
+    for (let id = this.queue.next(at, centre); id !== null; id = this.queue.next(at, centre)) this.fetch(id);
+  }
+
+  fetch(id) {
+    const tile = this.tiles.get(id);
+    if (!tile) { this.queue.forget(id); return; }
+    const img = tile.querySelector("img");
+    img.onload = () => { this.queue.loaded(id); tile.classList.remove("broken"); this.pump(); };
+    img.onerror = () => {
+      const wait = this.queue.failed(id);
+      if (wait === null) tile.classList.add("broken");
+      else setTimeout(() => { if (this.tiles.get(id) === tile) { this.queue.retry(id); this.pump(); } }, wait);
+      this.pump();
+    };
+    img.src = datasets.imageUrl(this.state.name, id, THUMB);
   }
 
   paint(item) {
@@ -175,7 +214,8 @@ export class Mosaic {
   click(e) {
     const id = this.idAt(e);
     if (!id) return;
-    const how = e.target.closest(".tile-check") || e.ctrlKey || e.metaKey ? "toggle" : e.shiftKey ? "range" : "only";
+    const onBox = !!e.target.closest(".tile-check");
+    const how = e.shiftKey ? "range" : e.ctrlKey || e.metaKey ? "toggle" : onBox ? "tick" : "only";
     this.state.select(id, how);
   }
 

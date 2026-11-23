@@ -6,6 +6,7 @@
    2. .help-map   -- the page map rows
    3. prose       -- steps, lists
    4. .help-entry -- troubleshooting entries
+   5. search marks and the menu's match dots
 --------------------------------------------------------------------------- */
 
 .help-search { --ctl-pad: 7px 12px; --ctl-bg: var(--surface); --ctl-radius: 999px; width: 240px; flex: none; }
@@ -43,3 +44,13 @@
     .help-map-row { grid-template-columns: minmax(0, 1fr); }
     .help-search { width: 160px; }
 }
+
+/* Search marks matches in place; what does not match fades but stays readable. */
+.help-count { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+.help-count.is-none { color: var(--danger, #ef4444); }
+.help-hit { background: rgba(250, 204, 21, 0.35); color: inherit; border-radius: 3px; padding: 0 1px; }
+.help-item { transition: opacity 0.15s; }
+.help-item.is-dim { opacity: 0.38; }
+.help-section.is-dim > .panel-head { opacity: 0.45; }
+.help-item.is-current-hit { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: var(--radius); }
+.side-nav a.has-match::after { content: ""; display: inline-block; width: 7px; height: 7px; margin-left: 8px; border-radius: 50%; background: rgba(250, 204, 21, 0.9); }

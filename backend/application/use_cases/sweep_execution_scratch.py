@@ -7,21 +7,9 @@ deleted rows, and a row is the only record that a run existed -- so deleting
 the history freed nothing on disk, and the directory grew by one run's worth
 forever.
 
-Measured here, real child and real writer:
-
-    one 4000-node execution        845,756 bytes
-      execution_1.events.jsonl     523,692  (62%)   131 bytes/node
-      execution_1.graph.json       321,817  (38%)
-      execution_1.log                  247
-    monitor reports                 126 bytes each
-      one per second              ~0.5 MB/hour, ~5 MB over a 12 h run
-
-So the review's "order of tens of MB per 12 h run" is an over-estimate by
-roughly an order of magnitude -- it labelled the figure an estimate, and the
-measured number is smaller. What makes this worth fixing is not the size of
-one run but that there is no upper bound on the *number* of them: a hundred
-runs is 85 MB, a thousand is 850 MB, and deleting the history from the UI
-appears to be tidying up while leaving all of it.
+What makes this worth doing is not the size of one run (docs/internals/backend-measurements.md)
+but that there is no upper bound on the *number* of them, and deleting the
+history from the UI appears to be tidying up while leaving all of it.
 
 **When a file is safe to delete.** The event file is read in two situations:
 by the watcher while the run is live, and by `adopt` on a server restart,
@@ -93,7 +81,7 @@ class SweepExecutionScratchResult:
     """What was removed, so a caller can say so out loud.
 
     `bytes` is here because "cleaned up some scratch" is not an
-    operational fact; "freed 840 MB" is.
+    operational fact; "freed 840 MB" is. (An example figure.)
     """
 
     runs: int = 0
@@ -158,9 +146,9 @@ class SweepExecutionScratch:
                 continue
             self._keep_charts(run_id)
             if run_id in keep_logs:
-                # Keep the log, take the rest. The event file is the 62% and
-                # the graph is the 38% of what a run leaves behind; both are
-                # read by nobody once the row is terminal.
+                # Keep the log, take the rest. The event file and the graph are
+                # most of what a run leaves behind; nobody reads either
+                # once the row is terminal.
                 log = self._paths_for(run_id).get("log")
                 files, freed = self._remove(
                     [p for p in paths if p != log]

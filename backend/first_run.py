@@ -25,8 +25,7 @@ root is worth avoiding by name as well as by test.
    are, this module does nothing at all -- it is not on the path a working
    install takes.
 2. Create a **temporary virtualenv** under the system temp directory.
-3. Install the four packages into it. They are small and pure-Python; the
-   measured cost on this machine is 7 s and 32 MB, which is why automating
+3. Install the four packages into it. They are small and pure-Python, which is why automating
    this is worth anything at all.
 4. Print the URL and try to open a browser, in that order -- the terminal
    message *is* the link, because an automatic open fails often enough (no

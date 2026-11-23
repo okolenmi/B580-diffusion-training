@@ -5,9 +5,9 @@ Launched as ``python -m backend.infrastructure.graph_task_worker
 the server, and the server imports nothing from here -- the two agree only
 on the event file's format, which is what ``graph_event_stream`` owns.
 
-Why it exists (WP-22): graph execution used to run in a thread inside the
-API server, so a device fault, an OOM kill or a driver-level reset took the
-server and the run down together, and a long node build competed with
+Why it exists: a graph run in a thread inside the
+API server would mean a device fault, an OOM kill or a driver-level reset takes the
+server and the run down together, and a long node build competes with
 everything else in the process. Out here, the worst outcome is that *this*
 process dies, and the row says so.
 
@@ -428,11 +428,8 @@ def main(argv: list[str] | None = None) -> int:
     # Signals first, before anything that can take time -- which is the
     # whole point, because a stop that arrives before this line lands on
     # Python's default handler and kills the process instead of asking it.
-    # Measured at 37 ms of imports and argument parsing before the handlers
-    # used to be installed: small enough that nobody hits it by hand, and
-    # that is the only reason it survived. `cancel` and `signal` are
-    # stdlib and already imported at module scope, so this costs nothing
-    # and needs no project code.
+    # `cancel` and `signal` are stdlib and already imported at module scope,
+    # so this costs nothing and needs no project code.
     cancel = threading.Event()
 
     def _on_stop(_signum, _frame):
@@ -440,21 +437,16 @@ def main(argv: list[str] | None = None) -> int:
         # SIGKILL after its grace period, so the only thing to do here is
         # let the runtime notice between steps.
         #
-        # SIGTERM gets the same treatment, and used to get none: nothing
-        # handled it, so the default disposition killed the child on
-        # arrival. Measured on a 60000-node graph, mid-run:
-        #
-        #   SIGINT   exit 0,  outcome record written, 200 node records
-        #   SIGTERM  exit -15, no outcome record,        86 node records
-        #
-        # A run stopped by SIGTERM is stopped *on purpose* -- `kill`,
+        # SIGTERM gets the same treatment: unhandled, the default disposition
+        # kills the child on arrival and no outcome record is written
+        # (docs/internals/backend-measurements.md). A run stopped by SIGTERM is stopped *on purpose* -- `kill`,
         # `docker stop` and systemd all send it -- and with no record the
         # supervisor falls back to "execution process exited without
         # reporting an outcome (crashed, or a device fault killed it)",
         # which is false, sends the reader to a crash that did not happen,
         # and loses the results the run had already produced.
         #
-        # Making it cooperative does mean a SIGTERM no longer kills
+        # Making it cooperative does mean a SIGTERM does not kill
         # instantly: the stop is noticed at the next step boundary, so a
         # container runtime that wanted it gone sooner still sends
         # SIGKILL, and the project's own escalation is SIGINT -> SIGKILL

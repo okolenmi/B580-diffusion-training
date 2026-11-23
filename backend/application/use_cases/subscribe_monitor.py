@@ -1,9 +1,8 @@
 """SubscribeMonitor -- open a monitor_id's telemetry stream.
 
-Presentation used to call ``services.monitor_bus.subscribe(...)``
-directly, which made the application aggregate a partially-open service
-locator: exactly the two members it claims to encapsulate were the two
-handlers used directly (docs 08 S-04). This use case is the front door.
+Presentation does not call the bus directly: that would make the
+application aggregate a partially-open service locator. This use case is
+the front door.
 
 The frames are still the bus's pre-rendered SSE strings -- that is
 ``MonitorBus``'s documented shape and a separate port-design question

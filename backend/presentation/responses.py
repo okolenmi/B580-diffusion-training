@@ -4,7 +4,7 @@
 passes through :mod:`backend.json_safe`, so a non-finite float that
 reached the database (a diverged trainer's ``loss``, docs 07 F-03)
 becomes ``null`` plus a ``nonfinite`` marker instead of
-``allow_nan=False``'s ``ValueError`` -- which used to 500 the whole page.
+``allow_nan=False``'s ``ValueError``, which would 500 the whole page.
 """
 
 from __future__ import annotations

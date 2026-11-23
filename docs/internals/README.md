@@ -7,6 +7,7 @@ How the harder parts work. Each page describes the code as it is; open questions
 | [`memory.md`](memory.md) | budget, residency, levers, the ledger, admission |
 | [`addons.md`](addons.md) | optional parts of a node, event scopes |
 | [`parallel-runs.md`](parallel-runs.md) | modes, planned runs, why weights are not shared |
+| [`backend-measurements.md`](backend-measurements.md) | the numbers behind backend constants: ledger defaults, upload streaming, scratch sizes, signal handling |
 | [`kernels.md`](kernels.md) | int8 and NF4 frozen weights and the `xpu-kernels` dependency |
 | [`capturable-attention.md`](capturable-attention.md) | attention under graph capture |
 | [`perf-lab.md`](perf-lab.md), [`acceptance-lab.md`](acceptance-lab.md) | the two measurement tools (`python -m perf`, `python -m accept`) |

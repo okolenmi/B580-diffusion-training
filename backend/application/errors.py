@@ -6,11 +6,9 @@ must be able to react to. Each carries a stable machine-readable
 ``code`` -- the API error envelope's code -- and the HTTP ``status`` the
 presentation layer answers with.
 
-The status lives *here*, beside the code it belongs to. It used to be a
-26-entry table in ``presentation/errors.py`` keyed by the code string,
-which meant adding an error took two edits and a typo in the table
-silently produced a 400 for something documented as a 404
-(docs 08 S-10). The code table in ``02-api-reference.md`` is still the
+The status lives *here*, beside the code it belongs to: a separate table
+in the presentation layer keyed by the code string would mean two edits per
+new error, and a typo in it would silently turn a documented 404 into a 400. The code table in ``02-api-reference.md`` is still the
 contract; this module is now its implementation.
 """
 

@@ -68,8 +68,8 @@ class SqliteDatabase:
         row recording it as applied commit together or not at all
         (docs 07 F-16). ``executescript`` commits any open transaction
         before it runs and does not wrap what it runs, so a migration
-        that failed halfway used to leave its earlier statements applied
-        *and* unrecorded -- the next start then died on "table already
+        that failed halfway would leave its earlier statements applied
+        *and* unrecorded -- the next start would then die on "table already
         exists". Wrapping the text in ``BEGIN``/``COMMIT`` (with the
         bookkeeping INSERT inside) is what makes "all or nothing" true
         for DDL as well as DML in SQLite.

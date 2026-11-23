@@ -392,9 +392,9 @@ class GraphExecutionSupervisor(ExecutionLauncher):
                 return
             while True:
                 # The body is guarded per iteration rather than around the
-                # whole loop. A single failed poll used to end the
-                # supervision of a run that was perfectly healthy, and the
-                # `finally` then wrote it off as a dead process while the
+                # whole loop. A single failed poll must not end the
+                # supervision of a healthy run: the
+                # `finally` would then write it off as a dead process while the
                 # child carried on: no stop, no kill, a terminal row that
                 # released the single-active check, and two trainers on one
                 # card. Most poll failures are transient -- a locked

@@ -29,7 +29,7 @@ class CachedDeviceProbe(DeviceProbe):
         8 concurrent check.execute() -> 8 probe invocations, peak 8
         3 sequential  check.execute() -> 3 probes (no cache at all)
 
-    Each of those eight initialises the accelerator runtime. On a 12 GB card
+    Each of those initialises the accelerator runtime. On a 12 GB card
     that is not merely slow, it competes for VRAM with whatever else is
     using the device -- a training run, or a game.
 

@@ -82,12 +82,10 @@ class ExecutionFinisher:
                 # wrong answer twice over: it sends the reader to the
                 # execution log for a crash that never happened.
                 #
-                # The log's tail goes INTO the row. That sentence used to
-                # end "see the execution log", and the startup sweep then
-                # deleted that log -- so the only place a user could look
-                # for the traceback of a crashed run was destroyed by the
-                # next server start, and the row said nothing more than
-                # "it died". The row is what survives; the evidence belongs
+                # The log's tail goes INTO the row, not behind a "see the
+                # execution log" pointer: the startup sweep deletes that log, so
+                # the traceback of a crashed run would not survive the next
+                # server start. The row is what survives; the evidence belongs
                 # in it.
                 execution.mark_failed(
                     at=at,

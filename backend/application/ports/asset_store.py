@@ -42,8 +42,7 @@ UPLOAD_SUFFIXES = (".safetensors",)
 #:
 #: The cap being 8 GiB is exactly why the write is streamed: buffering a
 #: body of that size, then joining the chunks, holds about twice the
-#: file in RAM. It used to (docs 08 N-02, measured at 971 ms of event-loop
-#: stall for 600 MB, and ~2x RAM).
+#: file in RAM and stalls the event loop (docs/internals/backend-measurements.md).
 
 
 @dataclass(frozen=True, slots=True)

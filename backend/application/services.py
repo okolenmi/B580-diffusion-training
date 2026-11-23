@@ -172,10 +172,9 @@ class AppServices:
 class MonitorServices:
     """Live node telemetry (the monitor page's data path, M6).
 
-    A group of its own rather than a raw port on the aggregate: the
-    endpoint used to reach for ``services.monitor_bus`` directly, which
-    left the one member of the aggregate that was *not* behind a use case
-    (docs 08 S-04).
+    A group of its own rather than a raw port on the aggregate: an endpoint
+    reaching for the bus directly would leave the one member of the
+    aggregate that is not behind a use case.
     """
 
     subscribe: SubscribeMonitor

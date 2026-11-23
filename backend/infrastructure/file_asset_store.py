@@ -22,9 +22,8 @@ interrupted upload leaves nothing behind.
 
 The write is streamed chunk by chunk (``begin_upload`` returning a
 writer) rather than handed a finished ``bytes``. At this app's 8 GiB
-cap, buffering the body and then joining the chunks held about twice the
-file in RAM and stalled the event loop for the duration (docs 08 N-02,
-measured).
+cap, buffering the body and then joining the chunks would hold about twice
+the file in RAM and stall the event loop for the duration.
 """
 
 from __future__ import annotations

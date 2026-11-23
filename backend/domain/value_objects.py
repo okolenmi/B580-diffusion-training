@@ -1,11 +1,9 @@
 """Value objects shared across the domain.
 
 Each lifecycle enum carries its own transition table, and terminal-ness
-is *derived* from that table rather than restated beside it. The two
-used to disagree by construction: adding a terminal state meant adding
-it to ``_ALLOWED`` (empty row) and to a separate ``_TERMINAL`` set, and a
-state that was terminal in one list was still allowed to move in the
-other (docs 08 S-12).
+is *derived* from that table rather than restated beside it. Two
+separate lists would disagree by construction: a state terminal in one
+could still be allowed to move in the other.
 
     RUN_TRANSITIONS[RunStatus.CREATED]  -- where a created run may go
     not RUN_TRANSITIONS[some_status]    -- is it terminal?

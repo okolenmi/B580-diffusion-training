@@ -68,14 +68,14 @@ def _comfy_or_store(project_root: Path, get_setting: GetSetting) -> Path:
     so the store has to be consulted here, and every resolver that derives
     a path from ComfyUI's layout has to come through this function to do it.
 
-    That last clause is the bug this exists to fix. `checkpoints_dir` and
-    `loras_dir` used to call `paths.get_checkpoints_dir()` directly, which
+    That last clause is why this exists. `paths.get_checkpoints_dir()`
     resolves `<comfy>/models/checkpoints` and then falls back to
     `<project_root>/checkpoints` -- a fallback that fires precisely when
     ComfyUI is unresolvable, and never consults the store. So on a fresh
     checkout, where the only ComfyUI that exists is the one the user just
-    told us about through Settings, the model directories pointed at the
-    *project root* while `comfy_dir` correctly pointed at the real thing.
+    told us about through Settings, a resolver calling it directly would
+    point the model directories at the *project root* while `comfy_dir`
+    pointed at the real thing.
 
     Measured on an isolated fresh-checkout tree (no `.env`, so nothing but
     the store to go on):

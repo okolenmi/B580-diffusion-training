@@ -8,8 +8,8 @@ preemption, no mid-run negotiation.
 
 The ledger holds no state of its own beyond the lock; on startup it is
 rebuilt from rows of adopted/running children. Capacity is
-`total_mb - foreign_reserve_mb` (the desktop and other applications; the
-measured gap was ~950 MB desktop + ~600 MB overhead on a 12,216 MB card).
+`total_mb - foreign_reserve_mb` (the desktop and other applications; see
+docs/internals/backend-measurements.md).
 
 A refusal explains itself: capacity, foreign reserve, every holder and
 its size, what is free, what was asked, and what would fit.
@@ -29,12 +29,12 @@ logger = logging.getLogger(__name__)
 #: `device_reservations.OBSERVED_PILLOW_MB`.
 OBSERVED_PILLOW_MB = 150.0
 
-#: Default foreign reserve: the desktop and other applications. Measured
-#: on the B580: ~950 MB desktop + ~600 MB overhead on a 12,216 MB card.
+#: Default foreign reserve: the desktop and other applications
+#: (docs/internals/backend-measurements.md).
 DEFAULT_FOREIGN_RESERVE_MB = 1024.0
 
 #: Default per-process overhead: the driver reading minus allocator
-#: reserved for an idle context. Measured on the B580: ~600 MB.
+#: reserved for an idle context (docs/internals/backend-measurements.md).
 DEFAULT_PROCESS_OVERHEAD_MB = 600.0
 
 
@@ -42,11 +42,10 @@ def _bad_demand_reason(demand_mb) -> str | None:
     """Why this demand cannot be claimed, or None when it can.
 
     MEM-03H-01, ledger layer -- the third of three independent checks
-    (API 422, domain ValueError, refusal here): ``nan`` used to be
-    granted, which made ``held_mb()`` and ``free_mb()`` NaN, after which
-    ``demand > NaN`` was False and *every* later claim was granted too;
-    ``-9000`` was granted as if it freed space; zero was accepted as a
-    claim. A demand is a size: a finite number, not a boolean, above
+    (API 422, domain ValueError, refusal here): ``nan`` would
+    make ``held_mb()`` and ``free_mb()`` NaN, after which ``demand > NaN``
+    is False and *every* later claim is granted; a negative demand would
+    look like it freed space; zero is not a claim. A demand is a size: a finite number, not a boolean, above
     zero. The reason always names the value (task rule 6).
     """
     if isinstance(demand_mb, bool) or not isinstance(demand_mb, (int, float)):

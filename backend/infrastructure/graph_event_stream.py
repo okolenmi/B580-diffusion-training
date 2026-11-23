@@ -16,8 +16,8 @@ Four record kinds, append-only, one JSON object per line:
 
 ``node``
     A node finished. Carries the same ``NodeResult`` the in-process path
-    used to hand to ``on_node_done``, so the supervisor's persist-and-
-    publish step is unchanged -- only its source moved.
+    hands to ``on_node_done``, so the supervisor's persist-and-
+    publish step is the same for both -- only its source differs.
 
 ``monitor``
     A live monitor report. This is the part with no in-process

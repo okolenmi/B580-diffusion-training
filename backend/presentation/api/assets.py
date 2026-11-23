@@ -104,13 +104,10 @@ async def upload_asset(
 ) -> AssetPathOut:
     """Raw-body upload: the request body *is* the file.
 
-    Streamed, never buffered (docs 08 N-02). The previous version
-    collected every chunk into a list, joined them, and wrote the result
-    on the event loop; measured on a real server, a 600 MB upload took
-    the loop from 9 ms to 971 ms of latency for concurrent requests and
-    held about 2x the file in RAM. With an 8 GiB cap that is not a
-    bounded cost, and the docstring's old claim that neither request
-    style could "buffer the server into swap" was simply false.
+    Streamed, never buffered: collecting the chunks, joining them and
+    writing on the event loop would stall every concurrent request and hold
+    about twice the file in RAM, which an 8 GiB cap makes unbounded
+    (docs/internals/backend-measurements.md).
 
     So: one chunk in memory at a time, and every write goes through
     `anyio.to_thread.run_sync`, because `write`/`fsync`/`replace` block

@@ -98,6 +98,7 @@ export class AppPage {
     this.view.setModules(this.resolution.modules);
     this.view.setContainer(this.doc.app.root, this.doc.draft);
     this.history.reset(JSON.stringify(this.doc.app.root));
+    this.toolbar.showColumns(this.doc.app.root.columns);
     this.applyResolution();
     this.setMode(this.doc.isNew ? "edit" : "use");
     this.#wireToolbar();
@@ -121,6 +122,7 @@ export class AppPage {
       onNote: (msg, kind) => log(msg, kind || "info"),
       ids: () => collectIds(this.doc.rootBlocks()),
       onSelect: (event) => this.onSelect(event),
+      drag: { allows: (id, board) => this.canDropOn(id, board), drop: (id, board, cell) => this.dropOn(id, board, cell) },
     }, { onChange: (reason) => this.onBoardChange(reason) });
     const each = (ids, fn) => { for (const id of ids) { const hit = this.view.find(id); if (hit) fn(hit, id); } };
     this.inspector = new Inspector(el("inspector"), {
@@ -151,6 +153,10 @@ export class AppPage {
     });
     this.tray.onChange(() => this.renderTray());
     document.addEventListener("keydown", (ev) => {
+      if (this.mode === "edit" && ev.key === "Delete" && !ev.target.closest("input, textarea, select, [contenteditable]")) {
+        if (this.removeSelected()) ev.preventDefault();
+        return;
+      }
       if (this.mode !== "edit" || !(ev.ctrlKey || ev.metaKey) || ev.target.closest("input, textarea, select")) return;
       const key = ev.key.toLowerCase();
       if (key === "z") { ev.preventDefault(); this.stepHistory(ev.shiftKey ? 1 : -1); }
@@ -159,6 +165,17 @@ export class AppPage {
     window.addEventListener("beforeunload", (e) => {
       if (this.doc.app && this.doc.isDirty()) { e.preventDefault(); e.returnValue = ""; }
     });
+  }
+
+  /** Remove the selected cards (the Delete key); false when none is selected. */
+  removeSelected() {
+    const ids = this.selection.sel ? this.selection.ids() : [];
+    let removed = false;
+    for (const id of ids) {
+      const hit = this.view.find(id);
+      if (hit) { hit.board.removeId(id); removed = true; }
+    }
+    return removed;
   }
 
   describePage() {
@@ -266,6 +283,31 @@ export class AppPage {
     this.selection.only(box);
     this.markSelection();
     this.renderInspector();
+  }
+
+  /** The card that holds `board` ("" for the page itself) and the tab it shows: where a card dropped there goes. */
+  placeOf(board) {
+    const { view } = board;
+    if (view === this.view) return { owner: "", tabId: view.activeId };
+    for (const b of this.view.boards()) {
+      for (const [id, entry] of b.entries) if (entry.view === view) return { owner: id, tabId: view.activeId };
+    }
+    return null;
+  }
+
+  canDropOn(id, board) {
+    const place = this.placeOf(board);
+    const here = locateCard(this.doc.app.root, id);
+    if (!place || !here || (place.owner === here.owner && place.tabId === here.tabId)) return false;
+    return moveTargets(this.doc.app.root, id).some((t) => t.owner === place.owner && t.tabId === place.tabId);
+  }
+
+  /** A card dragged out of its board and let go over another: it goes there, its corner at the cell it was dropped on. */
+  dropOn(id, board, cell) {
+    const place = this.placeOf(board);
+    if (!place) return;
+    const root = moveCard(this.doc.app.root, id, place.owner, place.tabId, cell);
+    if (root !== this.doc.app.root) this.applyRoot(root);
   }
 
   moveSelected(id, owner, tabId) {

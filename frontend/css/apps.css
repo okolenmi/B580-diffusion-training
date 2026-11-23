@@ -87,3 +87,6 @@
 .bd-edit-group { display: none; gap: 6px; }
 .app-editing .bd-edit-group { display: inline-flex; }
 #board.bd-phone { max-width: 390px; margin: 0 auto; border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 10px; }
+
+/* Phone view stays lit while it is on. */
+#btn-phone[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }

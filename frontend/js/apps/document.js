@@ -4,7 +4,7 @@
    bind to is the backend's answer (`POST /boards/resolve`), never guessed here. */
 
 import { api } from "../api.js";
-import { autoPage, containerKey, leafCards, refKey } from "../board/model.js";
+import { autoPage, containerKey, leafCards, refineContainer, refKey } from "../board/model.js";
 
 const enc = encodeURIComponent;
 
@@ -48,6 +48,7 @@ export class AppDocument {
     this.description = t.description || "";
     this.version = t.version;
     this.app = t.doc;
+    this.app.root = refineContainer(this.app.root); // a page saved on the coarse grid opens on the fine one, unchanged to the eye
     this.app.graph = snapshotGraph(this.app.graph);
     this.draft = makeDraft(this.app);
     const resolution = await this.resolve();
@@ -68,6 +69,7 @@ export class AppDocument {
     };
     this.draft = makeDraft(this.app);
     this.app.root.tabs = autoPage((await this.resolve()).modules, this.app.root.columns);
+    this.app.root = refineContainer(this.app.root);
     this.saved = null;
     return this.resolve();
   }

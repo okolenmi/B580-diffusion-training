@@ -133,7 +133,7 @@ export class ContainerView {
   _showTab() {
     this._dropBoard();
     const tab = this.container.tabs.find((t) => t.id === this.activeId);
-    this.doc = { columns: this.container.columns, blocks: tab.blocks, graph: this.graph };
+    this.doc = { columns: this.container.columns, grid: this.container.grid || 1, blocks: tab.blocks, graph: this.graph };
     this.board = new Board(this.stage, {
       ...this.shared, nested: this.nested, onChange: (reason) => this._changed(reason),
     });

@@ -23,9 +23,10 @@
 
 
 /* This file re-exports the document rules, which live in one module per concern:
-   doc.js (identity, walking, finding), card_kinds.js, tray.js, tree_edit.js, starter.js, values.js, dirty.js. */
+   doc.js (identity, walking, finding), grid.js (cell size, the fine grid), card_kinds.js, tray.js, tree_edit.js, starter.js, values.js, dirty.js. */
 
 export * from "./doc.js";
+export * from "./grid.js";
 export * from "./card_kinds.js";
 export * from "./tray.js";
 export * from "./tree_edit.js";

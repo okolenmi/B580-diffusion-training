@@ -43,11 +43,9 @@ import {
   cellDelta, columnWidth, effH, flowOrder, keyNudge, moveTo, resizeTo, resolve, setCollapsed,
 } from "./layout.js";
 import {
-  addBlock, addContainerBlock, addNodeSection, addNoteBlock, collectIds, fieldLayout, findTarget, patchBlock, removeBlock, titleFor,
+  addBlock, addContainerBlock, addNodeSection, addNoteBlock, collectIds, fieldLayout, findTarget, gridMetrics, patchBlock, removeBlock, titleFor,
 } from "./model.js";
 
-export const ROW_PX = 48;
-export const GAP_PX = 10;
 export const NARROW_PX = 640;
 
 const STATUS_TEXT = {
@@ -72,6 +70,9 @@ function button(label, title, cls = "") {
   return b;
 }
 
+/** Every board on screen: a drag asks which of them the pointer is over. */
+const LIVE = new Set();
+
 export class Board {
   /**
    * @param {HTMLElement} container
@@ -83,8 +84,10 @@ export class Board {
    * @param {() => Set<string>} [opts.ids]  every card id of the document (default: this board's own)
    * @param {(sel: {board: Board, id: string|null, view?: object}) => void} [opts.onSelect]
    * @param {boolean} [opts.nested]  sized by its parent, not by its own width
+   * @param {{allows: (id: string, board: Board) => boolean, drop: (id: string, board: Board, cell: {x: number, y: number}) => void}} [opts.drag]
+   *        a card dragged out of its board onto another (into a box, or out of one): may it go there, and put it there
    */
-  constructor(container, { live, ctx = {}, onChange = () => {}, onNote = () => {}, ids = null, onSelect = null, nested = false }) {
+  constructor(container, { live, ctx = {}, onChange = () => {}, onNote = () => {}, ids = null, onSelect = null, nested = false, drag = null }) {
     this.container = container;
     this.live = live;
     this.ctx = ctx;
@@ -93,6 +96,7 @@ export class Board {
     this.ids = ids || (() => collectIds(this.doc ? this.doc.blocks : []));
     this.onSelect = onSelect;
     this.nested = nested;
+    this.drag = drag;
     this.alive = true;
     this.doc = null;
     this.modules = null;
@@ -104,6 +108,7 @@ export class Board {
     this._raf = 0;
 
     this.root = h("div", nested ? "bd-grid is-nested" : "bd-grid");
+    LIVE.add(this);
     this.empty = h("div", "bd-grid-empty");
     container.append(this.root, this.empty);
 
@@ -128,6 +133,7 @@ export class Board {
 
   destroy() {
     this.alive = false;
+    LIVE.delete(this);
     clearInterval(this._tick);
     cancelAnimationFrame(this._raf);
     if (this._ro) this._ro.disconnect();
@@ -220,7 +226,7 @@ export class Board {
 
   /* ---- document operations the page calls ------------------------------ */
 
-  addRef(ref) { return this._commit(addBlock(this.doc, ref, this.modules, this.ids())); }
+  addRef(ref) { return this._commit(addBlock(this.doc, ref, this.modules, this.ids(), this.nested)); }
 
   /** A free-text note, or (`look: "heading"`) a one-line heading that stands without a frame. */
   addNote(look = "text") { return this._commit(addNoteBlock(this.doc, this.ids(), look)); }
@@ -316,12 +322,14 @@ export class Board {
     const collapse = button("▾", "Collapse / expand");
     const rename = button("✎", "Rename this block", "bd-edit-only");
     const remove = button("✕", "Remove this block from the page", "bd-edit-only");
+    // A one-line card has no header to hold the tools: this corner button stands in for it.
+    const floating = button("✕", "Remove this card (or press Delete)", "bd-float-remove");
     tools.append(collapse, rename, remove);
     head.append(grip, titles, badge, tools);
     const body = h("div", "bd-body");
     const resizer = h("div", "bd-resize");
     resizer.title = "Drag to resize";
-    el.append(head, body, resizer);
+    el.append(head, body, resizer, floating);
 
     const entry = {
       el, head, title, sub, badge, body, block, contentKey: null,
@@ -330,6 +338,7 @@ export class Board {
 
     collapse.addEventListener("click", () => this._toggleCollapse(entry.block.id));
     remove.addEventListener("click", () => this.removeId(entry.block.id));
+    floating.addEventListener("click", () => this.removeId(entry.block.id));
     rename.addEventListener("click", () => this._startRename(entry));
     title.addEventListener("dblclick", () => { if (this.mode === "edit") this._startRename(entry); });
     head.addEventListener("pointerdown", (ev) => this._startDrag(ev, entry, "move"));
@@ -474,7 +483,7 @@ export class Board {
 
   _buildSection(entry) {
     const view = new ContainerView(entry.body, {
-      live: this.live, ctx: this.ctx, onNote: this.onNote, ids: this.ids, onSelect: this.onSelect,
+      live: this.live, ctx: this.ctx, onNote: this.onNote, ids: this.ids, onSelect: this.onSelect, drag: this.drag,
     }, { nested: true, onChange: (reason) => this.onChange(reason) });
     view.modules = this.modules;
     view.statuses = this.statuses;
@@ -534,8 +543,9 @@ export class Board {
     if (!this.doc) return;
     const cols = this.narrow ? 1 : this.doc.columns;
     this.root.style.setProperty("--bd-cols", String(cols));
-    this.root.style.setProperty("--bd-row", `${ROW_PX}px`);
-    this.root.style.setProperty("--bd-gap", `${GAP_PX}px`);
+    const { rowPx, gapPx } = this.metrics();
+    this.root.style.setProperty("--bd-row", `${rowPx}px`);
+    this.root.style.setProperty("--bd-gap", `${gapPx}px`);
     this.root.classList.toggle("bd-narrow", this.narrow);
     const order = new Map(flowOrder(this.doc.blocks).map((b, i) => [b.id, i]));
     for (const b of this.doc.blocks) {
@@ -556,6 +566,8 @@ export class Board {
       if (e.view) e.view.setNarrow(this.narrow);
     }
   }
+
+  metrics() { return gridMetrics(this.doc && this.doc.grid); }
 
   _updateEmpty() {
     const none = !this.doc || this.doc.blocks.length === 0;
@@ -612,6 +624,33 @@ export class Board {
 
   /* ---- drag / resize / keyboard (edit mode) ----------------------------- */
 
+  /** Where every other board is, measured before the card starts to move: a board that reflows around the dragged card must not move
+      its own target away from the pointer. Returns the innermost board at a point, or null. */
+  _boardFinder(entry) {
+    const spots = [...LIVE].filter((b) => b.alive && !entry.el.contains(b.container)).map((b) => ({ b, r: b.container.getBoundingClientRect() }))
+      .filter(({ r }) => r.width > 0 && r.height > 0);
+    return (x, y) => {
+      let best = null;
+      for (const spot of spots) {
+        const { r } = spot;
+        if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
+        if (!best || r.width * r.height < best.r.width * best.r.height) best = spot;
+      }
+      return best && best.b;
+    };
+  }
+
+  /** The cell of `board` that a dragged card's top-left corner is over, the pointer having taken the card `grab` px from its corner. */
+  _cellIn(board, ev, grab) {
+    const rect = board.root.getBoundingClientRect();
+    const { rowPx, gapPx } = board.metrics();
+    const colW = columnWidth(rect.width, board.doc.columns, gapPx);
+    return {
+      x: Math.round((ev.clientX - grab.x - rect.left) / (colW + gapPx)),
+      y: Math.round((ev.clientY - grab.y - rect.top + board.root.scrollTop) / (rowPx + gapPx)),
+    };
+  }
+
   _startDrag(ev, entry, what) {
     if (this.mode !== "edit" || this.narrow || ev.button !== 0) return;
     if (ev.target.closest(".bd-tool, .bd-rename")) return;
@@ -619,31 +658,48 @@ export class Board {
     const id = entry.block.id;
     const original = this.doc.blocks.map((b) => ({ ...b }));
     const start = original.find((b) => b.id === id);
-    const width = this.root.clientWidth;
-    const colW = columnWidth(width, this.doc.columns, GAP_PX);
+    const { rowPx, gapPx } = this.metrics();
+    const colW = columnWidth(this.root.clientWidth, this.doc.columns, gapPx);
     const x0 = ev.clientX, y0 = ev.clientY;
+    const corner = entry.el.getBoundingClientRect();
+    const grab = { x: x0 - corner.left, y: y0 - corner.top };
     const target = ev.currentTarget;
     target.setPointerCapture(ev.pointerId);
     entry.el.classList.add("is-dragging");
+    const boardAt = what === "move" && this.drag ? this._boardFinder(entry) : null;
+    let over = null; // another board the card is held over, when it may go there
 
+    const hover = (board) => {
+      if (over) over.container.classList.remove("bd-drop");
+      over = board;
+      if (over) over.container.classList.add("bd-drop");
+    };
     const move = (e2) => {
-      const d = cellDelta(e2.clientX - x0, e2.clientY - y0, colW, ROW_PX, GAP_PX);
+      if (boardAt) {
+        const other = boardAt(e2.clientX, e2.clientY);
+        hover(other && other !== this && this.drag.allows(id, other) ? other : null);
+        if (over) { this.doc.blocks = original; this.applyLayout(); return; }
+      }
+      const d = cellDelta(e2.clientX - x0, e2.clientY - y0, colW, rowPx, gapPx);
       this.doc.blocks = what === "move"
         ? moveTo(original, id, start.x + d.dCols, start.y + d.dRows, this.doc.columns)
         : resizeTo(original, id, start.w + d.dCols, start.h + d.dRows, this.doc.columns);
       this.applyLayout();
     };
-    const finish = (commit) => {
+    const finish = (commit, e2) => {
       target.removeEventListener("pointermove", move);
       target.removeEventListener("pointerup", up);
       target.removeEventListener("pointercancel", cancel);
       document.removeEventListener("keydown", esc, true);
       entry.el.classList.remove("is-dragging");
+      const board = over;
+      hover(null);
+      if (commit && board) { this.drag.drop(id, board, this._cellIn(board, e2, grab)); return; }
       if (!commit) { this.doc.blocks = original; this.applyLayout(); return; }
       const moved = JSON.stringify(original) !== JSON.stringify(this.doc.blocks);
       if (moved) this.onChange("layout");
     };
-    const up = () => finish(true);
+    const up = (e2) => finish(true, e2);
     const cancel = () => finish(false);
     const esc = (e3) => { if (e3.key === "Escape") { e3.stopPropagation(); finish(false); } };
     target.addEventListener("pointermove", move);

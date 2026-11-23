@@ -3,14 +3,15 @@
 import { collectIds, depthOf, leafCards, newBlockId, nodeRef, noteRef, refKey, walkCards } from "./doc.js";
 import { addAt, resolve } from "./layout.js";
 import { defaultSize } from "./card_kinds.js";
+import { FINE, refineContainer } from "./grid.js";
 
 /** The document with a new block for `ref` at the first free slot
     (a no-op, returning the same doc, when the ref is already placed). */
-export function addBlock(doc, ref, modules, used = null) {
+export function addBlock(doc, ref, modules, used = null, nested = false) {
   const key = refKey(ref);
   const taken = used || collectIds(doc.blocks);
   if ([...leafCards(doc.blocks)].some((b) => refKey(b.ref) === key)) return doc;
-  const [w, h] = defaultSize(ref, modules, doc.columns);
+  const [w, h] = defaultSize(ref, modules, doc.columns, nested, doc.grid || 1);
   const block = {
     id: newBlockId(doc.blocks, taken), ref, x: 0, y: 0, w, h,
     collapsed: false, title: null, options: {},
@@ -24,9 +25,10 @@ export function addNoteBlock(doc, used = null, look = "text") {
   let n = 1;
   while (names.has(`note${n}`)) n++;
   const heading = look === "heading";
+  const grid = doc.grid || 1;
   const block = {
     id: newBlockId(doc.blocks, used), ref: noteRef(`note${n}`), x: 0, y: 0,
-    w: heading ? doc.columns : Math.min(6, doc.columns), h: heading ? 1 : 2,
+    w: heading ? doc.columns : Math.min(6 * grid, doc.columns), h: (heading ? 1 : 2) * grid,
     collapsed: false, title: null, style: heading ? "bare" : undefined, options: { text: "", look },
   };
   return { ...doc, blocks: addAt(doc.blocks, block, doc.columns) };
@@ -41,12 +43,15 @@ export function removeBlock(doc, id) {
 export const MAX_TABS = 12;
 export const MAX_DEPTH = 3;
 
-/** A new section card: a titled box with one empty tab. `blocks` (already laid out for `columns`) fill that tab. */
-export function addContainerBlock(doc, used = null, { title = null, tabTitle = "Tab 1", blocks = [], columns = 12, w = null, h = 4 } = {}) {
+/** A new section card: a titled box with one empty tab. `blocks` (already laid out for `columns`, both in coarse units) fill that tab;
+    `w` and `h` are the card's own size in the units of `doc`. */
+export function addContainerBlock(doc, used = null, { title = null, tabTitle = "Tab 1", blocks = [], columns = 12, w = null, h = null } = {}) {
   const taken = used || collectIds(doc.blocks);
+  const grid = doc.grid || 1;
+  const inner = { columns, tabs: [{ id: "t1", title: tabTitle, blocks }] };
   const block = {
-    id: newBlockId(doc.blocks, taken), container: { columns, tabs: [{ id: "t1", title: tabTitle, blocks }] },
-    x: 0, y: 0, w: Math.min(w || doc.columns, doc.columns), h,
+    id: newBlockId(doc.blocks, taken), container: grid === FINE ? refineContainer(inner) : inner,
+    x: 0, y: 0, w: Math.min(w || doc.columns, doc.columns), h: h || 4 * grid,
     collapsed: false, title, style: "outlined", options: {},
   };
   return { ...doc, blocks: addAt(doc.blocks, block, doc.columns) };
@@ -75,7 +80,7 @@ export function addNodeSection(doc, nodeId, modules, used = null) {
   if (!inner.length) return doc;
   const laid = resolve(inner, columns);
   const rows = Math.max(...laid.map((b) => b.y + b.h));
-  return addContainerBlock(doc, taken, { title: node.display_name, tabTitle: "Settings", blocks: laid, columns, w: Math.min(6, doc.columns), h: rows + 2 });
+  return addContainerBlock(doc, taken, { title: node.display_name, tabTitle: "Settings", blocks: laid, columns, w: Math.min(6 * (doc.grid || 1), doc.columns), h: (rows + 2) * (doc.grid || 1) });
 }
 
 /** The container with every tab re-laid for `columns`: cards narrowed to fit and pushed apart where they now collide. */
@@ -149,9 +154,9 @@ export function locateCard(root, id) {
   return visit(root, "");
 }
 
-/** The root with card `id` taken out of wherever it is and placed in tab `tabId` of container `owner` ("" = the page). A new tree;
-    the root itself when the move is not allowed. */
-export function moveCard(root, id, owner, tabId) {
+/** The root with card `id` taken out of wherever it is and placed in tab `tabId` of container `owner` ("" = the page): at the first free
+    slot, or with its corner at the cell `at` ({x, y}) when given. A new tree; the root itself when the move is not allowed. */
+export function moveCard(root, id, owner, tabId, at = null) {
   if (!moveTargets(root, id).some((t) => t.owner === owner && t.tabId === tabId)) return root;
   const tree = JSON.parse(JSON.stringify(root));
   let moving = null;
@@ -181,7 +186,12 @@ export function moveCard(root, id, owner, tabId) {
   const tab = dest && dest.tabs.find((t) => t.id === tabId);
   if (!tab) return root;
   const w = Math.min(moving.w, dest.columns);
-  tab.blocks = addAt(tab.blocks, { ...moving, x: 0, y: 0, w }, dest.columns);
+  if (at) {
+    const x = Math.max(0, Math.min(Math.round(at.x), dest.columns - w));
+    tab.blocks = resolve([...tab.blocks, { ...moving, x, y: Math.max(0, Math.round(at.y)), w }], dest.columns, id);
+  } else {
+    tab.blocks = addAt(tab.blocks, { ...moving, x: 0, y: 0, w }, dest.columns);
+  }
   return tree;
 }
 
@@ -216,11 +226,12 @@ export function groupCards(root, ids) {
   const top = Math.min(...picked.map((b) => b.y));
   const right = Math.max(...picked.map((b) => b.x + b.w));
   const bottom = Math.max(...picked.map((b) => b.y + b.h));
-  const columns = Math.min(Math.max(right - left, 3), dest.container.columns);
+  const grid = dest.container.grid || 1;
+  const columns = Math.min(Math.max(right - left, 3 * grid), dest.container.columns);
   const box = {
     id: newBlockId(null, collectIds(tree.tabs.flatMap((t) => t.blocks))),
-    container: { columns, tabs: [{ id: "t1", title: "Tab 1", blocks: picked.map((b) => ({ ...b, x: b.x - left, y: b.y - top })) }] },
-    x: Math.min(left, dest.container.columns - columns), y: top, w: columns, h: bottom - top + 2,
+    container: { columns, ...(grid > 1 ? { grid } : {}), tabs: [{ id: "t1", title: "Tab 1", blocks: picked.map((b) => ({ ...b, x: b.x - left, y: b.y - top })) }] },
+    x: Math.min(left, dest.container.columns - columns), y: top, w: columns, h: bottom - top + 2 * grid,
     collapsed: false, title: null, style: "outlined", options: {},
   };
   tab.blocks = resolve([...tab.blocks.filter((b) => !wanted.has(b.id)), box], dest.container.columns);

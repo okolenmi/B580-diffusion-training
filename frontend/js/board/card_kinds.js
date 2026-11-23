@@ -24,8 +24,9 @@ export function fieldLayout(block, descriptor, nested = false) {
   return nested ? "inline" : "stacked";
 }
 
-/** Suggested [w, h] for a new block, in grid units, clamped to `columns`. */
-export function defaultSize(ref, modules, columns, nested = false) {
+/** Suggested [w, h] for a new block, in grid units, clamped to `columns`. The sizes below are written for the coarse grid (12 page
+    columns, 6 inside a box); on the fine grid (`grid` 2) they are scaled to the container's columns and rows. */
+export function defaultSize(ref, modules, columns, nested = false, grid = 1) {
   const { descriptor } = findTarget(ref, modules);
   let w = 4, h = 2;
   if (ref.kind === "display") {
@@ -37,6 +38,10 @@ export function defaultSize(ref, modules, columns, nested = false) {
     if (nested && fieldLayout({ ref }, descriptor, true) === "inline") h = 1; // a form row
     else if (isMultiline(descriptor)) h = Math.max(2, Math.ceil(((descriptor.ui && descriptor.ui.rows) || 3) * 0.45) + 1); // text lines are shorter than grid rows
   }
-  if (columns < 8) w = columns;
+  if (grid > 1) {
+    w = Math.round(w * columns / (nested ? 6 : 12));
+    h *= grid;
+  }
+  if (columns < 8 * grid) w = columns;
   return [Math.max(1, Math.min(w, columns)), Math.max(1, h)];
 }

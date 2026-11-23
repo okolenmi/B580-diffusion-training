@@ -1,5 +1,17 @@
 # Tests in `tests`
 
+## Where tests live
+
+Three systems, split by what they can see; `python run_tests.py` runs all of them.
+
+| place | style | covers |
+|---|---|---|
+| `tests/check_*.py` (this folder) | plain scripts, own `check` harness, `python -m tests.<name>` | the trainer: `graph`, `engine`, `families`, `nodes`, labs. Must not import `backend` (the layer check enforces it) |
+| `backend/tests/test_*.py` | plain scripts, `backend.tests.support` helpers, run directly or by `backend/tests/run_all.py` | the server: use cases, API, persistence, wiring. The `sys.path` line at the top of each file is what makes it runnable directly |
+| `frontend/tests/*.test.mjs` | `node --test` | the pure parts of the page code (board model, selection, chart maths); DOM is stubbed |
+
+A check that needs both the trainer and the server belongs in `backend/tests`, because that is the side allowed to import both.
+
 Plain scripts (`python -m tests.<name>`), grouped by what they protect. Each file's docstring states its purpose. Run only the group that matches what changed; nothing here needs a GPU. `python -m tests.run_all [name-part]` runs every `check_*` script (or the ones matching) in its own process and prints one line each; the whole set takes about five minutes, `check_resume` and `check_accept` being the slowest.
 
 | group | files | protects |
@@ -12,7 +24,7 @@ Plain scripts (`python -m tests.<name>`), grouped by what they protect. Each fil
 | acceptance lab | `check_accept` | regions, block recorder, quantization probe (a planted fault is found in its block), artifact parsing, every check passing and failing, suites and verdicts, the runner with a fake command, visual aids |
 | node surface | `check_node_surface` | field groups: nodes with many fields group them all, small groups, few fields visible before opening anything |
 | regions and lab | `check_regions`, `check_lab` | timesteps per image (draws, copies, policies, ladder, streaming, calibration, self-perceptual loss); the experiment lab (samplers, grid, templates, reports) |
-| generation | `check_generate` | the flow sampling scheme (shifted positions, exact recovery, refusals), the `anima-image` starter, the `sdxl-image` starter graph (prompt to saved PNG) on tiny stand-ins: adapter list syntax, seeds and the recipe inside each file, an image alone equals the same image in a batch, stopping, size refusal |
+| generation | `check_generate` | the flow sampling scheme (shifted positions, exact recovery, refusals), the `sdxl-image` starter graph (prompt to saved PNG) on tiny stand-ins: adapter list syntax, seeds and the recipe inside each file, an image alone equals the same image in a batch, stopping, size refusal |
 | restart | `check_resume` | a run cut and continued in a new process against one never cut (`check_lab` covers the lab's own stop at a cut), for the lab's recipes: adapters and losses must be identical |
 | whole pipeline | `check_pipeline`, `check_anima_pipeline` | the `sdxl-lora` and `anima-lora` starter graphs (dataset to saved adapter) through the graph runner on tiny stand-ins (`pipeline_nodes.py`): ports, event order, stopping, files that come out |
 | Anima | `check_anima` | key layout against the real files' headers, DiT, adapter, Qwen3, tokenizers, Wan VAE for images, flow schedule and objective, adapter keys; `reference/equivalence_*` compare against ComfyUI/Hugging Face code when it is present |

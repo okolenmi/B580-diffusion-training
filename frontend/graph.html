@@ -19,7 +19,7 @@
         </div>
         <input id="palette-search" class="cfg-input ed-search" type="search" placeholder="Search nodes&hellip;">
         <div id="palette" class="ed-scroll"><div class="console-line info">Loading catalog&hellip;</div></div>
-        <div class="ed-section">
+        <div class="ed-section" id="library-section">
             <div class="ed-section-head"><span>Library</span></div>
             <div class="ed-save-row">
                 <input id="lib-name" class="cfg-input" type="text" placeholder="graph name" maxlength="120">
@@ -31,6 +31,8 @@
                 <input id="file-input" type="file" accept=".json,application/json" hidden>
             </div>
             <div id="lib-list" class="ed-list"><div class="console-line info">Loading&hellip;</div></div>
+            <div class="ed-section-head"><span>Graphs of apps</span></div>
+            <div id="app-links" class="ed-list"><div class="console-line info">Loading&hellip;</div></div>
         </div>
     </aside>
 
@@ -62,6 +64,11 @@
             <span id="instance-title"></span>
             <button id="instance-copy" class="btn btn-small" title="Make this graph the editable canvas">Copy to editor</button>
             <button id="instance-back" class="btn btn-secondary btn-small" title="Return to your own graph">Back to editor</button>
+        </div>
+        <div id="app-bar" class="inst-bar" hidden>
+            <span id="app-bar-title"></span>
+            <button id="app-save" class="btn btn-small" title="Write this graph into the app (Ctrl+S)">Save</button>
+            <a id="app-back" class="btn btn-secondary btn-small" href="/apps" title="Back to the app's page">Back to the app</a>
         </div>
         <div id="g2-canvas" class="ed-canvas g2-canvas"></div>
         <details class="ed-section ed-monitor" id="monitor-section">

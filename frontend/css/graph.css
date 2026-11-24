@@ -179,7 +179,9 @@ g.selected > .g2-edge, .g2-edge.selected { stroke: var(--accent); stroke-width: 
 
 /* ---- instance: a frozen run's graph ---- */
 .inst-bar { display: flex; align-items: center; gap: 0.6rem; padding: 0.35rem 0.75rem; background: color-mix(in srgb, var(--accent) 14%, var(--surface-alt)); border-bottom: 1px solid var(--accent); font-size: 0.8rem; }
-.inst-bar #instance-title { flex: 1; }
+.inst-bar :is(#instance-title, #app-bar-title) { flex: 1; }
+#app-save.is-dirty { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
+body.is-app-edit #library-section { display: none; }
 body.is-instance :is(.g2-canvas, #graph-settings, #inspector) :is(input, select, textarea, button) { pointer-events: none; opacity: 0.8; }
 body.is-instance .ed-palette .ed-scroll { opacity: 0.5; pointer-events: none; }
 
@@ -203,3 +205,20 @@ body.mode-watch .ed-executions[open] .ed-list { max-height: none; }
 .ed-toolbar { flex-wrap: wrap; }
 .ed-toolbar .btn, .ed-toolbar .seg-btn { white-space: nowrap; }
 .ed-toolbar #run-mode { width: auto; }
+
+/* ---- the picture a node made, on the node ---- */
+.g2-preview { padding: 6px 8px; border-top: 1px solid var(--border); }
+.g2-preview .bd-images { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+.g2-preview .bd-images.is-single { grid-template-columns: 1fr; }
+.g2-preview .bd-image img { max-height: 420px; object-fit: contain; }
+.g2-preview .bd-empty { font-size: 11px; opacity: .6; padding: 8px 0; text-align: center; }
+/* a card that was made taller than it is: the picture takes the room */
+.g2-node.stretched .g2-preview { flex: 1 1 auto; min-height: 0; display: flex; }
+.g2-node.stretched .g2-preview .bd-images { flex: 1; min-height: 0; display: flex; }
+.g2-node.stretched .g2-preview .bd-image { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
+.g2-node.stretched .g2-preview .bd-image img { flex: 1; min-height: 0; height: 0; max-height: none; }
+.g2-grip { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; touch-action: none;
+           background: linear-gradient(135deg, transparent 50%, var(--text-dim) 50%, var(--text-dim) 58%, transparent 58%, transparent 72%, var(--text-dim) 72%, var(--text-dim) 80%, transparent 80%);
+           opacity: .55; border-bottom-right-radius: var(--radius); }
+.g2-node:hover .g2-grip, .g2-node.selected .g2-grip { opacity: 1; }
+body.is-instance .g2-grip { display: none; }

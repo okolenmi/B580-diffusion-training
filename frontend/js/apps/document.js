@@ -4,18 +4,20 @@
    bind to is the backend's answer (`POST /boards/resolve`), never guessed here. */
 
 import { api } from "../api.js";
+import { GRAPH_FORMAT } from "../graph/doc.js";
 import { autoPage, containerKey, leafCards, refineContainer, refKey } from "../board/model.js";
 
 const enc = encodeURIComponent;
 
-/** The graph as an app stores it: what a run reads, without the editor's layout and views. */
-export function snapshotGraph(graph) {
+/** The graph an app owns: a private copy, layout and views included, so the graph editor opens it as the author left it. */
+export function ownGraph(graph) {
   const copy = structuredClone(graph);
-  delete copy.views;
-  for (const node of copy.nodes || []) { delete node.layout; node.params = node.params || {}; }
+  for (const node of copy.nodes || []) node.params = node.params || {};
   copy.settings = copy.settings || {};
   return copy;
 }
+
+const emptyGraph = () => ({ format: GRAPH_FORMAT, nodes: [], edges: [], event_edges: [], settings: {}, views: [] });
 
 /** The "draft graph" the cards edit: a stand-in whose parameter objects *are* the snapshot's, so a field card writes
     straight into what gets saved and run. */
@@ -41,7 +43,8 @@ export class AppDocument {
     this.saved = null;   // {layout, graph, exposed} as last saved; null = never
   }
 
-  /** Load an existing app, or start a new one from a library graph (`?new=1&graph=...`). Returns the first resolution. */
+  /** Load an existing app, or start a new one (`?new=1`, with `&graph=<name>` to begin with a copy of a library graph, empty
+      otherwise). Returns the first resolution. */
   async load(query) {
     if (query.get("new")) return this.#startNew(query.get("graph") || "");
     const t = await api(`/apps/${enc(this.name)}`);
@@ -49,7 +52,7 @@ export class AppDocument {
     this.version = t.version;
     this.app = t.doc;
     this.app.root = refineContainer(this.app.root); // a page saved on the coarse grid opens on the fine one, unchanged to the eye
-    this.app.graph = snapshotGraph(this.app.graph);
+    this.app.graph = ownGraph(this.app.graph);
     this.draft = makeDraft(this.app);
     const resolution = await this.resolve();
     this.markSaved();
@@ -59,20 +62,22 @@ export class AppDocument {
   async #startNew(graphName) {
     const taken = (await api("/apps")).apps || [];
     if (taken.some((t) => t.name === this.name)) throw new Error(`an app called "${this.name}" already exists`);
-    const lib = await api(`/graphs/library/${enc(graphName)}`);
+    const lib = graphName ? await api(`/graphs/library/${enc(graphName)}`) : null;
     this.isNew = true;
-    this.description = `Built on the graph "${graphName}".`;
+    this.description = lib ? `Started as a copy of the graph "${graphName}".` : "";
     this.app = {
-      format: 1, source_graph: graphName, style: { accent: "blue", density: "comfortable" },
-      graph: snapshotGraph(lib.graph),
+      format: 1, source_graph: lib ? graphName : null, style: { accent: "blue", density: "comfortable" },
+      graph: lib ? ownGraph(lib.graph) : emptyGraph(),
       root: { columns: 12, tabs: [{ id: "main", title: "Main", blocks: [] }] },
     };
     this.draft = makeDraft(this.app);
-    this.app.root.tabs = autoPage((await this.resolve()).modules, this.app.root.columns);
+    if (lib) this.app.root.tabs = autoPage((await this.resolve()).modules, this.app.root.columns);
     this.app.root = refineContainer(this.app.root);
     this.saved = null;
     return this.resolve();
   }
+
+  get hasNodes() { return this.app.graph.nodes.length > 0; }
 
   /** Every card of the page, at any depth (the page edits `app.root` in place, so this is always current). */
   rootBlocks() { return this.app.root.tabs.flatMap((t) => t.blocks); }
@@ -109,18 +114,5 @@ export class AppDocument {
   async remove() {
     if (!this.isNew) await api(`/apps/${enc(this.name)}`, { method: "DELETE" });
     this.markSaved(); // nothing left to lose: no unload prompt
-  }
-
-  /** The source graph's current state, and what taking it would change. */
-  async compareWithSource() {
-    const lib = await api(`/graphs/library/${enc(this.app.source_graph)}`);
-    const next = snapshotGraph(lib.graph);
-    const diff = await api(`/apps/${enc(this.name)}/diff`, { method: "POST", body: { graph: next } });
-    return { next, diff };
-  }
-
-  adoptGraph(next) {
-    this.app.graph = next;
-    this.draft = makeDraft(this.app);
   }
 }

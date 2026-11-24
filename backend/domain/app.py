@@ -97,18 +97,3 @@ def graph_hash(graph: dict) -> str:
         ({key: node.get(key) for key in _NODE_KEYS} for node in graph.get("nodes", [])), key=lambda n: n["uid"])
     canonical = {"nodes": nodes, **{key: graph.get(key) for key in _GRAPH_KEYS}}
     return hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf8")).hexdigest()
-
-
-def diff_graphs(old: dict, new: dict) -> dict:
-    """What publishing ``new`` over ``old`` would change, by node uid, for the "update from graph" review."""
-    before = {node["uid"]: node for node in old.get("nodes", [])}
-    after = {node["uid"]: node for node in new.get("nodes", [])}
-    shared = before.keys() & after.keys()
-    return {
-        "added": sorted(after.keys() - before.keys()),
-        "removed": sorted(before.keys() - after.keys()),
-        "changed": sorted(uid for uid in shared if {k: before[uid].get(k) for k in _NODE_KEYS}
-                          != {k: after[uid].get(k) for k in _NODE_KEYS}),
-        "wiring_changed": any(old.get(key) != new.get(key) for key in ("edges", "event_edges")),
-        "settings_changed": old.get("settings") != new.get("settings"),
-    }

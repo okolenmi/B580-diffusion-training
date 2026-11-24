@@ -14,7 +14,7 @@ import torch
 from torch import Tensor
 
 from .recipe import Recipe
-from .sampling import SAMPLERS, Euler, GuidedDenoiser, Network, NoiseTable, SigmaSchedule, initial_noise
+from .sampling import SAMPLERS, Euler, GuidedDenoiser, Network, NoiseTable, Observed, Peek, SigmaSchedule, initial_noise
 
 ShapeOf = Callable[[Recipe], tuple[int, ...]]  # the latent shape (1, C, h, w) of one recipe's image
 
@@ -26,8 +26,10 @@ class GenerationScheme(Protocol):
     def check(self, recipe: Recipe) -> None:
         """Raise ``ValueError`` for a setting this model cannot sample with, before anything is loaded."""
 
-    def sample(self, recipes: tuple[Recipe, ...], shape: ShapeOf, network: Network, cfg: float, device: str) -> Tensor:
-        """Latents (one per recipe) on the host. The first recipe's steps, sampler and scheduler apply to all."""
+    def sample(self, recipes: tuple[Recipe, ...], shape: ShapeOf, network: Network, cfg: float, device: str,
+               peek: Peek | None = None) -> Tensor:
+        """Latents (one per recipe) on the host. The first recipe's steps, sampler and scheduler apply to all. ``peek(index, estimate)``
+        sees the estimate of the clean latents after every network evaluation of the sampler (on the device, not to be kept)."""
 
 
 class EpsScheme:
@@ -37,11 +39,12 @@ class EpsScheme:
     def check(self, recipe: Recipe) -> None:
         return
 
-    def sample(self, recipes, shape, network, cfg, device):
+    def sample(self, recipes, shape, network, cfg, device, peek=None):
         first, table = recipes[0], NoiseTable()
         sigmas = SigmaSchedule(first.scheduler, table).sigmas(first.steps)
         noise = torch.cat([initial_noise(r.seed, shape(r), float(sigmas[0]), table) for r in recipes]).to(device)
-        return SAMPLERS[first.sampler]().run(GuidedDenoiser(network, table, cfg, first.eps_scale), noise, sigmas).cpu()
+        denoise = GuidedDenoiser(network, table, cfg, first.eps_scale)
+        return SAMPLERS[first.sampler]().run(Observed(denoise, peek) if peek else denoise, noise, sigmas).cpu()
 
 
 class FlowGuidedDenoiser:
@@ -85,10 +88,11 @@ class FlowScheme:
         u = torch.linspace(1.0, 0.0, steps + 1, dtype=torch.float64)
         return (self.shift * u / (1.0 + (self.shift - 1.0) * u)).float()
 
-    def sample(self, recipes, shape, network, cfg, device):
+    def sample(self, recipes, shape, network, cfg, device, peek=None):
         sigmas = self.sigmas(recipes[0].steps)
         noise = torch.cat([torch.randn(shape(r), generator=torch.Generator().manual_seed(r.seed), dtype=torch.float32) for r in recipes]).to(device)
-        return Euler().run(FlowGuidedDenoiser(network, cfg), noise, sigmas).cpu()
+        denoise = FlowGuidedDenoiser(network, cfg)
+        return Euler().run(Observed(denoise, peek) if peek else denoise, noise, sigmas).cpu()
 
 
 def scheme_for(family) -> GenerationScheme:

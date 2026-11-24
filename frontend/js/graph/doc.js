@@ -46,10 +46,10 @@ export function endpointHost(endpoint) {
 
 /** Every method that changes the document's content; `readOnly` turns them into no-ops (a frozen run's graph).
  *  `load` is not among them (it is how a frozen graph gets in) and neither is `setGroupOpen` (looking, not editing). */
-const EDITS = ["clear", "addNode", "removeNode", "moveNode", "setTitle", "setLayout", "setParam", "connect", "disconnect", "reorderInto",
+const EDITS = ["clear", "addNode", "removeNode", "moveNode", "resizeNode", "setTitle", "setLayout", "setParam", "connect", "disconnect", "reorderInto",
   "connectEvent", "disconnectEvent", "addAddon", "setAddon", "setAddonParam", "removeAddon", "setSetting", "setViews", "paste"];
 
-const QUIET = new Set(["moveNode", "setLayout"]); // refused without a redraw: they fire on every mouse move
+const QUIET = new Set(["moveNode", "resizeNode", "setLayout"]); // refused without a redraw: they fire on every mouse move
 
 const clone = (value) => (value === undefined ? undefined : JSON.parse(JSON.stringify(value)));
 const sameEdge = (a, b) => a.from_node === b.from_node && a.from_port === b.from_port && a.to_node === b.to_node && a.to_port === b.to_port;
@@ -179,6 +179,18 @@ export class GraphDoc {
     if (!node || node.title === title) return;
     node.title = title;
     this._emit({ type: "node:title", uid });
+  }
+
+  /** The size of a node's card. A width is always honoured; a height only stretches what can stretch (a picture). `undefined` for
+   *  either gives back the card's own size. A size is presentation, like a position: it is never part of a run. */
+  resizeNode(uid, w, h) {
+    const node = this.nodes.get(uid);
+    if (!node || (node.layout.w === w && node.layout.h === h)) return;
+    for (const [key, value] of [["w", w], ["h", h]]) {
+      if (value === undefined) delete node.layout[key];
+      else node.layout[key] = value;
+    }
+    this._emit({ type: "node:resize", uid });
   }
 
   /** Presentation state kept in the document's layout (size, collapsed, group overrides); never part of a run. */

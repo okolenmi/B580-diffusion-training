@@ -30,15 +30,17 @@ const checkbox = (title = "") => Object.assign(document.createElement("input"), 
 
 export class NodeView {
   /**
-   * @param {{doc, shapes, node, options: (spec, values)=>Promise<string[]>, note: Function, onTitle: Function}} deps
+   * @param {{doc, shapes, node, options: (spec, values)=>Promise<string[]>, note: Function, onTitle: Function,
+   *   preview?: (node) => HTMLElement | null}} deps  `preview` gives the picture to draw under the body (a node that makes pictures).
    */
-  constructor({ doc, shapes, node, options, note, onTitle }) {
+  constructor({ doc, shapes, node, options, note, onTitle, preview = () => null }) {
     this.doc = doc;
     this.shapes = shapes;
     this.node = node;
     this.options = options;
     this.note = note;
     this.onTitle = onTitle;
+    this.preview = preview;
     this.el = make("div", "g2-node");
     this.el.dataset.uid = node.uid;
     this.status = { state: "idle" };
@@ -52,6 +54,14 @@ export class NodeView {
     this.el.style.left = `${x}px`;
     this.el.style.top = `${y}px`;
     this.el.style.width = `${w || 280}px`;
+    const { h } = this.node.layout;
+    this.el.style.minHeight = h && this.stretchable() ? `${h}px` : "";
+    this.el.classList.toggle("stretched", Boolean(h && this.stretchable()));
+  }
+
+  /** Whether a taller card would show more: only a card with a picture on it has something that grows with its height. */
+  stretchable() {
+    return Boolean(this.preview(this.node));
   }
 
   setSelected(on) {
@@ -133,9 +143,10 @@ export class NodeView {
       const tabs = tabsOf({ shape, info, node: this.node, kinds: this.shapes.addonKinds });
       const tab = activeTab(tabs, this.node);
       if (tabs.length > 1) this.el.append(this._tabStrip(tabs, tab));
-      this.el.append(this._eventStrip("event-in", shape.events_in || [], "top"), this._body(shape, info, resolved, tab), ...this._outputs(shape), this._eventStrip("event-out", shape.events_out || [], "bottom"));
+      this.el.append(this._eventStrip("event-in", shape.events_in || [], "top"), this._body(shape, info, resolved, tab), ...this._picture(), ...this._outputs(shape), this._eventStrip("event-out", shape.events_out || [], "bottom"));
     }
     this._hub(shape);
+    if (!layout.collapsed) this.el.append(this._grip());
     this.setStatus(this.status);
     const body = this.el.querySelector(".g2-body");
     if (body) body.scrollTop = keep;
@@ -353,6 +364,19 @@ export class NodeView {
       if (resolved.focus === port.name) row.classList.add("focus");
     }
     return row;
+  }
+
+  /** The corner a card is resized by (the canvas reads the drag); a double click gives back the card's own size. */
+  _grip() {
+    const grip = make("span", "g2-grip");
+    grip.title = this.stretchable() ? "Drag to resize (double-click: default size)" : "Drag to change the width (double-click: default width)";
+    return grip;
+  }
+
+  /** The picture the node made, when it makes pictures. */
+  _picture() {
+    const picture = this.preview(this.node);
+    return picture ? [picture] : [];
   }
 
   _outputs(shape) {

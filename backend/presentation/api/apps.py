@@ -4,8 +4,8 @@ Contract over ``services.apps`` (``docs/contracts/apps.md``):
 
 * ``GET/PUT/DELETE /api/v1/apps[/{name}]`` -- the library (PUT: 201 first save, 200 replace; 422 ``app_invalid`` lists every problem).
   A save whose graph snapshot changed makes the next ``version``; a layout change alone does not;
-* ``POST /api/v1/apps/{name}/diff`` -- what updating the app from a given graph would change, by node, and which cards would lose their
-  target. A pure read;
+* ``PUT /api/v1/apps/{name}/graph`` -- replace the graph the app owns (the graph editor's Save in app mode); page, style and description
+  stay, and the answer lists the cards whose target the new graph no longer has;
 * ``POST /api/v1/apps/{name}/run`` -- run the app's graph with the values typed into it. Only fields the app exposes may be set; the
   rest is the same ``StartGraphExecution`` as the editor's Run (422 ``graph_invalid``, 409 ``graph_execution_active``,
   409 ``memory_unavailable``), and the run records its origin.
@@ -23,8 +23,8 @@ from ...application.errors import AppsUnavailableError
 from ...application.services import ApplicationServices, AppServices
 from ..deps import get_services
 from ..schemas import (
-    AppDiffIn,
-    AppDiffOut,
+    AppGraphIn,
+    AppGraphOut,
     AppIn,
     AppRunIn,
     DeleteAppOut,
@@ -70,10 +70,11 @@ def delete_app(name: str, apps: AppServices = Depends(apps_of)):
     return DeleteAppOut(deleted=apps.delete.execute(name).deleted)
 
 
-@router.post("/{name}/diff", response_model=AppDiffOut, responses={404: _ERROR_404})
-def diff_app(name: str, body: AppDiffIn, apps: AppServices = Depends(apps_of)):
-    """What updating the app from ``graph`` would change."""
-    return AppDiffOut(**vars_of(apps.diff.execute(name, body.graph)))
+@router.put("/{name}/graph", response_model=AppGraphOut, responses={404: _ERROR_404, 422: {"description": "invalid_query"}})
+def save_app_graph(name: str, body: AppGraphIn, apps: AppServices = Depends(apps_of)):
+    """The app's own graph, replaced; the cards that lost their target are listed."""
+    result = apps.save_graph.execute(name, body.graph)
+    return AppGraphOut(app=saved_app_out(result.app), orphaned_cards=list(result.orphaned_cards))
 
 
 @router.post(
@@ -91,8 +92,3 @@ def run_app(name: str, body: AppRunIn, apps: AppServices = Depends(apps_of)):
             mode=body.mode,
         )
     )
-
-
-def vars_of(result) -> dict:
-    """A frozen slots dataclass as the dict the output model takes (tuples become lists there)."""
-    return {name: getattr(result, name) for name in result.__slots__}

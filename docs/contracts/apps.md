@@ -1,6 +1,6 @@
 # Apps and boards
 
-An **App** is a published, versioned page over a frozen copy of a graph: the way a workflow is used by someone who should not have to meet the node
+An **App** is a published, versioned page over a graph it owns: the way a workflow is used by someone who should not have to meet the node
 canvas. A **board** is the grid of cards that both an App and a graph's *views* (`graph-json.md`) are made of. Code: `backend/domain/board.py`,
 `backend/domain/app.py`, `backend/application/app_binding.py`, `backend/presentation/api/apps.py` and `boards.py`; the frontend engine is
 `frontend/js/board/`, the page `frontend/js/apps.js` (entry) and `frontend/js/apps/` (document, selection, run tracker, tray, toolbar, page controller).
@@ -43,12 +43,13 @@ field is not undone) and the phone preview.
 {format: 1, graph, source_graph, style: {accent, density}, root}
 ```
 
-* `graph` is the snapshot a run executes (graph document, `graph-json.md`; layout and views are not needed). `source_graph` is the library graph it
-  was taken from, or `null`.
+* `graph` is the app's own graph, a graph document (`graph-json.md`) with its layout and views: what a run executes, and what the graph editor's
+  *app mode* opens and saves (`PUT .../graph`). It starts empty or as a copy of a library graph; after that nothing links it to the library, and
+  changing either never reaches the other. `source_graph` only remembers which library graph the copy was made from (or `null`).
 * `style.accent` is one of `blue teal green amber red violet`; `style.density` is `comfortable` or `compact`.
 * `root` is a container: the app's page. Cards point at modules of the snapshot.
 
-A card whose target is not in the snapshot is kept and shown as an *orphan* (`missing_node`, `missing_module`, `unknown_class`); an app whose graph
+A card whose target is not in the graph is kept and shown as an *orphan* (`missing_node`, `missing_module`, `unknown_class`); an app whose graph
 changed must still load.
 
 ## Versions
@@ -107,12 +108,12 @@ bars, scalars, memory) and **Runs** (history, queue); a tab nothing belongs on i
 | `PUT /api/v1/apps/{name}` | upsert `{description, doc}`: 201 first save, 200 replace; 422 `app_invalid` |
 | `GET /api/v1/apps/{name}` | one app with `doc`, `version`, `graph_hash`; 404 `app_not_found` |
 | `DELETE /api/v1/apps/{name}` | `{deleted: true}`; 404 |
-| `POST /api/v1/apps/{name}/diff` | body `{graph}`: `{added, removed, changed, wiring_changed, settings_changed, orphaned_cards, new_version}`; a pure read, the review before "update from graph" |
+| `PUT /api/v1/apps/{name}/graph` | body `{graph}`: replaces the app's graph, page, style and description stay: `{app, orphaned_cards}` (the cards whose target the new graph no longer has); a changed run makes the next version, a moved node does not; 404 `app_not_found`, 422 `invalid_query` |
 | `POST /api/v1/apps/{name}/run` | body `{values, memory_overrides?, mode?}` (`auto` default, `parallel`, `queue`): 201 execution summary; 422 `app_invalid` / `graph_invalid`, 409 `graph_execution_active` / `memory_unavailable` |
 | `POST /api/v1/boards/modules` | body `{graph}`: per node its fields and live displays, and the graph's own: what a card can bind to |
 | `POST /api/v1/boards/resolve` | body `{doc, graph?}` (an App document, or a flat board with the graph beside it): per card `ok`, `wired`, `missing_node`, `missing_module`, `unknown_class`, plus the graph's validation issues; 422 `board_invalid` |
 
-| `GET /api/v1/artifacts/{path}` | a PNG a node left for the page (`Preview Image` writes them under `artifacts/<node uid>/`, newest 48 kept per node); 404 `artifact_not_found` for anything else, a path leaving the folder included |
+| `GET /api/v1/artifacts/{path}` | a PNG a node left for the page (`Preview Image` and `Sampling Preview` write them under `artifacts/<node uid>/`, newest 48 kept per node); 404 `artifact_not_found` for anything else, a path leaving the folder included |
 
 An `image` display module (`DisplayModule(kind="image", value_key=...)`) names the report key that holds `[{path, seed, width, height}]`; the page draws the pictures of the newest frame.
 

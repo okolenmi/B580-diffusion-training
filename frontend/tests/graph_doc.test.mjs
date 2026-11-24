@@ -141,3 +141,21 @@ test("port helpers: wire problems, visible_when, grouping", () => {
   assert.deepEqual(groups.map((g) => [g.group.id, g.ports.map((p) => p.name)]), [["main", ["b", "c"]], ["x", ["a"]]]);
   assert.deepEqual(fieldValues([{ name: "k", default: 3 }, { name: "m", default: 1 }], { m: 2 }), { k: 3, m: 2 });
 });
+
+test("a card's size is part of the document's layout, can be given back, and a frozen graph refuses it", () => {
+  const doc = new GraphDoc();
+  const { uid } = doc.addNode("IntNode");
+  const seen = [];
+  doc.on("node:resize", (e) => seen.push(e.uid));
+  doc.resizeNode(uid, 420, 300);
+  assert.deepEqual([doc.nodes.get(uid).layout.w, doc.nodes.get(uid).layout.h], [420, 300]);
+  doc.resizeNode(uid, 420, 300);
+  assert.equal(seen.length, 1, "the same size is not a change");
+  assert.equal(doc.toJSON().nodes[0].layout.w, 420, "the size is saved with the graph");
+  assert.equal(doc.runPayload().nodes[0].layout, undefined, "and never sent to a run");
+  doc.resizeNode(uid, undefined, undefined);
+  assert.equal("w" in doc.nodes.get(uid).layout || "h" in doc.nodes.get(uid).layout, false);
+  doc.readOnly = true;
+  doc.resizeNode(uid, 500, 100);
+  assert.equal(doc.nodes.get(uid).layout.w, undefined);
+});

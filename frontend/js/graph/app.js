@@ -10,6 +10,7 @@ import { el } from "../lib/dom.js";
 import { errText } from "../lib/errors.js";
 import { subscribeEvents } from "../lib/events.js";
 import { log, logError } from "../lib/log.js";
+import { AppSession, renderAppLinks } from "./app_session.js";
 import { Canvas } from "./canvas.js";
 import { DraftSaver, readDraft } from "./draft.js";
 import { FileIO } from "./file_io.js";
@@ -18,6 +19,7 @@ import { GraphDoc, endpointHost } from "./doc.js";
 import { Inspector } from "./inspector.js";
 import { Library } from "./library.js";
 import { Monitor } from "./monitor.js";
+import { NodePreviews } from "./node_preview.js";
 import { Views } from "./views.js";
 import { LiveStreams } from "../board/live.js";
 import { InstanceView } from "./instance.js";
@@ -126,10 +128,12 @@ async function boot() {
     return addAt(className, { x: c.x - 340 + (step % 3) * 320, y: c.y - 120 + (Math.floor(step / 3) % 3) * 200 });
   };
 
+  const live = new LiveStreams();
   canvas = new Canvas({
     root: el("g2-canvas"),
     doc,
     shapes,
+    previews: new NodePreviews({ live, shapes }),
     options: pickerOptions,
     note: log,
     hooks: {
@@ -170,13 +174,14 @@ async function boot() {
   new SettingsPanel(el("graph-settings"), doc, catalog.settings || [], { note: log });
 
   const issues = new IssuesPanel(el("issues"), { onFocus: (uid) => canvas.focusNode(uid) });
-  const live = new LiveStreams();
   monitor = new Monitor(el("monitor"), doc, shapes, { live });
   let runs = null;
   let saver = null;
+  let session = null;
+  const appName = new URLSearchParams(location.search).get("app");
   const instance = new InstanceView({
     doc, canvas,
-    saver: { hold: (on) => saver?.hold(on), flush: () => saver?.flush() },
+    saver: { hold: (on) => saver?.hold(on || Boolean(session?.active)), flush: () => saver?.flush() },
     bar: el("instance-bar"), title: el("instance-title"), copyBtn: el("instance-copy"), backBtn: el("instance-back"),
     onNote: log,
     onChange: (open) => {
@@ -254,8 +259,9 @@ async function boot() {
     memory.refreshLater();
   });
 
-  const draft = readDraft();
-  if (draft) {
+  const restoreDraft = () => {
+    const draft = readDraft();
+    if (!draft) return;
     try {
       doc.load(draft);
       canvas.fit();
@@ -263,11 +269,21 @@ async function boot() {
     } catch (err) {
       log(`The kept canvas could not be restored: ${errText(err)}`, "warn");
     }
-  }
+  };
+  if (!appName) restoreDraft();
   saver = new DraftSaver(doc);
   window.addEventListener("pagehide", () => saver.flush());
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saver.flush(); });
   el("btn-run").disabled = !doc.nodes.size;
+  if (appName) {
+    session = new AppSession({
+      name: appName, doc, canvas, saver, bar: el("app-bar"), title: el("app-bar-title"), saveBtn: el("app-save"), backLink: el("app-back"),
+      onNote: log,
+    });
+    if (!(await session.open())) { session = null; restoreDraft(); }
+    el("btn-run").disabled = !doc.nodes.size;
+  }
+  if (!session) renderAppLinks(el("app-links"), { onNote: log });
 
   el("btn-validate").addEventListener("click", async () => {
     if (!doc.nodes.size) return log("Canvas is empty.", "warn");

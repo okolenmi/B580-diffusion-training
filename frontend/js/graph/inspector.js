@@ -55,7 +55,7 @@ export class Inspector {
     try {
       const hints = await api(`/graphs/nodes/${encodeURIComponent(node.class_name)}/diagnostics`, { method: "POST", body: { params: node.params } });
       if (seq !== this._seq) return;
-      this._hints = { hints: hints.hints || hints, error: null };
+      this._hints = { hints: hints.messages || {}, error: null };
     } catch (err) {
       if (seq !== this._seq) return;
       this._hints = { hints: {}, error: errText(err) };

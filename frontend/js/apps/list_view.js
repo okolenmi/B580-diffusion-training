@@ -1,4 +1,4 @@
-/* The library of apps (/apps): the "new from a graph" form and the grid of existing apps. */
+/* The library of apps (/apps): the "new app" form (empty, or a copy of a saved graph) and the grid of existing apps. */
 
 import { api } from "../api.js";
 import { el, showMessage } from "../lib/dom.js";
@@ -22,28 +22,21 @@ export async function showList() {
 
 function renderNewForm(graphs, taken) {
   const select = el("new-graph");
-  select.replaceChildren();
+  select.replaceChildren(Object.assign(document.createElement("option"), { value: "", textContent: "An empty app" }));
   for (const g of graphs) {
     const o = document.createElement("option");
     o.value = g.name;
-    o.textContent = `${g.name} (${g.node_count} nodes)`;
+    o.textContent = `A copy of ${g.name} (${g.node_count} nodes)`;
     select.append(o);
   }
   const create = el("btn-new");
-  const none = graphs.length === 0;
-  create.disabled = none;
-  if (none) {
-    el("new-hint").textContent =
-      "There is no saved graph yet. Build one in the Graph Editor and save it to the library; an app is built on a saved graph.";
-  }
 
   const go = () => {
     const nm = el("new-name").value.trim();
     if (!nm) return showMessage("new-error", "Give it a name.");
     if (taken.has(nm)) return showMessage("new-error", `"${nm}" already exists — pick another name or open the existing one.`);
-    if (!select.value) return showMessage("new-error", "Choose a graph.");
     showMessage("new-error", "");
-    location.href = `/apps/${enc(nm)}?new=1&graph=${enc(select.value)}`;
+    location.href = `/apps/${enc(nm)}?new=1${select.value ? `&graph=${enc(select.value)}` : ""}`;
   };
   create.onclick = go;
   el("new-name").onkeydown = (e) => { if (e.key === "Enter") go(); };
@@ -51,7 +44,7 @@ function renderNewForm(graphs, taken) {
 
 function renderCards(items) {
   el("list-state").hidden = items.length > 0;
-  el("list-state").textContent = "Nothing here yet — create an app from one of your graphs above.";
+  el("list-state").textContent = "Nothing here yet — create an app above.";
   el("list-apps").hidden = items.length === 0;
   const grid = el("grid-apps");
   grid.replaceChildren();
@@ -67,7 +60,7 @@ function renderCards(items) {
     desc.textContent = t.description || "";
     const meta = document.createElement("div");
     meta.className = "app-card-meta";
-    meta.textContent = `v${t.version} · ${t.card_count} card${t.card_count === 1 ? "" : "s"} · ${t.node_count} node${t.node_count === 1 ? "" : "s"} · ${new Date(t.updated_at).toLocaleDateString()}`;
+    meta.textContent = `v${t.version} · ${t.card_count} card${t.card_count === 1 ? "" : "s"} · ${t.node_count ? `${t.node_count} node${t.node_count === 1 ? "" : "s"}` : "no graph yet"} · ${new Date(t.updated_at).toLocaleDateString()}`;
     card.append(name, desc, meta);
     grid.append(card);
   }

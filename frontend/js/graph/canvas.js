@@ -22,6 +22,9 @@ import { clampZoom, eventPath, toCanvas, wirePath, zoomAround } from "./geometry
 import { NodeView } from "./node_view.js";
 
 const SPRING_MS = 400;
+const MIN_WIDTH = 200;
+const MAX_WIDTH = 1200;
+const MIN_HEIGHT = 120;
 const SVG_NS = "http://www.w3.org/2000/svg";
 const TYPING = /^(INPUT|TEXTAREA|SELECT)$/;
 
@@ -31,7 +34,7 @@ export class Canvas {
    *          hooks?: {onSelect?, onDropEmpty?, onQuickAdd?, onNodeStatus?}}} deps
    *        `onNodeStatus(uid)` runs after a card's run badge changed (the Inspector reads it).
    */
-  constructor({ root, doc, shapes, options, note, hooks = {} }) {
+  constructor({ root, doc, shapes, options, note, hooks = {}, previews = null }) {
     this.root = root;
     this.root.tabIndex = -1;
     this.doc = doc;
@@ -39,6 +42,7 @@ export class Canvas {
     this.options = options;
     this.note = note;
     this.hooks = hooks;
+    this.previews = previews;
     this.views = new Map();
     this.selection = new Set();
     this.pan = { x: 0, y: 0 };
@@ -80,6 +84,7 @@ export class Canvas {
     doc.on("node:add", (e) => { this._addView(doc.nodes.get(e.uid)); shapes.resolveNow(doc.nodes.get(e.uid)); });
     doc.on("node:remove", (e) => { this._dropView(e.uid); this.edges.update(); });
     doc.on("node:move", (e) => { this.views.get(e.uid)?.place(); this._schedule(e.uid); });
+    doc.on("node:resize", (e) => { this.views.get(e.uid)?.place(); this._schedule(e.uid); });
     doc.on("node:title", (e) => this.views.get(e.uid)?.render());
     doc.on("node:ui", (e) => this._refresh(e.uid));
     doc.on("node:addons", (e) => this._refresh(e.uid));
@@ -131,7 +136,7 @@ export class Canvas {
     if (!node) return;
     const view = new NodeView({
       doc: this.doc, shapes: this.shapes, node, options: this.options, note: this.note,
-      onTitle: (uid, element) => this._editTitle(uid, element),
+      onTitle: (uid, element) => this._editTitle(uid, element), preview: (n) => this.previews?.elementFor(n) ?? null,
     });
     this.views.set(node.uid, view);
     this.layer.append(view.el);
@@ -149,6 +154,7 @@ export class Canvas {
     }
     // A reloaded document may reuse the uid; its resolved shape belongs to the old node.
     this.shapes.forget(uid);
+    this.previews?.forget(uid);
   }
 
   _editTitle(uid, element) {
@@ -274,6 +280,8 @@ export class Canvas {
     this.root.addEventListener("pointercancel", (e) => this._up(e));
     this.root.addEventListener("click", (e) => this._click(e));
     this.root.addEventListener("dblclick", (e) => {
+      const grip = e.target.closest(".g2-grip");
+      if (grip) { this.doc.resizeNode(this._uidOf(grip), undefined, undefined); return; }
       if (e.target === this.root || e.target === this.inner || e.target === this.layer) this.hooks.onQuickAdd?.(this.point(e), e);
     });
     this.root.addEventListener("wheel", (e) => {
@@ -296,6 +304,8 @@ export class Canvas {
     if (e.button !== 0 && e.button !== 1) return;
     const socket = e.target.closest(".g2-socket");
     if (socket && e.button === 0) { this._startWire(socket, e); return; }
+    const grip = e.target.closest(".g2-grip");
+    if (grip && e.button === 0) { this._startResize(grip, e); return; }
     if (e.target.closest("input, textarea, select, button, label, [data-action]")) return;
     this.root.focus({ preventScroll: true });
     const uid = this._uidOf(e.target);
@@ -325,6 +335,11 @@ export class Canvas {
     } else if (drag.kind === "node") {
       const p = this.point(e);
       for (const [uid, from] of drag.origin) this.doc.moveNode(uid, Math.round(from.x + p.x - drag.start.x), Math.round(from.y + p.y - drag.start.y));
+    } else if (drag.kind === "resize") {
+      const p = this.point(e);
+      const w = Math.round(Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, drag.w + p.x - drag.start.x)));
+      const h = drag.stretch ? Math.round(Math.max(MIN_HEIGHT, drag.h + p.y - drag.start.y)) : undefined;
+      this.doc.resizeNode(drag.uid, w, h);
     } else if (drag.kind === "wire") {
       this._moveWire(e);
     } else if (drag.kind === "band") {
@@ -348,6 +363,19 @@ export class Canvas {
       const inside = [...this.doc.nodes.values()].filter((n) => n.layout.x < x1 && n.layout.x + (n.layout.w || 280) > x0 && n.layout.y < y1 && n.layout.y + 60 > y0).map((n) => n.uid);
       this.select([...this.selection, ...inside]);
     }
+  }
+
+  /** Drag the corner of a card: its width follows the pointer, and so does its height when something on the card can stretch. */
+  _startResize(grip, e) {
+    const uid = this._uidOf(grip);
+    const view = this.views.get(uid);
+    if (!view || this.doc.readOnly) return;
+    this.select([uid]);
+    this._drag = {
+      kind: "resize", uid, start: this.point(e), w: view.el.offsetWidth, h: view.el.offsetHeight, stretch: view.stretchable(),
+    };
+    this.root.setPointerCapture?.(e.pointerId);
+    e.preventDefault();
   }
 
   _click(e) {

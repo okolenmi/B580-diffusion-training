@@ -67,6 +67,7 @@ class SigmaSchedule:
 
 
 Denoise = Callable[[Tensor, Tensor], Tensor]  # (x, sigma) -> the estimate of the clean sample
+Peek = Callable[[int, Tensor], None]  # (index of the evaluation, the estimate it gave)
 
 
 class Sampler:
@@ -108,6 +109,19 @@ class DPMPP2M(Sampler):
 
 
 SAMPLERS = {cls.name: cls for cls in (Euler, DPMPP2M)}
+
+
+class Observed:
+    """A ``denoise`` that also hands each estimate of the clean sample to ``peek(index, estimate)`` (index counts calls from 0)."""
+
+    def __init__(self, denoise: Denoise, peek: Callable[[int, Tensor], None]):
+        self.denoise, self.peek, self.calls = denoise, peek, 0
+
+    def __call__(self, x: Tensor, sigma: Tensor) -> Tensor:
+        estimate = self.denoise(x, sigma)
+        self.peek(self.calls, estimate)
+        self.calls += 1
+        return estimate
 
 
 class Network(Protocol):

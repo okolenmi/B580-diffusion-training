@@ -317,11 +317,6 @@ class DeleteAppResult:
 
 
 @dataclass(frozen=True, slots=True)
-class AppDiffResult:
-    added: tuple[str, ...]
-    removed: tuple[str, ...]
-    changed: tuple[str, ...]
-    wiring_changed: bool
-    settings_changed: bool
-    orphaned_cards: tuple[str, ...]
-    new_version: bool
+class SaveAppGraphResult:
+    app: SavedAppDTO
+    orphaned_cards: tuple[str, ...]  # cards whose target the new graph no longer has (they stay, shown as orphans)

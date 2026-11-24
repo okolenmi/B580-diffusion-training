@@ -1,4 +1,4 @@
-"""Apps: documents, diff, runs, modules and resolution."""
+"""Apps: documents, their graph, runs, modules and resolution."""
 
 from __future__ import annotations
 
@@ -53,22 +53,17 @@ class DeleteAppOut(BaseModel):
     deleted: bool
 
 
-class AppDiffIn(BaseModel):
-    """``POST /apps/{name}/diff``: the graph the app would be updated from."""
+class AppGraphIn(BaseModel):
+    """``PUT /apps/{name}/graph``: the graph the app owns from now on (the editor's document, layout included)."""
 
     graph: dict[str, Any]
 
 
-class AppDiffOut(BaseModel):
-    """What publishing that graph over the app's snapshot would change, by node uid, and which cards would lose their target."""
+class AppGraphOut(BaseModel):
+    """The saved app, and the cards whose target the new graph no longer has."""
 
-    added: list[str]
-    removed: list[str]
-    changed: list[str]
-    wiring_changed: bool
-    settings_changed: bool
+    app: SavedAppOut
     orphaned_cards: list[str]
-    new_version: bool
 
 
 class AppRunIn(BaseModel):
@@ -156,4 +151,4 @@ def resolve_out(resolution) -> ResolveOut:
     )
 
 
-__all__ = ["AppIn", "SavedAppOut", "SavedAppSummaryOut", "SavedAppListOut", "DeleteAppOut", "AppDiffIn", "AppDiffOut", "AppRunIn", "ModulesIn", "GraphModulesOut", "ResolveIn", "BlockStatusOut", "ResolveOut", "saved_app_out", "saved_app_list_out", "graph_modules_out", "resolve_out"]
+__all__ = ["AppIn", "SavedAppOut", "SavedAppSummaryOut", "SavedAppListOut", "DeleteAppOut", "AppGraphIn", "AppGraphOut", "AppRunIn", "ModulesIn", "GraphModulesOut", "ResolveIn", "BlockStatusOut", "ResolveOut", "saved_app_out", "saved_app_list_out", "graph_modules_out", "resolve_out"]

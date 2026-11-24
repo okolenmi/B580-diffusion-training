@@ -1,8 +1,8 @@
 /* One app's page (/apps/<name>): use mode is the interface a person meets (change values, Run, watch live cards); edit
    mode unlocks the layout and a tray of everything the app's graph offers.
 
-   An app is a frozen snapshot of a graph plus a page of cards over it (docs/contracts/apps.md). The graph editor keeps
-   authoring graphs; "Update from graph" is the explicit, reviewed step that copies a newer graph in.
+   An app owns a graph (a copy made when the app was created) plus a page of cards over it (docs/contracts/apps.md). The page edits
+   the values and the layout; "Edit graph" opens the app's own graph in the graph editor's app mode.
 
    This class only coordinates. The document and its saved state are `AppDocument`, the selection `CardSelection`, runs
    `RunTracker`, the tray and toolbar their own classes; what a card can bind to is the backend's answer
@@ -15,7 +15,7 @@ import { History } from "../board/history.js";
 import { Inspector } from "../board/inspector.js";
 import { LiveStreams } from "../board/live.js";
 import {
-  applyValues, collectIds, groupCards, locateCard, moveCard, moveTargets, statusByBlock, titleFor, valuesPayload, walkCards,
+  applyValues, autoPage, collectIds, groupCards, locateCard, moveCard, moveTargets, refineContainer, statusByBlock, titleFor, valuesPayload, walkCards,
 } from "../board/model.js";
 import { el, showMessage } from "../lib/dom.js";
 import { errText } from "../lib/errors.js";
@@ -143,13 +143,14 @@ export class AppPage {
       queue: () => this.run("queue"),
       stop: () => this.tracker.stop().catch((err) => showMessage("page-error", `Could not stop: ${errText(err)}`)),
       remove: () => this.remove(),
-      update: () => this.updateFromGraph(),
+      graph: () => this.openGraphEditor(),
       undo: () => this.stepHistory(-1),
       redo: () => this.stepHistory(1),
       note: () => this.targetBoard().addNote(),
       heading: () => this.targetBoard().addNote("heading"),
       section: () => this.targetBoard().addSection(),
       columns: (raw) => this.setColumns(raw),
+      fill: () => this.fillPage(),
     });
     this.tray.onChange(() => this.renderTray());
     document.addEventListener("keydown", (ev) => {
@@ -182,11 +183,11 @@ export class AppPage {
     const { doc } = this;
     const bits = [];
     if (doc.version) bits.push(`version ${doc.version}`);
-    if (doc.app.source_graph) bits.push(`built on graph “${doc.app.source_graph}”`);
+    if (doc.app.source_graph) bits.push(`started from graph “${doc.app.source_graph}”`);
+    bits.push(`${doc.app.graph.nodes.length} node${doc.app.graph.nodes.length === 1 ? "" : "s"}`);
     const n = [...walkCards(doc.rootBlocks())].length;
     bits.push(`${n} card${n === 1 ? "" : "s"}`);
     el("app-sub").textContent = bits.join(" · ");
-    el("btn-update").hidden = !doc.app.source_graph || doc.isNew;
   }
 
   updateState() {
@@ -354,9 +355,10 @@ export class AppPage {
 
   renderTray() {
     if (this.doc.app && this.resolution && this.mode === "edit") this.tray.render(this.resolution.modules, this.doc.rootBlocks());
+    el("add-auto").hidden = !(this.doc.app && this.doc.hasNodes && ![...walkCards(this.doc.rootBlocks())].length);
   }
 
-  /* ---- save / delete / update ------------------------------------------------------ */
+  /* ---- save / delete / graph ------------------------------------------------------ */
 
   async save() {
     showMessage("page-error", "");
@@ -381,28 +383,20 @@ export class AppPage {
     location.href = "/apps";
   }
 
-  /** Copy the source graph's current state into the app, after showing what that changes. */
-  async updateFromGraph() {
-    showMessage("page-error", "");
-    try {
-      const { next, diff } = await this.doc.compareWithSource();
-      const nothing = !diff.added.length && !diff.removed.length && !diff.changed.length && !diff.wiring_changed && !diff.settings_changed;
-      if (nothing) return log("The app already matches its graph.", "info");
-      const lines = [];
-      if (diff.added.length) lines.push(`${diff.added.length} node(s) added`);
-      if (diff.removed.length) lines.push(`${diff.removed.length} node(s) removed`);
-      if (diff.changed.length) lines.push(`${diff.changed.length} node(s) changed`);
-      if (diff.wiring_changed) lines.push("wiring changed");
-      if (diff.settings_changed) lines.push("graph settings changed");
-      if (diff.orphaned_cards.length) lines.push(`${diff.orphaned_cards.length} card(s) would lose their target`);
-      if (!window.confirm(`Update "${this.doc.name}" from graph "${this.doc.app.source_graph}"?\n\n${lines.join("\n")}\n\nValues typed on this page are replaced by the graph's.`)) return;
-      this.doc.adoptGraph(next);
-      this.view.setContainer(this.doc.app.root, this.doc.draft);
-      this.scheduleResolve(0);
-      this.updateState();
-    } catch (err) {
-      showMessage("page-error", `Could not update from the graph: ${errText(err)}`);
+  /** The app's own graph in the graph editor (app mode). What is on the page is saved first: the editor reads the saved app. */
+  async openGraphEditor() {
+    if (this.doc.isNew || this.doc.isDirty()) {
+      await this.save();
+      if (this.doc.isNew || this.doc.isDirty()) return; // the save said why it did not work
     }
+    location.href = `/graph?app=${encodeURIComponent(this.doc.name)}`;
+  }
+
+  /** A page of cards for everything the graph offers, for an app whose page is still empty. */
+  fillPage() {
+    if (!this.resolution || [...walkCards(this.doc.rootBlocks())].length) return;
+    const root = refineContainer({ ...this.doc.app.root, tabs: autoPage(this.resolution.modules, this.doc.app.root.columns) });
+    this.applyRoot(root);
   }
 
   /* ---- running --------------------------------------------------------------------- */

@@ -2,7 +2,7 @@
 
     python -m tests.check_generate
 
-Covers the two sampling schemes (noise prediction and rectified flow), the adapter list syntax, the preview pictures a page shows, the starter graph (every wire resolves), the run from prompt to PNG files (shape, seeds,
+Covers the live sampling preview (a node wired into the sampler, and its refusal to end a run), the two sampling schemes (noise prediction and rectified flow), the adapter list syntax, the preview pictures a page shows, the starter graph (every wire resolves), the run from prompt to PNG files (shape, seeds,
 the recipe inside each file, stopping), and that the same recipe gives the same pixels alone or in a batch.
 """
 
@@ -17,6 +17,11 @@ from engine.devices import Accelerator
 from engine.generate.artifacts import ArtifactFolder
 from engine.generate.recipe import ImageStore
 from engine.runtime.factory import make_runtime
+from dataclasses import replace
+
+import torch
+
+from engine.generate.preview import SamplingPreview
 from graph import GraphRunner, NodeRegistry
 from graph.node import Environment
 from nodes.model.adapter_stack import adapter_rows, parse_stack
@@ -111,6 +116,48 @@ def run_graph() -> None:
         check(stopped.stopped and not list(shutil_out.glob("*.png")), f"a stop request ends sampling and writes nothing ({stopped.error})")
 
 
+def sampling_preview() -> None:
+    from graph.document import Edge, NodeSpec
+
+    with tempfile.TemporaryDirectory() as raw:
+        tmp = Path(raw)
+        doc = graph(tmp, prompt="a red fox", seed=7, steps=4)
+        sampler = next(spec.uid for spec in doc.nodes if spec.class_name == "SamplerNode")
+        source = next(spec.uid for spec in doc.nodes if spec.title == "model")
+        watching = replace(doc, nodes=doc.nodes + (NodeSpec("n_zzzzzz", "SamplingPreviewNode", {"every": 2, "size": 64}),),
+                           edges=doc.edges + (Edge(source, "vae", "n_zzzzzz", "vae"), Edge("n_zzzzzz", "preview", sampler, "preview")))
+        validation, outcome, trace = execute(watching, artifacts=tmp / "art")
+        check(validation.ok and outcome.ok, f"a sampler with a Sampling Preview wired in runs ({[i.message for i in validation.errors][:2]} {outcome.error})")
+        looks = [f for s, f in trace.frames if s == "node:n_zzzzzz" and "images" in f]
+        check([f["step"] for f in looks] == [2, 4], f"it shows every second step and the last ({[f['step'] for f in looks]})")
+        files = [tmp / "art" / f["images"][0]["path"] for f in looks]
+        check(all(f.is_file() for f in files) and len({f.name for f in files}) == 2, "each look is its own picture file under the node's folder")
+        check(all(f["images"][0]["width"] <= 64 and f["images"][0]["height"] <= 64 for f in looks), "a look is no larger than the size asked for")
+        check(len(list((tmp / "out").glob("*.png"))) == 1, "the finished image is still written")
+        (tmp / "plain").mkdir()
+        _, plain, quiet = execute(graph(tmp / "plain", prompt="a red fox", seed=7, steps=4), artifacts=tmp / "art2")
+        check(plain.ok and not [1 for s, f in quiet.frames if s == "node:n_zzzzzz"], "without the node nothing changes")
+
+    shown, notes, closed = [], [], []
+    def decode(latents):
+        if latents.shape[-1] > 4:
+            raise RuntimeError("XPU out of memory")
+        return torch.zeros(1, 3, 8, 8, dtype=torch.uint8)
+    preview = SamplingPreview(every=3, size=32, spatial_factor=8, decode=decode, show=lambda p, step, total: shown.append(step),
+                              note=notes.append, close=lambda: closed.append(True))
+    preview(1, 10, torch.zeros(2, 4, 4, 4))
+    preview(3, 10, torch.zeros(2, 4, 4, 4))
+    preview(10, 10, torch.zeros(2, 4, 4, 4))
+    check(shown == [3, 10], f"a preview is made every N steps and at the end ({shown})")
+    check(preview.shrunk(torch.zeros(1, 4, 128, 96)).shape[-2:] == (4, 3), "latents are shrunk until their decode is about the size asked for")
+    check(preview.shrunk(torch.zeros(1, 4, 2, 2)).shape[-2:] == (2, 2), "small latents are left as they are")
+    big = SamplingPreview(every=1, size=1024, spatial_factor=8, decode=decode, show=lambda p, step, total: shown.append(step),
+                          note=notes.append, close=lambda: closed.append(True))
+    big(1, 5, torch.zeros(1, 4, 16, 16))
+    big(2, 5, torch.zeros(1, 4, 16, 16))
+    check(big.stopped and len(notes) == 1 and closed == [True] and shown == [3, 10], "when the decode does not fit, previews stop for the run, once, and the decoder is dropped")
+
+
 def preview_housekeeping() -> None:
     with tempfile.TemporaryDirectory() as raw:
         from engine.generate.recipe import Image, Recipe
@@ -179,6 +226,7 @@ if __name__ == "__main__":
     flow_scheme()
     adapter_list()
     run_graph()
+    sampling_preview()
     preview_housekeeping()
     refusals()
     print("\ndone")

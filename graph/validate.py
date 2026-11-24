@@ -126,6 +126,8 @@ class _Validator:
         self.result.issues.append(Issue(severity, code, message, **where))
 
     def _shapes(self) -> None:
+        if not self.doc.nodes and not self.doc.addons:
+            self.add(ERROR, "empty_graph", "the graph has no nodes, so there is nothing to run")
         seen: set[str] = set()
         for spec in self.doc.nodes:
             if not UID_PATTERN.match(spec.uid or ""):

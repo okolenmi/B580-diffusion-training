@@ -21,11 +21,11 @@
         <!-- ================= LIST VIEW ================= -->
         <div class="page-body" id="view-list">
             <section class="card" id="new-card">
-                <div class="card-header"><span>New from a graph</span></div>
+                <div class="card-header"><span>New app</span></div>
                 <div class="app-new">
                     <label class="app-field">
-                        <span>Graph</span>
-                        <select id="new-graph" aria-label="Saved graph"></select>
+                        <span>Start with</span>
+                        <select id="new-graph" aria-label="What the app's graph starts as"></select>
                     </label>
                     <label class="app-field app-field-grow">
                         <span>Name</span>
@@ -35,9 +35,9 @@
                     <button id="btn-new" class="btn btn-start">Create</button>
                 </div>
                 <div class="app-new-hint" id="new-hint">
-                    An app is a frozen copy of the graph with a page of cards over it. It starts with the settings the
-                    graph's author already filled in and the live views its nodes offer; everything else is one click
-                    away in Edit mode. Later changes to the graph reach the app only when you ask it to update.
+                    An app owns its graph and a page of cards over it. Start empty and build the graph in the graph
+                    editor (Edit graph on the app's page), or start from a copy of a saved graph: the copy is the app's
+                    own, and later changes to the saved graph do not reach it.
                 </div>
                 <div class="error-box" id="new-error" role="alert" hidden></div>
             </section>
@@ -66,8 +66,8 @@
                 <button id="btn-stop" class="btn btn-danger btn-small" hidden>&#9632; Stop</button>
                 <span class="bd-state" id="bd-state"></span>
                 <span class="app-spacer"></span>
-                <button id="btn-update" class="btn btn-secondary btn-small" hidden
-                        title="Copy the source graph's current state into this app, after a review">Update from graph</button>
+                <button id="btn-graph" class="btn btn-secondary btn-small"
+                        title="Open this app's own graph in the graph editor (the app is saved first)">Edit graph</button>
                 <button id="btn-save" class="btn btn-secondary btn-small"
                         title="Saves the layout and the values as they are now; a changed graph makes a new version">Save</button>
                 <button id="btn-delete" class="btn btn-kill btn-small">Delete</button>
@@ -86,6 +86,8 @@
                         <label class="bd-adv"><input type="checkbox" id="tray-adv"> advanced</label>
                     </div>
                     <div class="bd-inspector" id="inspector" hidden></div>
+                    <button id="add-auto" type="button" class="bd-tray-item" hidden
+                            title="Make a page from everything the graph offers (only while the page has no cards)">+ Page from the graph</button>
                     <div class="bd-tray-add" role="group" aria-label="Add other cards">
                         <button id="add-heading" type="button" class="bd-tray-item">+ Heading</button>
                         <button id="add-note" type="button" class="bd-tray-item">+ Note</button>

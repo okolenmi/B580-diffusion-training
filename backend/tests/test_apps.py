@@ -31,7 +31,7 @@ from backend.application.execution_recorder import ExecutionRecorder
 from backend.application.app_binding import apply_values, exposed_fields
 from backend.domain.graph import Edge, GraphDefinition, NodeSpec
 from backend.domain.modules import GRAPH_STREAM, node_stream_id, run_stream_id
-from backend.domain.app import diff_graphs, graph_hash, normalize_app_doc, validate_app_doc
+from backend.domain.app import graph_hash, normalize_app_doc, validate_app_doc
 from backend.domain.board import iter_cards, normalize_cards, validate_board_doc
 from backend.infrastructure.graph.contract_catalog import ContractNodeCatalog
 from backend.infrastructure.graph.runtime import ContractGraphRuntime
@@ -181,9 +181,6 @@ shuffled = {"format": 3, "edges": [], "nodes": [{"uid": N1, "class_name": "Widge
 check(graph_hash(GRAPH) == graph_hash(shuffled), "layout and format do not change the graph hash")
 check(graph_hash(GRAPH) != graph_hash({**GRAPH, "nodes": [{**GRAPH["nodes"][0], "params": {"steps": 3}}]}), "a param does")
 check(graph_hash(GRAPH) != graph_hash({**GRAPH, "settings": {"memory.vram_max_mb": 4000}}), "a graph setting does")
-d = diff_graphs(GRAPH, {**GRAPH, "nodes": [{**GRAPH["nodes"][0], "params": {"steps": 3}},
-                                           {"uid": SC, "class_name": "ScaleNode", "params": {}}]})
-check(d["added"] == [SC] and d["changed"] == [N1] and d["removed"] == [] and not d["wiring_changed"], f"diff by node (got {d})")
 
 # ==========================================================================
 # D. DescribeGraphModules
@@ -388,14 +385,25 @@ check(status_ == 200 and len(body["doc"]["root"]["tabs"][0]["blocks"]) == 1, "ge
 status_, _, body = asgi_request(app, f"{API}/nope")
 check(status_ == 404 and body["error"]["code"] == "app_not_found", "unknown name is 404")
 
-status_, _, body = asgi_request(app, f"{API}/train%20basic/diff", method="POST", json_body={"graph": {
-    "format": 3, "nodes": [{"uid": SC, "class_name": "ScaleNode", "params": {}}], "edges": []}})
-check(status_ == 200 and body["added"] == [SC] and body["removed"] == [N1] and body["new_version"] is True
-      and body["orphaned_cards"] == ["b1"], f"diff names the nodes and the cards that lose their target (got {status_} {body})")
-status_, _, body = asgi_request(app, f"{API}/train%20basic/diff", method="POST", json_body={"graph": changed})
-check(body["new_version"] is False and body["orphaned_cards"] == [], "diffing the same snapshot changes nothing")
-status_, _, body = asgi_request(app, f"{API}/nope/diff", method="POST", json_body={"graph": changed})
-check(status_ == 404, "diffing an unknown app is 404")
+before = asgi_request(app, f"{API}/train%20basic")[2]
+owned = {"format": 3, "nodes": [{"uid": SC, "class_name": "ScaleNode", "params": {}, "layout": {"x": 40, "y": 60, "w": 300}}],
+         "edges": [], "views": [{"name": "kept"}]}
+status_, _, body = asgi_request(app, f"{API}/train%20basic/graph", method="PUT", json_body={"graph": owned})
+saved_doc = body["app"]["doc"] if status_ == 200 else {}
+check(status_ == 200 and body["orphaned_cards"] == ["b1"] and body["app"]["version"] == before["version"] + 1,
+      f"replacing the app's graph names the cards that lose their target and makes the next version (got {status_} {body.get('orphaned_cards')})")
+check(saved_doc.get("root") == before["doc"]["root"] and body["app"]["description"] == before["description"],
+      "the page and the description stay as they were")
+check(saved_doc.get("graph", {}).get("nodes", [{}])[0].get("layout") == {"x": 40, "y": 60, "w": 300} and saved_doc["graph"].get("views") == [{"name": "kept"}],
+      "the app's graph keeps the editor's layout and views")
+moved = {**owned, "nodes": [{**owned["nodes"][0], "layout": {"x": 1, "y": 2}}]}
+status_, _, body = asgi_request(app, f"{API}/train%20basic/graph", method="PUT", json_body={"graph": moved})
+check(status_ == 200 and body["app"]["version"] == before["version"] + 1, "moving a node alone does not make a new version")
+status_, _, body = asgi_request(app, f"{API}/train%20basic/graph", method="PUT", json_body={"graph": {"nodes": "x"}})
+check(status_ == 422 and body["error"]["code"] == "invalid_query", "a graph that is not a document is refused")
+status_, _, body = asgi_request(app, f"{API}/nope/graph", method="PUT", json_body={"graph": owned})
+check(status_ == 404, "replacing the graph of an unknown app is 404")
+put("train basic", before["doc"])  # later sections start from the document as it was
 
 status_, _, body = asgi_request(app, f"{BOARDS}/modules", method="POST", json_body={"graph": {
     "format": 3, "nodes": [{"uid": W1, "class_name": "WidgetNode", "params": {"steps": 4}}], "edges": []}})
@@ -435,6 +443,10 @@ check(final.get("origin", {}).get("app") == "sum", "the origin is stored with th
 res_sum = final["results"][0]["outputs"]["sum"] if final.get("results") else None
 check(res_sum == 41.0, f"the exposed value was used (a=1 saved, b=40 typed => 41; got {res_sum})")
 
+status_, _, body = put("blank", app_doc([], graph={"format": 3, "nodes": [], "edges": []}))
+check(status_ == 201 and body["node_count"] == 0 and body["card_count"] == 0, "an app can start empty: no nodes, no cards")
+status_, _, body = asgi_request(app, f"{API}/blank/run", method="POST", json_body={})
+check(status_ in (409, 422) and "error" in body, f"running an empty app is refused with the usual error, not a crash (got {status_} {body})")
 status_, _, body = asgi_request(app, f"{API}/nope/run", method="POST", json_body={})
 check(status_ == 404, "running an unknown app is 404")
 status_, _, body = asgi_request(app, f"{API}/second", method="DELETE")

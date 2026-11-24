@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from .recipe import Image, ImageStore
 
@@ -22,6 +23,16 @@ class ArtifactFolder:
         paths = [f"{owner}/{store.save(image).name}" for image in images]
         self._prune(folder, keep=max(self.KEEP, len(images)))
         return paths
+
+    def put_view(self, owner: str, name: str, pixels: Any) -> str:
+        """One plain picture (uint8 ``(3, H, W)``) under ``owner`` named ``name``; what a live preview writes at every look."""
+        from PIL import Image as PILImage
+
+        folder = self.root / owner
+        folder.mkdir(parents=True, exist_ok=True)
+        PILImage.fromarray(pixels.permute(1, 2, 0).numpy()).save(folder / f"{name}.png")
+        self._prune(folder, keep=self.KEEP)
+        return f"{owner}/{name}.png"
 
     @staticmethod
     def _prune(folder: Path, keep: int) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 
-from ..application.use_cases.app_crud import DeleteApp, DiffApp, GetApp, ListApps, SaveApp
+from ..application.use_cases.app_crud import DeleteApp, GetApp, ListApps, SaveApp, SaveAppGraph
 from ..application.use_cases.run_app import RunApp
 from ..application.services import (
     ApplicationServices,
@@ -190,6 +190,6 @@ def _apps(kit: GraphKit) -> AppServices:
         get=GetApp(library=library),
         list=ListApps(library=library),
         delete=DeleteApp(library=library),
-        diff=DiffApp(library=library, resolve=kit.resolve_board),
+        save_graph=SaveAppGraph(library=library, resolve=kit.resolve_board),
         run=RunApp(library=library, start=kit.start_execution),
     )

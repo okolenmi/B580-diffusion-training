@@ -3,10 +3,11 @@
 import { el } from "../lib/dom.js";
 
 const SAVE_FIRST = "Save this app first.";
+const NO_GRAPH = "This app has no nodes yet: use Edit graph to build its graph.";
 const EXPOSURE = "Save the app first — it now shows fields the saved app does not.";
 
 export class Toolbar {
-  /** `on` maps button names to handlers: mode, save, run, queue, stop, remove, update, undo, redo, note, heading, section, columns. */
+  /** `on` maps button names to handlers: mode, save, run, queue, stop, remove, graph, undo, redo, note, heading, section, columns. */
   wire(on) {
     el("mode-use").onclick = () => on.mode("use");
     el("mode-edit").onclick = () => on.mode("edit");
@@ -15,7 +16,8 @@ export class Toolbar {
     el("btn-queue").onclick = () => on.run("queue");
     el("btn-stop").onclick = on.stop;
     el("btn-delete").onclick = on.remove;
-    el("btn-update").onclick = on.update;
+    el("btn-graph").onclick = on.graph;
+    el("add-auto").onclick = on.fill;
     el("btn-undo").onclick = on.undo;
     el("btn-redo").onclick = on.redo;
     el("btn-phone").onclick = () => {
@@ -55,12 +57,13 @@ export class Toolbar {
     const exposure = !doc.isNew && doc.exposureChanged();
     let why = "";
     if (doc.isNew) why = SAVE_FIRST;
+    else if (!doc.hasNodes) why = NO_GRAPH;
     else if (exposure) why = EXPOSURE;
     else if (active) why = "A run is already in progress.";
     const run = el("btn-run");
     run.disabled = !!why;
     run.title = why || "Run the graph with the values on this page";
-    const queueWhy = doc.isNew ? SAVE_FIRST : exposure ? EXPOSURE : "";
+    const queueWhy = doc.isNew ? SAVE_FIRST : !doc.hasNodes ? NO_GRAPH : exposure ? EXPOSURE : "";
     const queue = el("btn-queue");
     queue.disabled = !!queueWhy;
     queue.title = queueWhy || "Run these values after whatever is running or waiting";

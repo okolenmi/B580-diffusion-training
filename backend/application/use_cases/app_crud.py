@@ -1,4 +1,4 @@
-"""Save / get / list / delete / diff apps.
+"""Save / get / list / delete apps, and replace the graph an app owns.
 
 Small use cases in one file because they are one thing: the library of apps. The rules are the graph library's (trimmed 1..120-char
 names, upsert answering 201 vs 200, 404 for an unknown name) plus the shape check in ``domain/app.py``, which runs on save so a document
@@ -8,12 +8,12 @@ the frontend cannot render never reaches the table -- while whether a card's *ta
 
 from __future__ import annotations
 
-from ...domain.app import diff_graphs, graph_hash, normalize_app_doc, validate_app_doc
+from ...domain.app import graph_hash, normalize_app_doc, validate_app_doc
 from ..dto import (
-    AppDiffResult,
     DeleteAppResult,
     SavedAppDTO,
     SavedAppListResult,
+    SaveAppGraphResult,
     SaveAppResult,
     to_saved_app_dto,
     to_saved_app_summary,
@@ -82,24 +82,28 @@ class DeleteApp:
         return DeleteAppResult(deleted=True)
 
 
-class DiffApp:
-    """What "update from graph" would do: the changes by node, and which cards would lose their target against the new graph."""
+class SaveAppGraph:
+    """Replace the graph an app owns: the graph editor's Save in app mode.
+
+    The graph is the app's own (copied in when the app was made, never linked to the library), so the page, style and description stay
+    as they are; what changes is what the page's cards can still reach, which the answer lists (``orphaned_cards``) so the editor can say
+    so. A changed run (``graph_hash``) makes the next version, as for any other save.
+    """
 
     def __init__(self, library: AppLibrary, resolve: ResolveBoard) -> None:
         self._library = library
         self._resolve = resolve
 
-    def execute(self, name: str, graph: dict) -> AppDiffResult:
+    def execute(self, name: str, graph: dict) -> SaveAppGraphResult:
         clean = _clean_name(name)
         saved = self._library.get(clean)
         if saved is None:
             raise AppNotFoundError(f"no saved app named {clean!r}")
         new = normalize_graph_payload(graph)
-        difference = diff_graphs(saved.doc["graph"], new)
-        resolution = self._resolve.execute(saved.doc, graph=new)
-        return AppDiffResult(
-            added=tuple(difference["added"]), removed=tuple(difference["removed"]), changed=tuple(difference["changed"]),
-            wiring_changed=difference["wiring_changed"], settings_changed=difference["settings_changed"],
+        doc = {**saved.doc, "graph": new}
+        stored, _ = self._library.save(clean, doc, graph_hash=graph_hash(new), description=saved.description)
+        resolution = self._resolve.execute(doc, graph=new)
+        return SaveAppGraphResult(
+            app=to_saved_app_dto(stored),
             orphaned_cards=tuple(b["id"] for b in resolution.blocks if b["status"] not in (STATUS_OK, STATUS_WIRED)),
-            new_version=graph_hash(new) != saved.graph_hash,
         )

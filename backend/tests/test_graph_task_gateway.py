@@ -21,6 +21,8 @@ Run directly: python backend/tests/test_graph_task_gateway.py
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import signal
@@ -98,8 +100,13 @@ def _launch(execution_id: int, nodes: list[dict], *, edges=None,
     )
 
 
+def _uid(name: str) -> str:
+    """A node uid in the form the graph format demands, the same one for the same name."""
+    return "n_" + base64.b32encode(hashlib.md5(name.encode()).digest()).decode("ascii").lower()[:6]
+
+
 def _float_node(node_id: str, value: float) -> dict:
-    return {"id": node_id, "class_name": "FloatConstantNode", "params": {"value": value}}
+    return {"uid": _uid(node_id), "class_name": "FloatNode", "params": {"value": value}}
 
 
 def _collect(
@@ -222,7 +229,7 @@ def test_child_runs_a_graph_end_to_end() -> None:
     # the 1s interval and produced an extra frame, failing a check that
     # had wrongly assumed one. Assert the run's own records in order,
     # and the memory frames separately.
-    run_kinds = [k for k in kinds if k is not EventKind.MEMORY]
+    run_kinds = [k for k in kinds if k not in (EventKind.MEMORY, EventKind.MONITOR)]
     check(
         run_kinds == [EventKind.NODE, EventKind.NODE, EventKind.OUTCOME],
         f"two node records and one outcome, in order (got {kinds})",
@@ -235,12 +242,12 @@ def test_child_runs_a_graph_end_to_end() -> None:
     )
     by_id = {e.payload["node_id"]: e.payload for e in events if e.kind is EventKind.NODE}
     check(
-        by_id["a"]["ok"] and by_id["a"]["outputs"]["value"] == 1.5,
+        by_id[_uid("a")]["ok"] and by_id[_uid("a")]["outputs"]["value"] == 1.5,
         f"the child's first node's real output crossed the process boundary "
-        f"(got {by_id.get('a')})",
+        f"(got {by_id.get(_uid('a'))})",
     )
     check(
-        by_id["b"]["ok"] and by_id["b"]["outputs"]["value"] == 2.5,
+        by_id[_uid("b")]["ok"] and by_id[_uid("b")]["outputs"]["value"] == 2.5,
         "and the second's",
     )
     outcome = next(e for e in events if e.kind is EventKind.OUTCOME)
@@ -292,7 +299,7 @@ def test_child_receives_the_memory_arguments() -> None:
     # count (an interval frame fires whenever this run crossed 1s, which
     # under load it sometimes does).
     check(
-        [k for k in kinds if k is not EventKind.MEMORY]
+        [k for k in kinds if k not in (EventKind.MEMORY, EventKind.MONITOR)]
         == [EventKind.NODE, EventKind.NODE, EventKind.OUTCOME],
         f"and the child still runs the graph to a clean outcome, with the "
         f"backstop case on the start and final frames (got {kinds})",
@@ -465,7 +472,7 @@ def test_a_refused_graph_is_reported_by_the_child() -> None:
     # record either way, which is the part with no in-process equivalent.
     launch = _launch(
         2,
-        [{"id": "bad", "class_name": "FloatConstantNode", "params": {"value": "not a float"}}],
+        [{"uid": _uid("bad"), "class_name": "FloatNode", "params": {"value": "not a float"}}],
     )
     pid = GATEWAY.spawn(launch)
     tail = ExecutionEventTail(launch.event_path)
@@ -487,7 +494,7 @@ def test_a_refused_graph_is_reported_by_the_child() -> None:
         f"(got {outcome.payload if outcome else None}; {_why_silent(launch)})",
     )
     check(
-        "FloatConstantNode" in str(outcome.payload["error"]),
+        "FloatNode" in str(outcome.payload["error"]),
         "naming the node that was wrong, so the message is actionable",
     )
     check(

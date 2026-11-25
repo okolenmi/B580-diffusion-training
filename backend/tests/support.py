@@ -846,8 +846,16 @@ async def _asgi_call(
     header_map.update(extra)
     headers = list(header_map.items())
 
+    sent_request = False
+
     async def receive():
-        return {"type": "http.request", "body": body, "more_body": False}
+        # After the body, a real server blocks here until the client goes away; a response that listens for the disconnect while it
+        # streams (newer Starlette) would otherwise spin on an endless supply of requests.
+        nonlocal sent_request
+        if not sent_request:
+            sent_request = True
+            return {"type": "http.request", "body": body, "more_body": False}
+        await asyncio.Event().wait()
 
     async def send(message):
         if message["type"] == "http.response.start":

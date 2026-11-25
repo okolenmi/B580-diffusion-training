@@ -295,7 +295,7 @@ def resumed_stream():
 
 
 def padding_fill():
-    """Mirror padding reflects the noisy valid block into the padding, changes nothing inside it, and adds no information."""
+    """Mirror padding reflects the noisy valid block into the padding, changes nothing inside it, and adds no information; mirror-signal reflects the clean one."""
     from data.padding import mirror_fill, mirror_index
 
     check(mirror_index(6, 1, 3).tolist() == [2, 1, 2, 3, 2, 1] and mirror_index(5, 1, 1).tolist() == [1] * 5,
@@ -313,6 +313,10 @@ def padding_fill():
     differs_outside = any(not torch.equal(a["x_t"] * (1 - a["valid_mask"]), b["x_t"] * (1 - b["valid_mask"])) for a, b in zip(plain, mirrored))
     check(same_inside and differs_outside and all(torch.equal(a["target"], b["target"]) for a, b in zip(plain, mirrored)),
           "through the batcher, mirroring changes only the padded part of the input (valid part and target are the same)")
+    signal = list(build(tmp / "s", multiple=16, batch_size=3, fill="mirror-signal")[5])
+    inside = all(torch.equal(a["x_t"] * a["valid_mask"], b["x_t"] * b["valid_mask"]) for a, b in zip(plain, signal))
+    strip_differs = any(not torch.equal(a["x_t"] * (1 - a["valid_mask"]), b["x_t"] * (1 - b["valid_mask"])) for a, b in zip(mirrored, signal))
+    check(inside and strip_differs, "mirror-signal leaves the valid part as it is and fills the strip differently from mirror (its noise is its own)")
     raises(ValueError, lambda: build(tmp / "bad", fill="blur"), "an unknown fill is refused", "fill must be")
 
 

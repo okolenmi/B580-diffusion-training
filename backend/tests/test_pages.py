@@ -57,7 +57,6 @@ ASSETS = (
     "/ui/js/datasets/caption_edit.js",
     "/ui/js/datasets/icons.js",
     "/ui/js/graph/app.js",
-    "/ui/js/lib/port_widgets.js",
 )
 
 

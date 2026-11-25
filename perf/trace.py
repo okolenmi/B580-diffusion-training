@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+import torch
 from torch.profiler import ProfilerActivity, profile
 
 from .categories import Categorizer
@@ -48,6 +49,11 @@ class TraceResult:
         return out
 
 
+# Freeing the profiler's event objects has crashed the process now and then (SIGSEGV in pybind11's dealloc of KinetoEvent, torch 2.12 on
+# Python 3.14). A trace belongs to a process that ends soon after it, so the events are simply never freed.
+_KEPT_EVENTS: list = []
+
+
 class KernelTrace:
     """Context manager around ``torch.profiler``. On a device the rows are its kernels; on a CPU they are host operators."""
 
@@ -57,7 +63,10 @@ class KernelTrace:
         self.provenance = provenance
         kind = str(device).split(":")[0]
         activities = [ProfilerActivity.CPU]
-        if kind == "xpu" and hasattr(ProfilerActivity, "XPU"):
+        # An XPU build of torch refuses a CPU-only trace (Kineto: PTI_ERROR_NOT_IMPLEMENTED), so the XPU activity is listed
+        # whenever the build has a device, whichever device is traced.
+        has_xpu = hasattr(ProfilerActivity, "XPU") and hasattr(torch, "xpu") and torch.xpu.is_available()
+        if has_xpu:
             activities.append(ProfilerActivity.XPU)
         self._device_kind = kind
         self._profiler = profile(activities=activities, record_shapes=provenance)
@@ -89,7 +98,9 @@ class KernelTrace:
         if kineto is None:
             return self._collect_averaged()
         try:
-            table = read_events(kineto.events(), keep_raw=self.provenance)
+            events = kineto.events()
+            _KEPT_EVENTS.append(events)  # see _KEPT_EVENTS
+            table = read_events(events, keep_raw=self.provenance)
         except (MemoryError, RuntimeError) as error:  # the profiler's C++ side failed on this window: the slow path has its own copy of the data
             result = self._collect_averaged()
             result.error = f"{type(error).__name__}: {error}"

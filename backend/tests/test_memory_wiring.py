@@ -228,8 +228,9 @@ def test_refused_run_holds_nothing_and_names_the_holder() -> None:
     check(isinstance(held_before, Grant), "fixture: the card is fully held")
     held0 = ledger.held_mb()
 
+    # "parallel" is the mode that never waits: a run that fits only once the holder is done is refused, not queued.
     exc = _refusal(
-        lambda: services.graphs.start_execution.execute(valid_graph()),
+        lambda: services.graphs.start_execution.execute(valid_graph(), mode="parallel"),
         "a run that cannot fit is refused 409",
     )
     if exc is not None:
@@ -257,6 +258,11 @@ def test_refused_run_holds_nothing_and_names_the_holder() -> None:
         services.graphs.list_executions.execute(limit=50).count == 0,
         "a refused run writes no row",
     )
+
+    # The default mode waits instead: the same start is stored as a planned row that holds nothing yet.
+    planned = services.graphs.start_execution.execute(valid_graph())
+    check(planned.status == "planned", f"auto mode plans a run that fits once the holder is done (got {planned.status})")
+    check(ledger.held_mb() == held0, "a planned run holds nothing")
     # Release the fixture claim so this services object ends clean.
     ledger.release("fixture:blocker")
 

@@ -60,36 +60,53 @@ class ImageSheet:
 
 
 class PaddingSheet:
-    """For each sample: where it sits on the canvas, then the same noisy canvas with the strip left as noise (zero padding: the padded part of the clean
-    input is zero, so after noising it is noise alone) and with the strip filled by the reflection of the noisy sample (mirror padding). Pixels stand in
-    for latents; the layout is the same at one eighth the size."""
+    """For each sample: the bucket it lands in, then the same noisy canvas with the strip left as noise (zero padding: the padded part of the clean
+    input is zero, so after noising it is noise alone), with the strip filled by the reflection of the noisy sample (mirror) and with the clean
+    sample reflected and noised on its own (mirror-signal). Pixels stand in for latents; the layout is the same at one eighth the size.
 
-    def __init__(self, canvas: tuple[int, int], sigma: float = 0.6, seed: int = 0, cell: int = 256):
-        self.canvas, self.sigma, self.seed, self.cell = canvas, sigma, seed, cell
+    The picture follows ingestion: the short side is fitted to the canvas and the long side cropped, then the crop is rounded down to a
+    multiple, so the strip is the rounding slack (at most ``multiple - 1`` units a side) and sits at a random place inside it. The padded
+    rectangle is outlined because a strip that thin cannot be seen at this size."""
+
+    def __init__(self, canvas: tuple[int, int], sigma: float = 0.6, seed: int = 0, cell: int = 256, slack: int = 3):
+        self.canvas, self.sigma, self.seed, self.cell, self.slack = canvas, sigma, seed, cell, slack
 
     def place(self, image: Image.Image, rng: random.Random) -> tuple[Tensor, tuple[int, int, int, int]]:
         height, width = self.canvas
-        scale = min(height / image.height, width / image.width, 1.0) * rng.uniform(0.55, 0.9)  # a sample smaller than the canvas, as in a bucket
-        fitted = image.convert("RGB").resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))))
+        h, w = height - rng.randint(0, self.slack), width - rng.randint(0, self.slack)
+        scale = max(h / image.height, w / image.width)  # the short side fits, the long side is cropped
+        fitted = image.convert("RGB").resize((max(w, round(image.width * scale)), max(h, round(image.height * scale))))
+        left, top = (fitted.width - w) // 2, (fitted.height - h) // 2
+        fitted = fitted.crop((left, top, left + w, top + h))
         data = torch.from_numpy(np.asarray(fitted).copy()).permute(2, 0, 1).float() / 255.0
-        h, w = data.shape[-2:]
-        top, left = rng.randint(0, max(height - h, 0)), rng.randint(0, max(width - w, 0))
+        top, left = rng.randint(0, height - h), rng.randint(0, width - w)
         canvas = torch.zeros(3, height, width)
         canvas[:, top:top + h, left:left + w] = data
         return canvas, (top, left, h, w)
 
+    @staticmethod
+    def outlined(picture: Tensor, box: tuple[int, int, int, int]) -> Image.Image:
+        """``picture`` with a thin line around the valid block, so the padded strip can be told from the sample."""
+        image = to_pil(picture)
+        top, left, h, w = box
+        ImageDraw.Draw(image).rectangle((left, top, left + w - 1, top + h - 1), outline=(255, 80, 80))
+        return image
+
     def sheet(self, images: list[Image.Image]) -> ImageSheet:
-        out = ImageSheet((self.cell, self.cell), 3, title=f"zero against mirror padding at noise level {self.sigma} (pixels stand in for latents)")
+        out = ImageSheet((self.cell, self.cell), 4, title=f"padding fills at noise level {self.sigma} (pixels stand in for latents; red: the sample, the rest is padding)")
         rng = random.Random(self.seed)
         generator = torch.Generator().manual_seed(self.seed)
+        shown = lambda t: ((t - 0.5) * 0.5 + 0.5).clamp(0, 1)  # noise around zero shown around grey  # noqa: E731
         for i, image in enumerate(images):
-            clean, (top, left, h, w) = self.place(image, rng)
+            clean, box = self.place(image, rng)
+            top, left, h, w = box
             noise = torch.randn(clean.shape, generator=generator)
-            noisy = (1 - self.sigma) * clean + self.sigma * noise
-            zero = noisy  # the padded part of the clean canvas is zero, so it is noise alone, as in training
-            mirror = mirror_fill(noisy, top, left, h, w)
-            shown = lambda t: ((t - 0.5) * 0.5 + 0.5).clamp(0, 1)  # noise around zero shown around grey  # noqa: E731
-            out.add(clean, f"{i + 1}: clean, on the canvas")
-            out.add(shown(zero), f"{i + 1}: zero padding (strip is noise)")
-            out.add(shown(mirror), f"{i + 1}: mirror padding")
+            fresh = torch.randn(clean.shape, generator=generator)
+            zero = (1 - self.sigma) * clean + self.sigma * noise  # the padded part of the clean canvas is zero, so it is noise alone, as in training
+            mirror = mirror_fill(zero, top, left, h, w)
+            signal = (1 - self.sigma) * mirror_fill(clean, top, left, h, w) + self.sigma * fresh
+            out.add(self.outlined(clean, box), f"{i + 1}: clean, in its bucket")
+            out.add(self.outlined(shown(zero), box), f"{i + 1}: zero padding (strip is noise)")
+            out.add(self.outlined(shown(mirror), box), f"{i + 1}: mirror padding")
+            out.add(self.outlined(shown(signal), box), f"{i + 1}: mirror-signal padding")
         return out

@@ -10,18 +10,22 @@ python -m accept run --out accept --models <models folder> --datasets <datasets 
   --output <output folder> --batch 2 --resolution 512 -- --param buckets.max_shapes=4
 ```
 
-Runs six suites in separate processes (about 34 short runs, an hour or two; finished scenarios are kept, so rerun the same command after a stop) and writes
+Runs six suites in separate processes (about 35 short runs, an hour or two; finished scenarios are kept, so rerun the same command after a stop) and writes
 `accept/verdict.md`: a pass/fail row per check with the reason, LOOK for what needs your eyes. Send `accept/verdict.md` (and the `accept/matrix/*/run.log` of
 anything marked FAIL). `--suites features` (or `speed`, `memory`, `nf4`, `determinism`, `allocator`) runs one suite; `python -m accept list` shows every check.
 
 | suite | covers | what it checks |
 |---|---|---|
-| speed | int8 and native, eager and graph, both int8 gradient paths, attention modes, LoRA in bf16 | every run finishes with a finite loss, int8 saves memory and stays near native graph speed, graph decisions, attention modes beat `math`, losses close |
+| speed | int8 and native, eager and graph, both int8 gradient paths, attention modes, LoRA in bf16 | every run finishes with a finite loss, int8 saves memory and stays near native graph speed, graph decisions, attention modes within their time limits, losses close |
 | memory | one-margin budget at 10240 and 9000 | stays under the limit, uses most of the room, prints its budget |
 | nf4 | NF4 frozen weights | runs, saves memory, loss near int8's |
-| determinism | two runs with the same seed | identical losses and adapter tensors |
+| determinism | two runs with the same seed, saving every 7 steps | identical losses and adapter tensors; a difference names the first save that differs |
 | allocator | expandable segments on and off | the peaks side by side |
-| features | probe and gradient alignment, blend, a 9216 cap without prewarm, three `--set`s at once, a typo in `--set`, mirror against zero padding, int8 with the torch backend, int8 with DoRA | each runs and prints what its item expects |
+| features | probe and gradient alignment, blend, a 9216 cap without prewarm, three `--set`s at once, a typo in `--set`, mirror and mirror-signal against zero padding, int8 with the torch backend, int8 with DoRA | each runs and prints what its item expects |
+
+Passed on 2026-11-24 (memory, nf4, features, allocator; results in `docs/internals/acceptance-lab.md`): rerun only to recheck after a change. Still open from that run:
+**determinism** (run `--suites determinism` twice; a FAIL now says at which save the runs part ways, send that line and both `run.log`) and **speed** (the two attention limits were changed;
+a rerun of `--suites speed` should be green). If a scenario dies with SIGSEGV near the end of its profile, send the core backtrace line and rerun; the profiler no longer frees its events.
 
 For speed numbers with power and a kernel profile (not pass/fail): `python -m perf hwcheck --out perf-bundle ...` as in `docs/manual/performance.md`.
 
@@ -42,31 +46,24 @@ On a dataset where some images have no caption: `--auto-caption --set autocaptio
 Pass: captions written, resumed, no memory left behind. Fail: paste the console lines.
 
 ## 17. Mirror padding: compare two LoRAs
-Two full runs with the same seed, dataset and settings (packing on, `--max-shapes` as you like): one with `--pad-fill zero`, one with `--pad-fill mirror`.
-- Quick check first (20 steps of each): both run, speed and peak are the same.
-- Full runs: compare the loss curves (mirror should not be lower by a suspicious amount at high noise) and, more importantly, generations from both LoRAs with the same prompts and seeds. Look at borders/edges, symmetry artifacts, and style strength.
+Three full runs with the same seed, dataset and settings (packing on, `--max-shapes` as you like): `--pad-fill zero`, `--pad-fill mirror` and `--pad-fill mirror-signal` (the strip holds the reflected *clean* sample, noised on its own). With the trainer's defaults padding is small (3 % of a canvas on average), so use `--param buckets.max_shapes=4` to make it matter.
+- The quick check (cost and start) passed in the features suite: mirror x0.99 of zero. Only the full runs are left.
+- Full runs: compare the loss curves (a padded arm should not be lower by a suspicious amount at high noise) and, more importantly, generations from the LoRAs with the same prompts and seeds. Look at borders/edges, symmetry artifacts, and style strength.
 - With a low `--pack` (0.1) the difference should shrink; with a higher one (0.5) it should grow, which tells you padding matters on your data.
+- A symmetry measure helps: the correlation of each generation with its horizontal flip, averaged over about 20 seeds, should be higher for an arm that learned a reflection prior.
 Pass: you pick a default; tell me which, and I will set it.
 
-## 18. Epochs
-Run `--epochs 2 --save-every-epoch 1 --save-every 100000` on a small dataset.
-- Step lines show `epoch 1`, then `epoch 2`; the last step of each says `epoch N end`.
-- The run stops after the second epoch (no step limit given); an adapter file is saved at each epoch end (its step number is the epoch's last step).
-- `--epochs 3 --steps 10` stops at 10 steps. A cosine schedule node with an empty `total_steps` decays over the whole run.
-Pass: all of the above.
-
-## 21. Experiment: kernel compile cache between runs
-You saw a default run after a graph run start with almost no new-shape penalty, and the next run slow again. The driver keeps a compiled-kernel cache on disk that may fill up and evict.
-Try `NEO_CACHE_MAX_SIZE=4294967296` (4 GB) before two default runs in a row, and compare the first-sighting step times (`[... new]` markers) of the second run with a run without it.
-Pass: tell me whether first sightings of shapes are faster on the second run. No fix needed either way.
+## 18. Epochs: the one bullet left
+A cosine schedule node with an empty `total_steps` in a run with `--epochs 2` must decay over the whole run (edit the schedule node in the graph). The rest of the item passed.
 
 ## 29. NF4 frozen weights
-First, no training: `python -m accept quant-probe --models <models> --file <checkpoint> --precision nf4 int8 --resolution 512 --out probe` (needs the card; each precision loads the checkpoint again). Send `probe/quant-nf4.md` and `quant-int8.md`: the whole-network error and the table by region show where the quantization hurts (the worst block is named). Then training: `--param adapter.base_precision=nf4` (once with `--param adapter.nf4_double_quant=true`), eager and `--set trainer.graph=true`, short run with `--perf`: step time, peak memory, the `quantization` line (layers and MB saved), and the loss over 100 steps against native and int8.
+First, no training (it ran out of memory on 2026-11-24, since fixed: gradients of the dense weights are no longer kept and the cache is emptied between the phases; if it still fails, send the traceback and say whether it died in the dense or the NF4 phase): `python -m accept quant-probe --models <models> --file <checkpoint> --precision nf4 int8 --resolution 512 --out probe` (needs the card; each precision loads the checkpoint again). Send `probe/quant-nf4.md` and `quant-int8.md`: the whole-network error and the table by region show where the quantization hurts (the worst block is named). The training side passed in the nf4 suite (662 layers, 3012 MB saved, peak 3154 MB, loss equal to int8's); what is left: `--param adapter.base_precision=nf4` (once with `--param adapter.nf4_double_quant=true`), eager and `--set trainer.graph=true`, short run with `--perf`: step time, peak memory, the `quantization` line (layers and MB saved), and the loss over 100 steps against native and int8.
 Known risks: the fused dequantizer's first call verifies itself (a few seconds, once); `xpu-kernels` older than 0.3 has no NF4 kernel and `auto` then uses the slow torch chain (a warning says so).
-Pass: no out of memory at a batch or resolution that int8 cannot hold; loss within the noise of int8's at the same seed.
+Pass: the probe finishes and its tables look sane; no out of memory at a batch or resolution that int8 cannot hold; loss within the noise of int8's at the same seed over 100 steps.
 
-## 30. Padding decision by eye (mirror against zero)
-`python -m accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`, then look at `sheet.png`: per sample, the clean placement, zero padding (the strip is noise alone after noising) and mirror padding (a reflection of the noisy sample). Tell me which you would train on; the default stays zero until you say.
+## 30. Padding decision by eye (zero, mirror, mirror-signal)
+The sheet was reworked after the first look: it now draws the real bucket (short side fitted, long side cropped, only the rounding slack padded, the sample outlined in red) with four panels per sample: clean, zero, mirror, mirror-signal.
+`python -m accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`; also `--sigma 0.2` for a lower-noise copy. Look at both and tell me whether the panels say anything about which fill you would train on; the default stays zero until item 17 says otherwise.
 
 ## 61. Continue your best adapter (about 1.5 hours)
 Put your saved adapter (batch 1, lr 2e-4, 600 steps) into `lab-setup.json` under `loras` as `best`. The template renders it as it is and continues it three ways with a new `--init-adapter` option: 300 more steps at 2e-4, 300 at 5e-5, 600 at 2e-4 (fresh optimizer, 50 step warmup, no region ladder).
@@ -152,9 +149,6 @@ python -m lab run resume.json
 ```
 The lab trains `full-a`, then trains `cut-400` up to step 400 and **stops itself** (state saved, nothing left running). Start the same `python -m lab run resume.json` again: it continues `cut-400` as a new lab and a new process (close the window first; reboot if you want it as hard as the power cut). It stops once more at `cut-det-400`; start it again. After that the rest trains and the pictures are made. Arms: `full-a`, `full-b` and `cut-400` are ordinary runs (`full-a` repeats the anchor baseline); `full-det-a`, `full-det-b` and `cut-det-400` are the same with deterministic kernels. Drop `full-b` or the `-det` arms from the file if time is short, but keep `full-det-b`: without it a difference of `cut-det-400` proves nothing.
 Send the zip. How to read it: the report's table of adapters against the first arm. Deterministic arms must read `yes` between themselves (the two full ones first: if they differ, the kernels are not deterministic on the card and the cut test says nothing). If `cut-400` is no farther from `full-a` than `full-b` is, a restart changes nothing the ordinary noise does not. Also look at the pictures of the ordinary and the deterministic arms side by side on every prompt: in the first try the deterministic ones looked better on most images, which, if it holds at 600 steps, says the kernels' noise costs quality.
-
-## 28. Chunked attention, memory side
-`--set trainer.graph=true --param trainer.graph_attention=chunked_bf16` against `math_bf16` at 1024 px: the step peak should be lower with `chunked_bf16` (the speed and loss sides are in the `speed` suite).
 
 ## 81. Can two processes share weights on the card? (`python -m perf ipc`)
 Run `python -m perf ipc --out perf-ipc` on the B580 with nothing else using the card (a few minutes) and send `perf-ipc/ipc.md`. It answers the gates of `docs/internals/parallel-runs.md`: what this torch and driver offer for sharing, whether a device tensor can be handed to another process (G1), used there (G2), and what the borrower sees when the owner frees it (G3); what two processes on one card cost each other (G4, needs no sharing); how long park and reload of 1 GB takes (G5). A failure is an answer, not a bug: it decides whether the shared-weights route is built or parallel runs stay on separate copies. If a gate hangs the card or the driver, say which one.

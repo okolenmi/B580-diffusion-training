@@ -6,8 +6,10 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from torch import Tensor
+if TYPE_CHECKING:  # the server reaches this module through the artifact folder and has no torch
+    from torch import Tensor
 
 
 @dataclass(frozen=True)
@@ -37,8 +39,6 @@ class Image:
     recipe: Recipe
     pixels: Tensor  # (3, H, W) uint8
     meta: dict = field(default_factory=dict)
-
-
 
 
 class ImageStore:

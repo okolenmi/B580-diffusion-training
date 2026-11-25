@@ -305,10 +305,12 @@ def visual_aids():
     padding = PaddingSheet((64, 80), sigma=0.6, seed=3)
     images = [Image.fromarray((torch.rand(40, 60, 3) * 255).byte().numpy()) for _ in range(2)]
     result = padding.sheet(images)
-    check(len(result.items) == 6 and [c.split(": ")[1].split(" (")[0] for _, c in result.items[:3]] == ["clean, on the canvas", "zero padding", "mirror padding"], "three pictures per sample")
+    check(len(result.items) == 8 and [c.split(": ")[1].split(" (")[0] for _, c in result.items[:4]] == ["clean, in its bucket", "zero padding", "mirror padding", "mirror-signal padding"],
+          "four pictures per sample")
     import random
     clean, (top, left, h, w) = padding.place(images[0], random.Random(3))
-    check(clean.shape == (3, 64, 80) and h <= 64 and w <= 80 and float(clean[:, :top].abs().sum()) == 0.0 and float(clean[:, top:top + h, left:left + w].abs().sum()) > 0, "a sample is placed on a blank canvas")
+    check(clean.shape == (3, 64, 80) and 61 <= h <= 64 and 77 <= w <= 80 and float(clean[:, :top].abs().sum()) == 0.0 and float(clean[:, top:top + h, left:left + w].abs().sum()) > 0,
+          "a sample fills its bucket but for the rounding slack")
 
 
 def numerics_suite() -> None:

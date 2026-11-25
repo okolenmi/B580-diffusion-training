@@ -23,6 +23,7 @@ from pathlib import Path
 import starters
 from starters import AnimaLoraOptions, SdxlLoraOptions
 from console import Console, NodeTrace
+from data.padding import FILLS
 from data.store import DatasetStore
 from engine.devices import Accelerator, resolve_device
 from engine.xpu_env import set_perf_env
@@ -232,8 +233,9 @@ def _parser() -> argparse.ArgumentParser:
                            help="most distinct padded shapes the model will see (0 = no limit); each new shape costs seconds and driver memory")
             p.add_argument("--batch-area", type=float, default=DEFAULTS.batch_area,
                            help="a batch holds at most batch size times this many base-resolution areas in total (e.g. 1.5), so bigger samples run in smaller batches; 0 = no limit")
-            p.add_argument("--pad-fill", dest="fill", default=DEFAULTS.fill, choices=("zero", "mirror"),
-                           help="what the padded part of the network input holds: a blank strip, or a reflection of the sample's own noisy input")
+            p.add_argument("--pad-fill", dest="fill", default=DEFAULTS.fill, choices=FILLS,
+                           help="what the padded part of the network input holds: a blank strip (zero), a reflection of the sample's own noisy input (mirror), "
+                                "or a reflection of the clean sample noised separately (mirror-signal)")
             p.add_argument("--pack", type=float, default=DEFAULTS.pack,
                            help="fill short batches by moving left-over samples into larger shapes when no sample is more than this share padding; 0 = off")
             p.add_argument("--graph", action="store_true", help="replay forward and backward from captured device graphs (XPU; needs no dropout, no fused optimizer)")

@@ -39,7 +39,8 @@ class BucketerNode(Node):
         "fill": Port("fill", str, required=False, default="zero", choices=FILLS,
                      doc="What the padded part of the input holds. zero: a blank strip (noised like the rest). mirror: a reflection of the "
                          "sample's own noisy input, so normalisation and attention see image-like content; it adds no information. "
-                         "The loss ignores the padding in both cases.", group="padding"),
+                         "mirror-signal: a reflection of the clean sample, noised on its own, so the strip is image-like but not a copy of the noise. "
+                         "The loss ignores the padding in every case.", group="padding"),
         "keep_incomplete": Port("keep_incomplete", bool, required=False, default=False,
                                 doc="Train on a short last batch of a group instead of dropping it (when shuffling).", group="batches"),
     }

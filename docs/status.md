@@ -1,6 +1,6 @@
 # Status
 
-The single place that says what exists. Last checked against the code on 2026-11-19.
+The single place that says what exists. Last checked against the code on 2026-11-25.
 Hardware results are not guessed here: `TESTING.md` (root) lists what still has to run on the B580, and every lever in `manual/` carries
 `verified` or `untested`.
 
@@ -35,6 +35,8 @@ Hardware results are not guessed here: `TESTING.md` (root) lists what still has 
 - Custom kernels for the frozen-weight path beyond what `xpu-kernels` provides (`internals/kernels.md`, `internals/capturable-attention.md`).
 
 ## Waiting on hardware
+
+First acceptance run on the card: `internals/acceptance-lab.md`, "First run on the card" (memory, nf4, features pass; determinism diagnostics, the quantization probe and the padding comparison are waiting for a retest).
 
 `TESTING.md`: item 94 first (does the swapped tree start and train), then the older experiment items. On a machine without the card the suites
 that cannot pass are the ones needing Python 3.14 or an XPU (`test_environment_port`, `test_event_contract`, `test_graph_task_gateway`,

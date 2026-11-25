@@ -3,7 +3,8 @@
 Zero padding (the default) leaves a blank strip that the network's normalisation and attention see but that never
 exists when generating. Mirror padding fills it with a reflection of the sample's own noisy input, so the strip
 looks like image content and adds no information: it is the same noisy values as the ones it copies, not a second
-noise draw of the same picture. The loss mask excludes the padded part either way.
+noise draw of the same picture. Mirror-signal fills it with a reflection of the clean sample, then noises it like the rest: the strip looks
+like image content but carries its own noise, so it is not a copy of the noise field. The loss mask excludes the padded part in every case.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from __future__ import annotations
 import torch
 from torch import Tensor
 
-FILLS = ("zero", "mirror")
+FILLS = ("zero", "mirror", "mirror-signal")
 
 
 def mirror_index(size: int, start: int, length: int) -> Tensor:

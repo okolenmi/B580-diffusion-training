@@ -219,11 +219,20 @@ class AdaptersIdentical(Check):
         files = [r.files(self.pattern) for r in runs]
         if not all(files):
             return self.result(Status.SKIP, "a run saved no adapter file")
-        a, b = load_file(str(files[0][-1])), load_file(str(files[1][-1]))
-        if a.keys() != b.keys():
-            return self.result(Status.FAIL, "the adapter files hold different keys")
-        different = [k for k in a if not (a[k].shape == b[k].shape and bool((a[k] == b[k]).all()))]
-        return self._passes(not different, f"{len(a)} tensors, all exactly equal", lambda: f"{len(different)} of {len(a)} tensors differ, e.g. {different[0]}")
+        by_name = [{f.name: f for f in found} for found in files]
+        names = sorted(set(by_name[0]) & set(by_name[1]))
+        if not names:
+            return self.result(Status.FAIL, "the two runs saved no adapter file with the same name")
+        for name in names:  # earliest step first: where two runs part ways says more than the last file does
+            a, b = load_file(str(by_name[0][name])), load_file(str(by_name[1][name]))
+            if a.keys() != b.keys():
+                return self.result(Status.FAIL, f"{name}: the adapter files hold different keys")
+            different = [k for k in a if not (a[k].shape == b[k].shape and bool((a[k] == b[k]).all()))]
+            if different:
+                worst = max(float((a[k].float() - b[k].float()).abs().max()) for k in different)
+                return self.result(Status.FAIL, f"first difference in {name}: {len(different)} of {len(a)} tensors differ (largest {worst:.1e}), e.g. {different[0]}; "
+                                                f"{names.index(name)} earlier file(s) were equal")
+        return self.result(Status.PASS, f"{len(names)} adapter file(s), all tensors exactly equal")
 
 
 @dataclass

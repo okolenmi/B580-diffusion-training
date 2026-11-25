@@ -58,13 +58,13 @@ class SuiteBook:
             GraphDecided("int8 graph decision", (INT8_G,), expect="kept", reason="measured: int8 replay kept with a small gain"),
             GraphDecided("native graph decision", (NATIVE_G,), expect="any", reason="measured: dropped with the math attention; the bf16 attention modes may change it"),
             StepTimeWithin("dense gradient path no slower than int8", (INT8_G, "int8 dx-int8 graph"), 1.02, skip, reason="measured: the int8 input gradient is 4% slower in a graph, so the default stays dense"),
-            StepTimeWithin("math_bf16 attention beats math in a graph", ("native graph attention-math_bf16", NATIVE_G), 1.0, skip, reason="TESTING 28"),
-            StepTimeWithin("chunked_bf16 attention within 25% of math in a graph", ("native graph attention-chunked_bf16", NATIVE_G), 1.25, skip, reason="measured: 15% slower; it exists to save memory at large sizes, not time"),
+            StepTimeWithin("math_bf16 attention within 15% of the default in a graph", ("native graph attention-math_bf16", NATIVE_G), 1.15, skip, reason="measured: 9% slower than the default fused kernel at 512 px, batch 2; it beat the old math default, not the fused kernel"),
+            StepTimeWithin("chunked_bf16 attention within 75% of the default in a graph", ("native graph attention-chunked_bf16", NATIVE_G), 1.75, skip, reason="measured: 49-60% slower at 512 px, batch 2, 66% at 1024 px; it exists to save memory (2.4 GB at 1024 px), not time"),
             StepTimeWithin("lora in the activation dtype not slower than float32 (eager)", ("native eager lora-activation", NATIVE), 1.04, skip, reason="eager steps vary by about 3% between identical runs"),
             StepTimeWithin("lora in the activation dtype not slower than float32 (math_bf16 graph)", ("native graph attention-math_bf16 lora-activation", "native graph attention-math_bf16"), 1.04, skip, reason="graph steps vary by about 5% between identical runs"),
             LossCurveClose("lora activation loss close to float32 (eager)", ("native eager lora-activation", NATIVE), 0.05, 10, reason="the low-rank intermediate and factor gradients are rounded to bf16"),
             LossCurveClose("int8 loss close to native", (INT8, NATIVE), 0.15, 10, reason="the int8 network is not the native one; a wide band catches divergence, not noise"),
-            LossCurveClose("chunked_bf16 loss close to math", ("native graph attention-chunked_bf16", NATIVE_G), 0.10, 10, reason="TESTING 28: scores rounded to bf16"),
+            LossCurveClose("chunked_bf16 loss close to math", ("native graph attention-chunked_bf16", NATIVE_G), 0.10, 10, reason="scores rounded to bf16"),
         ]
         return Suite("speed", "Speed of native, int8, graph and attention modes", "23, 25, 26, 28", scenarios, checks)
 
@@ -103,7 +103,7 @@ class SuiteBook:
         return Suite("nf4", "NF4 frozen weights", "29", scenarios, checks)
 
     def determinism(self) -> Suite:
-        det = ("--set", "runtime.deterministic=true", "--output", "{folder}/out")
+        det = ("--set", "runtime.deterministic=true", "--save-every", "7", "--output", "{folder}/out")  # several files: the first one that differs dates the divergence
         scenarios = [_extra("deterministic a", self.window, *det), _extra("deterministic b", self.window, *det)]
         checks: list[Check] = [RunFinished(f"{s.name} finished", (s.name,)) for s in scenarios]
         checks += [LossCurveClose("same losses", ("deterministic a", "deterministic b"), 0.0, 1000, reason="TESTING 22: bit-identical runs"),
@@ -133,6 +133,7 @@ class SuiteBook:
             run("setting typo", "--set", "trainr.graph=true", exit_code=1),
             run("pad zero", "--pad-fill", "zero"),
             run("pad mirror", "--pad-fill", "mirror"),
+            run("pad mirror-signal", "--pad-fill", "mirror-signal"),
             run("int8 torch backend", *int8, "--param", "adapter.int8_backend=torch"),
             run("int8 dora", *int8, "--param", "adapter.kind=dora"),
         ]
@@ -149,6 +150,7 @@ class SuiteBook:
             LinesAbsent("the typo stops before training", ("setting typo",), r"^step 1/", "TESTING 20"),
             PeakBelow("cap 9216 holds", ("cap 9216 no prewarm",), 9216, "device_mb", "TESTING 11"),
             StepTimeWithin("mirror padding costs about the same as zero", ("pad mirror", "pad zero"), 1.10, 10, reason="measured: 4-6% (the reflection is built per sample)"),
+            StepTimeWithin("mirror-signal padding costs about the same as zero", ("pad mirror-signal", "pad zero"), 1.10, 10, reason="the reflection is built per sample, before noising"),
             LinesPresent("int8 summary line (kernels)", (INT8,), r"int8 base weights \(xpu_kernels\): \d+ layers", 1, "TESTING 23"),
             LinesPresent("int8 summary line (torch)", ("int8 torch backend",), r"int8 base weights \(torch\): \d+ layers", 1, "TESTING 23"),
             LinesPresent("int8 torch backend warns", ("int8 torch backend",), r"plain-torch", 1, "TESTING 23"),

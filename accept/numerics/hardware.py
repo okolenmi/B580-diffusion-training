@@ -153,6 +153,8 @@ class OpRepeatability(NumericCheck):
         """Gemms with a long reduction axis: a library may split it across work groups and add the parts atomically, which is not repeatable."""
         from .model import deterministic_algorithms
 
+        if ctx.device.type == "cpu":  # a host gemm does not split its reduction across work groups, and these sizes take hours there
+            return [self.skip("long reductions", "this is a CPU: the check is about device libraries splitting a reduction")]
         gen = torch.Generator().manual_seed(4)
         found = []
         for m, k, n in self.LONG:

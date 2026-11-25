@@ -178,6 +178,10 @@ class Batcher:
             true_sizes.append((h * self._factor, w * self._factor))
             placed.append((top, left, h, w))
             valid[k, :, top:top + h, left:left + w] = 1.0
+        if self.fill == "mirror-signal":  # reflected before noising: the strip gets noise of its own
+            for k, (top, left, h, w) in enumerate(placed):
+                if (h, w) != (height, width):
+                    x0[k] = mirror_fill(x0[k], top, left, h, w)
         copies = self.noiser.regions_at(first + index) if len(ids) else 1
         if copies > 1:  # one copy of the images per region, region by region
             x0, valid, true_sizes, placed, ids = x0.repeat(copies, 1, 1, 1), valid.repeat(copies, 1, 1, 1), true_sizes * copies, placed * copies, ids * copies

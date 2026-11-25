@@ -7,10 +7,12 @@ the difference over norm of the reference, so layers and regions compare with ea
 
 from __future__ import annotations
 
+import gc
 import statistics
 from dataclasses import dataclass, field
 from collections.abc import Callable
 
+import torch
 from torch import Tensor, nn
 
 from families.general.adapters.layers import AdaptedLinear
@@ -86,9 +88,30 @@ class QuantizationProbe:
         return errors
 
     def _record(self, model: nn.Module, run_model) -> tuple[Recording, Tensor, Tensor]:
-        with BlockRecorder(model, self.select, self.limit_mb) as recorder:
-            output, grad = run_model(model)
-        return recorder.recording, output.detach().float().cpu(), grad.detach().float().cpu()
+        # Only the gradient arriving at activations is compared. Weight gradients of a whole dense UNet would take as much memory as the
+        # weights themselves, which is what the conversion that follows needs.
+        trainable = [p for p in model.parameters() if p.requires_grad]
+        for p in trainable:
+            p.requires_grad_(False)
+        try:
+            with BlockRecorder(model, self.select, self.limit_mb) as recorder:
+                output, grad = run_model(model)
+            result = recorder.recording, output.detach().float().cpu(), grad.detach().float().cpu()
+        finally:
+            for p in trainable:
+                p.requires_grad_(True)
+        del output, grad
+        self._release_cache()
+        return result
+
+    @staticmethod
+    def _release_cache() -> None:
+        """Activations of the backward pass are freed, but the allocator keeps their blocks; the converted weights need that room."""
+        gc.collect()
+        for name in ("xpu", "cuda"):
+            backend = getattr(torch, name, None)
+            if backend is not None and backend.is_available():
+                backend.empty_cache()
 
     def run(self, model: nn.Module, quantizer: FrozenQuantizer, run_model, *, precision: str,
             convert: Callable[[nn.Module], QuantizeReport] | None = None) -> ProbeResult:

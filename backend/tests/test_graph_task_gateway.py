@@ -85,7 +85,7 @@ def _launch(execution_id: int, nodes: list[dict], *, edges=None,
     """Write a graph to disk and return the launch describing it."""
     graph = TMP / f"graph_{execution_id}.json"
     graph.write_text(
-        json.dumps({"format": 1, "nodes": nodes, "edges": edges or []}),
+        json.dumps({"format": 3, "nodes": nodes, "edges": edges or []}),
         encoding="utf-8",
     )
     return GraphTaskLaunch(

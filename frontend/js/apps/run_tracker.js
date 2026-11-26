@@ -17,6 +17,7 @@ export class RunTracker {
     this.execution = null; // {execution_id, status, started_at, finished_at, error, done, total}
     this.runs = null;      // {history: this app's runs, planned: every run waiting for memory}, newest first; null before the first answer
     this.pollTimer = 0;
+    this.refreshTimer = 0; // while this app has a run waiting and none is followed: look again, the waiting run starts a moment after the last one ends
   }
 
   get active() { return !!this.execution && ACTIVE.has(this.execution.status); }
@@ -71,6 +72,9 @@ export class RunTracker {
       if (next && !this.active) {
         this.execution = { ...next, done: 0, total: 0 };
         this.schedulePoll(0);
+      } else if (!this.active && this.runs.history.some((r) => r.status === "planned")) {
+        clearTimeout(this.refreshTimer);
+        this.refreshTimer = setTimeout(() => this.refresh(), 1500);
       }
     } catch (err) {
       this.notify(`Could not read the run list: ${errText(err)}`, "warn");

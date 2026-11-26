@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 
 from graph import (diagnose_node, Edge, EpochEnding, EventHub, EventIn, EventOut, GraphDoc, GraphFormatError, GraphRunner,
                      Node, NodeRegistry, NodeSpec, Port, build_catalog, parse, resolve_node)
@@ -172,6 +173,8 @@ def running():
     states = [f["state"] for s, f in frames.frames if f.get("kind") == "node_state"]
     runs = [f["state"] for s, f in frames.frames if f.get("kind") == "run"]
     check(states == ["running", "done"] and runs == ["run_started", "run_finished"], f"state frames {states} {runs}")
+    stamps = [f["t"] for s, f in frames.frames if "t" in f]
+    check(stamps and all(abs(t - time.time()) < 60 for t in stamps), "run frames carry the wall clock, the base of the memory readings on the same stream")
     check(r.run(doc([("ConstNode", {})]), cancel_event=threading.Event()).results[0].duration_ms >= 0, "durations recorded")
     # stop handling
     plain = doc([("TrainerLikeNode", {"steps": 5, "cancel_at": 2})])

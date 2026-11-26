@@ -20,7 +20,8 @@ Frame on stream `graph:run` for every transition:
 `detail` may carry `progress` (0..1), `message`, `duration_ms`, `error`.
 
 Run frames: `run_started`, `run_finished`, `run_failed`, `run_stopped` as
-`{"kind":"run","state":"...","t":...,"error":null}`.
+`{"kind":"run","state":"...","t":...,"error":null}`. `t` is the wall clock in seconds (Unix time), the same base as the memory readings that share the
+stream; a chart shows seconds since its first frame.
 
 ## Step report
 

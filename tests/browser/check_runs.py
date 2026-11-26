@@ -69,6 +69,19 @@ def status_and_files(server, browser):
     return page
 
 
+def charts_after_a_run(server, browser):
+    """Every chart on the Charts tab has a sane x range: seconds since the run began, never an epoch or a negative number."""
+    page = browser.new_page()
+    page.goto("/apps/short")
+    page.page.wait_for_selector("#btn-run")
+    page.page.wait_for_timeout(800)
+    open_tab(page, "Charts")
+    page.page.wait_for_timeout(1500)
+    ranges = page.page.evaluate("() => [...document.querySelectorAll('#board article.bd-block')].map(a => [a.querySelector('.bd-title')?.textContent.trim(), (a.innerText.match(/\\bt (-?[\\d.]+)\\u2013(-?[\\d.]+)/) || [])[2]]).filter(r => r[1] !== undefined)")
+    check(len(ranges) >= 1, f"a chart drawn against time is on the page ({[r[0] for r in ranges]})")
+    check(all(0 <= float(r[1]) < 3600 for r in ranges), f"their x ranges are seconds of the run ({[(r[0], r[1]) for r in ranges]})")
+
+
 def run_history_and_run_again(server, browser):
     page = browser.new_page()
     page.goto("/apps/short")
@@ -157,7 +170,7 @@ def host_memory_ceiling(server, browser):
 def main():
     with TestServer() as server, Chromium(server.url) as browser:
         running = None
-        for part in (status_and_files, run_history_and_run_again, save_now_and_stop, host_memory_ceiling):
+        for part in (status_and_files, charts_after_a_run, run_history_and_run_again, save_now_and_stop, host_memory_ceiling):
             print(f"\n{part.__name__}")
             try:
                 running = part(server, browser) or running

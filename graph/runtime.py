@@ -161,8 +161,10 @@ class GraphRunner:
             return False
         return all(e.from_node in outputs_by for e in edges_in)
 
-    def _state(self, uid: str, state: str, t0: float, detail: dict) -> None:
-        frame = {"kind": "node_state", "uid": uid, "state": state, "t": round(time.monotonic() - t0, 4),
+    # Frames carry the wall clock: this stream also carries the memory readings, which are stamped with it by the process that took them,
+    # and a chart draws one x axis from all the frames of a stream.
+    def _state(self, uid: str, state: str, detail: dict) -> None:
+        frame = {"kind": "node_state", "uid": uid, "state": state, "t": round(time.time(), 4),
                  "detail": detail}
         if self.reporter is not None:
             self.reporter.report(RUN_STREAM, frame)
@@ -179,8 +181,8 @@ class GraphRunner:
             except Exception:  # noqa: BLE001
                 logger.exception("observer.node_done failed")
 
-    def _run_frame(self, state: str, error: str | None, t0: float) -> None:
-        frame = {"kind": "run", "state": state, "t": round(time.monotonic() - t0, 4), "error": error}
+    def _run_frame(self, state: str, error: str | None) -> None:
+        frame = {"kind": "run", "state": state, "t": round(time.time(), 4), "error": error}
         if self.reporter is not None:
             self.reporter.report(RUN_STREAM, frame)
         if self.observer is not None:
@@ -196,7 +198,6 @@ class _Execution:
     def __init__(self, runner: GraphRunner, doc: GraphDoc, validation: Validation, cancel: threading.Event) -> None:
         self.runner, self.doc, self.validation, self.cancel = runner, doc, validation, cancel
         self.classes, _ = runner.registry.load()
-        self.t0 = time.monotonic()
         order = validation.order or []
         self.hub = EventHub(runner.reporter, ranks={uid: i for i, uid in enumerate(order)})
         self.hub.set_stop_callback(lambda ev: cancel.set())
@@ -228,7 +229,7 @@ class _Execution:
         return True
 
     def announce(self, state: str) -> None:
-        self.runner._run_frame(state, self.error, self.t0)
+        self.runner._run_frame(state, self.error)
 
     def execute(self, uid: str) -> bool:
         """Build one node; False when the run has to stop here (the node failed)."""
@@ -239,12 +240,12 @@ class _Execution:
         if self.cancel.is_set():
             self.hub.mark_stopped()
             if not runner._runs_after_stop(cls, edges_in, upstream, self.outputs_by):
-                runner._state(uid, "skipped", self.t0, {})
+                runner._state(uid, "skipped", {})
                 self.results.append(NodeResult(uid, True, {}, None, 0.0, "skipped"))
                 return True
         inputs, addon_wired, slot_wired = runner._gather(self.doc, uid, self.validation, self.outputs_by)
         node_context = self.context.scoped(uid, cls.READS_SETTINGS, cls.__name__, upstream)
-        runner._state(uid, "running", self.t0, {})
+        runner._state(uid, "running", {})
         started = time.monotonic()
         try:
             node = cls(node_context)
@@ -261,7 +262,7 @@ class _Execution:
             message = f"{type(exc).__name__}: {exc}"
             result = NodeResult(uid, False, {}, message, (time.monotonic() - started) * 1000, "failed")
             self.results.append(result)
-            runner._state(uid, "failed", self.t0, {"error": message})
+            runner._state(uid, "failed", {"error": message})
             runner._done(result)
             self.error = message
             return False
@@ -270,7 +271,7 @@ class _Execution:
         self.completion_by[uid] = node_context.reported_completion or node_context.any_upstream_unfinished() or COMPLETE
         result = NodeResult(uid, True, {k: describe(v) for k, v in outputs.items()}, None, duration, "done")
         self.results.append(result)
-        runner._state(uid, "done", self.t0, {"duration_ms": round(duration, 1)})
+        runner._state(uid, "done", {"duration_ms": round(duration, 1)})
         runner._done(result)
         return True
 

@@ -87,9 +87,10 @@ class TestServer:
                 time.sleep(0.3)
         raise RuntimeError(f"the server did not answer in {self.startup_seconds:.0f} s:\n{self.log_tail()}")
 
-    def stop(self) -> None:
+    def stop(self, *, keep_runs: bool = False, sig: int = signal.SIGTERM) -> None:
+        """Stops the server; ``keep_runs`` leaves the graph children alive (they have sessions of their own), ``sig`` SIGKILL is a crash."""
         if self.process:
-            for sig in (signal.SIGTERM, signal.SIGKILL):
+            for sig in (sig, signal.SIGKILL):
                 try:
                     os.killpg(self.process.pid, sig)
                 except ProcessLookupError:
@@ -103,7 +104,8 @@ class TestServer:
                 os.killpg(self.process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-        self._kill_graph_children()
+        if not keep_runs:
+            self._kill_graph_children()
         self.process = None
 
     def _kill_graph_children(self) -> None:
@@ -117,9 +119,18 @@ class TestServer:
                 except ProcessLookupError:
                     pass
 
-    def restart(self) -> None:
-        self.stop()
+    def restart(self, **how) -> None:
+        self.stop(**how)
         self.start()
+
+    def children(self) -> list[int]:
+        marker = str(self.home)
+        found = []
+        for line in subprocess.run(["ps", "-eo", "pid,args"], capture_output=True, text=True).stdout.splitlines()[1:]:
+            pid, _, args = line.strip().partition(" ")
+            if "graph_task_worker" in args and marker in args:
+                found.append(int(pid))
+        return found
 
     def log_tail(self, lines: int = 25) -> str:
         try:

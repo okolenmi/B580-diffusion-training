@@ -52,6 +52,7 @@ class TestServer:
         self.port = free_port()
         self.process: subprocess.Popen | None = None
         self.log_path = self.home / "server.log"
+        self._artifacts_before: set[str] = set()
 
     @property
     def url(self) -> str:
@@ -68,6 +69,9 @@ class TestServer:
         return env
 
     def start(self) -> None:
+        folder = ROOT / "artifacts"  # run products land in the project's artifacts folder; what this server adds is removed on stop
+        if not self.process and folder.is_dir():
+            self._artifacts_before = {p.name for p in folder.iterdir()}
         log = open(self.log_path, "ab")
         self.process = subprocess.Popen([sys.executable, "-m", "backend.cli", "--port", str(self.port), "--db", str(self.home / "backend.db")],
                                         cwd=ROOT, env=self.environment(), stdout=log, stderr=subprocess.STDOUT,
@@ -158,4 +162,10 @@ class TestServer:
         if datasets.is_dir():
             for leftover in datasets.glob(DATASET_PREFIX + "*"):
                 shutil.rmtree(leftover, ignore_errors=True)
+        folder = ROOT / "artifacts"
+        if folder.is_dir():
+            for added in [p for p in folder.iterdir() if p.name not in self._artifacts_before]:
+                shutil.rmtree(added, ignore_errors=True)
+            if not self._artifacts_before and not any(folder.iterdir()):
+                folder.rmdir()
         shutil.rmtree(self.home, ignore_errors=True)

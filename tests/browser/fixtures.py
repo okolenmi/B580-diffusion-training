@@ -35,7 +35,15 @@ def lora_graph(home: Path, dataset: str, *, steps: int = 6, save_every: int = 3,
     return doc.as_dict()
 
 
-def image_graph(home: Path, *, steps: int = 4, **extra) -> dict:
-    doc = starters.sdxl_image(model="", output=str(home / "images"), settings=SETTINGS, width=64, height=64, steps=steps,
-                              source=("TinyModelSource", {"file": str(home / "model.safetensors")}), **extra)
+def image_graph(home: Path, *, steps: int = 4, out: str = "images", **extra) -> dict:
+    options = {"width": 64, "height": 64, **extra}
+    doc = starters.sdxl_image(model="", output=str(home / out), settings=SETTINGS, steps=steps,
+                              source=("TinyModelSource", {"file": str(home / "model.safetensors")}), **options)
+    return doc.as_dict()
+
+
+def anima_graph(home: Path, *, steps: int = 3, out: str = "anima-images", **extra) -> dict:
+    options = {"width": 64, "height": 64, **extra}
+    doc = starters.anima_image(model="", output=str(home / out), settings=SETTINGS, steps=steps,
+                               source=("TinyAnimaSource", {"file": str(home / "anima.safetensors")}), **options)
     return doc.as_dict()

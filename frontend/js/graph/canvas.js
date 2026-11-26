@@ -280,7 +280,8 @@ export class Canvas {
     this.root.addEventListener("pointercancel", (e) => this._up(e));
     this.root.addEventListener("click", (e) => this._click(e));
     this.root.addEventListener("dblclick", (e) => {
-      const grip = e.target.closest(".g2-grip");
+      // A press on the corner captured the pointer, so the browser reports the canvas as the target; the grip is found by position.
+      const grip = e.target.closest(".g2-grip") || document.elementFromPoint(e.clientX, e.clientY)?.closest(".g2-grip");
       if (grip) { this.doc.resizeNode(this._uidOf(grip), undefined, undefined); return; }
       if (e.target === this.root || e.target === this.inner || e.target === this.layer) this.hooks.onQuickAdd?.(this.point(e), e);
     });

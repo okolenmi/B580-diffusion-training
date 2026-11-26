@@ -171,16 +171,17 @@ class MaintenanceSection {
     this.body = h("div", { class: "kv" });
     this.note = h("div", { style: "margin-top:10px" });
     this.armed = false;
+    this.said = "";
   }
 
   async load() {
     const [runs, graphs, datasets] = await Promise.all([
       quiet(api("/graphs/executions?limit=500")), quiet(api("/graphs/library")), quiet(api("/datasets"))]);
     const active = runs ? runs.executions.filter((r) => ["planned", "queued", "running"].includes(r.status)).length : 0;
-    const say = h("span", { class: "say" });
+    const say = h("span", { class: "say", text: this.said });
     const wipe = h("button", { class: `btn ${this.armed ? "btn-danger" : "btn-secondary"}`, type: "button", disabled: !runs || !runs.count || active > 0, onclick: async () => {
       if (!this.armed) { this.armed = true; wipe.textContent = `Really delete ${runs.count} runs?`; wipe.classList.replace("btn-secondary", "btn-danger"); return; }
-      try { const done = await api("/graphs/executions", { method: "DELETE" }); this.armed = false; say.textContent = `Deleted ${done.deleted} runs.`; } catch (err) { say.textContent = errText(err); }
+      try { const done = await api("/graphs/executions", { method: "DELETE" }); this.armed = false; this.said = `Deleted ${done.deleted} runs.`; } catch (err) { this.said = errText(err); }
       this.load();
     } }, this.armed && runs ? `Really delete ${runs.count} runs?` : "Delete run history");
     mount(this.body,

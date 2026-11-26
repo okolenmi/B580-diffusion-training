@@ -19,8 +19,8 @@ class EncodePromptNode(Node):
     READS_SETTINGS = ("device.default", "precision.encoders")
     INPUTS = {
         "encoders": Port("encoders", ModelPart, multi=True, doc="The text-encoder parts of the model (wire each)."),
-        "prompt": Port("prompt", str, required=False, default="", ui={"widget": "textarea", "rows": 3}),
-        "negative": Port("negative", str, required=False, default="", ui={"widget": "textarea", "rows": 2},
+        "prompt": Port("prompt", str, required=False, default="", ui={"widget": "textarea", "rows": 3, "tone": "green"}),
+        "negative": Port("negative", str, required=False, default="", ui={"widget": "textarea", "rows": 2, "tone": "red"},
                          doc="What the image should move away from. Empty is the model's empty prompt."),
     }
     OUTPUTS = {"encoding": Port("encoding", PromptEncoding)}

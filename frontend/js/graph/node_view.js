@@ -349,6 +349,7 @@ export class NodeView {
     if (hasSocket(port)) row.append(this._socket("in", { ...port, name: bind.name }));
     const label = make("label", "g2-label", `${port.label || port.name}${port.required && !isField(port) ? " *" : ""}`);
     label.title = port.doc || port.name;
+    if (!wires.length && isField(port) && port.ui?.widget === "textarea") return this._textRow(row, port, resolved, bind, label);
     row.append(label);
     if (wires.length) {
       row.append(make("span", "g2-wired", port.multi ? `${wires.length} wired` : "wired"));
@@ -363,6 +364,25 @@ export class NodeView {
       }));
       if (resolved.focus === port.name) row.classList.add("focus");
     }
+    return row;
+  }
+
+  /** A text field that is a box of its own: the whole width for the text, the name as a small tab in the box's corner (coloured by `ui.tone`). */
+  _textRow(row, port, resolved, bind, label) {
+    const spec = bind.choices ? { ...port, choices: bind.choices } : port;
+    const box = make("div", "g2-textbox");
+    if (port.ui.tone) box.dataset.tone = port.ui.tone;
+    label.className = "g2-textbox-title";
+    box.append(label, buildControl(spec, {
+      value: bind.value,
+      options: () => this.options(spec, bind.values),
+      onDraft: bind.set,
+      onCommit: bind.set,
+      note: this.note,
+    }));
+    row.classList.add("textual");
+    row.append(box);
+    if (resolved.focus === port.name) row.classList.add("focus");
     return row;
   }
 

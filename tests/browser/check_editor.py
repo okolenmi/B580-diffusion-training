@@ -106,6 +106,20 @@ def stored_layout(server, name: str) -> dict:
     return {n["uid"]: {k: v for k, v in n.get("layout", {}).items() if k in ("w", "h")} for n in doc["graph"]["nodes"]}
 
 
+def text_fields(server, browser):
+    """Prompt and Negative are boxes with a small coloured name tab, and stay inside their node at any width the node can be given."""
+    page = app_in_editor(server, browser, "tx", fixtures.image_graph(server.home, steps=3, out="tx-out"))
+    node = page.page.locator(".g2-node", has=page.page.locator(".g2-head", has_text="prompt")).first
+    measure = """() => { const n = [...document.querySelectorAll('.g2-node')].find(e => e.querySelector('.g2-head').textContent.includes('prompt')), r = n.getBoundingClientRect();
+      return {width: r.width, boxes: [...n.querySelectorAll('.g2-textbox')].map(t => { const q = t.getBoundingClientRect(), a = t.querySelector('textarea').getBoundingClientRect();
+        return {tone: t.dataset.tone, title: t.querySelector('.g2-textbox-title').textContent, left: q.left - r.left, right: r.right - q.right, area: a.right - q.right}; })}; }"""
+    first = page.page.evaluate(measure)
+    check([(b["title"], b["tone"]) for b in first["boxes"]] == [("Prompt", "green"), ("Negative", "red")], f"Prompt and Negative are boxes with a green and a red name tab ({first['boxes']})")
+    drag_corner(page, node.locator(".g2-grip"), -600, 0)
+    small = page.page.evaluate(measure)
+    check(small["width"] < first["width"] and all(b["left"] >= 0 and b["right"] >= 0 and b["area"] <= 1 for b in small["boxes"]), f"narrowed as far as it goes, both text areas are still inside the node ({small})")
+
+
 def pixels(path):
     with Image.open(path) as image:
         return image.convert("RGB").tobytes()
@@ -132,7 +146,7 @@ def sampling_preview(server, browser):
 
 def main() -> None:
     with TestServer() as server, Chromium(server.url) as browser:
-        for part in (picture_and_size, sampling_preview):
+        for part in (picture_and_size, sampling_preview, text_fields):
             print(f"\n{part.__name__}")
             try:
                 part(server, browser)

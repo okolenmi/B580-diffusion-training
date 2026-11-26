@@ -83,6 +83,17 @@ g.selected > .g2-edge, .g2-edge.selected { stroke: var(--accent); stroke-width: 
 .g2-row > .g2-socket { margin-left: -0.9rem; }
 .g2-label { flex: 0 0 34%; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .g2-node { --ctl-pad: 0.15rem 0.3rem; --ctl-font: 0.72rem; }
+.g2-row > .cfg-input { min-width: 0; }
+.g2-row.textual { display: block; min-height: 0; margin: 0.2rem 0; }
+.g2-textbox { --tone: var(--text-dim); position: relative; border: 1px solid color-mix(in srgb, var(--tone) 55%, var(--border)); border-radius: var(--radius-sm); background: var(--bg); }
+.g2-textbox:focus-within { border-color: var(--accent); }
+.g2-textbox[data-tone="green"] { --tone: #10b981; }
+.g2-textbox[data-tone="red"] { --tone: #ef4444; }
+.g2-textbox[data-tone="blue"] { --tone: #3b82f6; }
+.g2-textbox[data-tone="amber"] { --tone: #f59e0b; }
+.g2-textbox-title { position: absolute; top: -1px; left: -1px; z-index: 1; padding: 0 0.35rem; font-size: 0.58rem; font-weight: 700; line-height: 1.15rem; letter-spacing: 0.02em; color: var(--text);
+    background: color-mix(in srgb, var(--tone) 32%, var(--surface)); border: 1px solid color-mix(in srgb, var(--tone) 55%, var(--border)); border-radius: var(--radius-sm) 0 var(--radius-sm) 0; pointer-events: none; }
+.g2-textbox > textarea.cfg-input { display: block; width: 100%; min-width: 0; box-sizing: border-box; padding: 1.2rem 0.35rem 0.25rem; border: 0; background: transparent; box-shadow: none; outline: none; resize: vertical; }
 .g2-wired { color: var(--accent); font-size: 0.68rem; }
 .g2-slider { flex: 1; min-width: 0; }
 

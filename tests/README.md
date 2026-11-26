@@ -2,13 +2,14 @@
 
 ## Where tests live
 
-Three systems, split by what they can see; `python run_tests.py` runs all of them.
+Four systems, split by what they can see; `python run_tests.py` runs all of them.
 
 | place | style | covers |
 |---|---|---|
 | `tests/check_*.py` (this folder) | plain scripts, own `check` harness, `python -m tests.<name>` | the trainer: `graph`, `engine`, `families`, `nodes`, labs. Must not import `backend` (the layer check enforces it) |
 | `backend/tests/test_*.py` | plain scripts, `backend.tests.support` helpers, run directly or by `backend/tests/run_all.py` | the server: use cases, API, persistence, wiring. The `sys.path` line at the top of each file is what makes it runnable directly |
 | `frontend/tests/*.test.mjs` | `node --test` | the pure parts of the page code (board model, selection, chart maths); DOM is stubbed |
+| `tests/browser/check_*.py` | Playwright, `python -m tests.browser [name]` (needs `pip install playwright` and its Chromium) | the pages in a real Chromium against a real server and real graph child processes, on tiny CPU stand-ins (`tiny_profile/sitecustomize.py` swaps the model families and fakes a 12 GB card): apps and their graphs, training runs (status, Save now, history, queue, Stop, host memory ceiling), image generation, start/settings/help/datasets pages, the app page editor, node pictures, resize, Sampling Preview. About 10 minutes in all; nothing needs a card |
 
 A check that needs both the trainer and the server belongs in `backend/tests`, because that is the side allowed to import both.
 

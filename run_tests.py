@@ -1,11 +1,12 @@
 """Everything that can be checked without the card, in one command.
 
-    python run_tests.py                      # all four suites
+    python run_tests.py                      # all suites
     python run_tests.py trainer backend      # only these suites
     python run_tests.py trainer -- memory    # name parts after -- go to the trainer checks
 
 Suites: ``imports`` (layer rules and the ComfyUI guard), ``trainer`` (``tests/check_*.py``), ``backend``
-(``backend/tests``) and ``frontend`` (``node --test``). The Python suites need torch, so they run with the first
+(``backend/tests``), ``frontend`` (``node --test``) and ``browser`` (a real server and Chromium on tiny CPU stand-ins, ``tests/browser``;
+skipped without playwright). The Python suites need torch, so they run with the first
 interpreter that has it: this one, then ``$VENV_PYTHON``, then ``VENV_PYTHON`` from ``.env``, then ``../venv``.
 Hardware checks are not here; they are listed in TESTING.md.
 """
@@ -52,6 +53,14 @@ def resolve_interpreter() -> str:
     sys.exit(f"No Python with torch found.\n{tried}\nSet VENV_PYTHON (see .env.example) or run this with that interpreter.")
 
 
+def has_playwright(python: str) -> bool:
+    probe = "from playwright.sync_api import sync_playwright as p\nwith p() as x: x.chromium.executable_path"
+    try:
+        return subprocess.run([python, "-c", probe], capture_output=True, timeout=60).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def suites(python: str, trainer_filters: list[str]) -> dict[str, list[str] | None]:
     frontend = sorted(str(p.relative_to(ROOT)) for p in (ROOT / "frontend" / "tests").glob("*.test.mjs"))
     return {
@@ -59,6 +68,7 @@ def suites(python: str, trainer_filters: list[str]) -> dict[str, list[str] | Non
         "trainer": [python, "-m", "tests.run_all", *trainer_filters],
         "backend": [python, "backend/tests/run_all.py"],
         "frontend": ["node", "--test", *frontend] if shutil.which("node") else None,
+        "browser": [python, "-m", "tests.browser"] if has_playwright(python) else None,
     }
 
 
@@ -78,7 +88,7 @@ def main(argv: list[str]) -> int:
     for name in argv or list(table):
         command = table[name]
         if command is None:
-            results.append((name, "skipped (node is not installed)", 0.0))
+            results.append((name, "skipped (needs " + ("playwright with Chromium" if name == "browser" else "node") + ")", 0.0))
             continue
         started = time.perf_counter()
         print(f"\n== {name} ==", flush=True)

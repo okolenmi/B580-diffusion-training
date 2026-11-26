@@ -15,7 +15,7 @@ you and power cuts can stop a run at any time, so: **cheap, resumable, short rep
   and why), the numbers asked for, and for each failure the first 15 lines of the error. The owner sends the reports to the developer.
 
 ## Mission 1: the unattended suite (cheapest, most valuable; 1 to 2 hours, resumable)
-Run the one command at the top of `TESTING.md` ("Everything that can run unattended") with the owner's paths. If power is lost, run the same command again:
+Run the one command of `TESTING.md`, Critical A, with the owner's paths; then Critical B (the quantization probe). If power is lost, run the same command again:
 finished scenarios are kept. Report `accept/verdict.md` (the table as it is) and the `run.log` tail of every FAIL row.
 
 ## Mission 2: a real run through the backend (TESTING 74, 82; about 1 hour)
@@ -34,19 +34,12 @@ finished scenarios are kept. Report `accept/verdict.md` (the table as it is) and
 ## Mission 7: preparation on a tight budget (TESTING 85-87; about 1 hour)
 Repeat Mission 2 steps 3 and 5 with the NF4 graph (batch 1) at budgets 4996, 5716 and 6500, then the native graph at 6302 and 5900. For every run report: status, the first error line if any, and the node lines of the console/log (`allocator peak so far`). Also rerun only the speed suite with more steps for steadier medians: `python -m accept run --suites speed --steps 80 ...` (same paths as Mission 1) and report its two FAIL rows.
 
-## Mission 3: the editor in a browser (TESTING 76, 79, 80, 82, 83; about 1.5 hours)
-Mission 3 was run once (2026-11-12) and stopped when the runs died of the budget bug fixed afterwards. Still open: 76 tabs/addons (76.14, 76.15), input-drop list (76.16), LR and number fields (76.17b/c), 79 live curves, reload mid-run and older-run selection, 80, 82 (Parallel refusal text, planned run starting, step times), 83. Re-check that Stop now ends the *running* run when a planned one is selected, and that a new starter graph is fitted entirely in view. Tip for a weaker browser tester: output sockets sit on the card's right edge; scroll the canvas so no card is under the right-hand panel before dragging.
-Needs Playwright (`pip install playwright && playwright install chromium`); if it cannot be installed, skip the mission and say so. Open
-`http://127.0.0.1:<port>/graph`, and for each item in `TESTING.md` (read only items 76, 79, 80, 82, 83) do what it says through Playwright and report PASS/FAIL per
-numbered point. Take a screenshot only where a point is a visual judgement (layout, overlap) or fails, at 1200x800, and name the file in the report; do not
-describe screenshots at length. Keep one real training running for the points that need one (a 200-step starter).
-
-## Mission 4: the datasets page (TESTING 78; about 30 minutes)
-Same method as mission 3 for `http://127.0.0.1:<port>/datasets` with a folder of the owner's pictures. Time the import and the first scroll through the whole mosaic;
-report the sizes of the smallest and largest tile in "Balanced" (ratio is enough).
+## Missions 3 and 4 (editor and datasets in a browser): retired
+The pages are checked by `python -m tests.browser` (real server and Chromium on tiny CPU stand-ins; `tests/README.md`), so there is nothing to click through on the owner's PC. If the owner
+reports a page problem, run `python -m tests.browser <name>` first; a failure there is reproducible without the card.
 
 ## Mission 5: long experiments (only when the owner asks; hours, token-cheap)
-`TESTING.md` items 61 to 75 are lab runs: queue them with `python -m lab run <files>` (see the item), check in once per hour with `tail -n 5`, and report the
+`docs/experiments-to-run.md` holds lab runs: queue them with `python -m lab run <files>` (see the item), check in once per hour with `tail -n 5`, and report the
 result files the item names. They resume from the last saved state after a power cut: run the same command again.
 
 ## Mission 6: headers of the Anima files (about 15 minutes, almost no tokens)

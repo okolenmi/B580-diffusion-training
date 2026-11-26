@@ -1,229 +1,83 @@
 # To test on the B580
 
-Things written in the sandbox (no XPU) that need hardware. An AI on the PC can run most of them: `docs/tester-brief.md` is its brief. Delete an entry once it passed; if one fails, keep it
-and paste the console lines. Feature background: `docs/MANUAL.md`.
+Everything the sandbox can check is checked there: `python run_tests.py` runs the trainer, backend, frontend and **browser** suites (the browser suite drives a real
+server and Chromium on tiny CPU stand-ins; see `tests/README.md`). What is left is what only your card and real weights can answer. It is sorted by cost of being
+wrong, not by when it was written. Do **Critical** and stop; the rest is optional and nothing is blocked by it. Delete an entry when it passes; if one fails, keep it
+and paste the console lines. An AI on the PC can run most of it: `docs/tester-brief.md`.
 
-## Everything that can run unattended: one command
+## Critical (about 1 hour of your attention, plus one unattended run)
 
+A change that breaks these breaks the foundation: a wrong picture, a wrong loss, a run that eats the machine.
+
+### A. The unattended lab (start it and leave; an hour or two)
 ```
 python -m accept run --out accept --models <models folder> --datasets <datasets folder> --dataset <dataset name> --file <checkpoint file name> \
   --output <output folder> --batch 2 --resolution 512 -- --param buckets.max_shapes=4
 ```
+About 35 short runs in separate processes; finished scenarios are kept, so the same command continues after a stop. It writes `accept/verdict.md`: a pass or fail row
+per check with the reason. Send `accept/verdict.md` and the `accept/matrix/*/run.log` of anything marked FAIL. Memory, nf4, features and allocator passed on 2026-11-24
+(`docs/internals/acceptance-lab.md`); open from it: **determinism** (a FAIL names the first save where two same-seed runs part ways) and **speed** (two attention limits
+were changed, expect green). On a SIGSEGV near the end of a profile send the core backtrace line.
 
-Runs six suites in separate processes (about 35 short runs, an hour or two; finished scenarios are kept, so rerun the same command after a stop) and writes
-`accept/verdict.md`: a pass/fail row per check with the reason, LOOK for what needs your eyes. Send `accept/verdict.md` (and the `accept/matrix/*/run.log` of
-anything marked FAIL). `--suites features` (or `speed`, `memory`, `nf4`, `determinism`, `allocator`) runs one suite; `python -m accept list` shows every check.
+### B. Quantization probe (about 10 minutes, no training)
+`python -m accept quant-probe --models <models> --file <checkpoint> --precision nf4 int8 --resolution 512 --out probe`. Send `probe/quant-nf4.md` and `quant-int8.md`.
+Pass: it finishes (the earlier run died of memory; fixed) and the whole-network error is small for int8 and sane for nf4 (the table names the worst block). If it still dies,
+send the traceback and say whether it was the dense or the NF4 phase.
 
-| suite | covers | what it checks |
-|---|---|---|
-| speed | int8 and native, eager and graph, both int8 gradient paths, attention modes, LoRA in bf16 | every run finishes with a finite loss, int8 saves memory and stays near native graph speed, graph decisions, attention modes within their time limits, losses close |
-| memory | one-margin budget at 10240 and 9000 | stays under the limit, uses most of the room, prints its budget |
-| nf4 | NF4 frozen weights | runs, saves memory, loss near int8's |
-| determinism | two runs with the same seed, saving every 7 steps | identical losses and adapter tensors; a difference names the first save that differs |
-| allocator | expandable segments on and off | the peaks side by side |
-| features | probe and gradient alignment, blend, a 9216 cap without prewarm, three `--set`s at once, a typo in `--set`, mirror and mirror-signal against zero padding, int8 with the torch backend, int8 with DoRA | each runs and prints what its item expects |
+### C. Real weights through the apps page (about 45 minutes)
+The pages, buttons, queue, Stop, Save now, history and the RAM admission are machine-checked; here only what needs the real model. Make apps from the starters (Apps, new,
+pick the graph) with your checkpoint and datasets.
+1. **SDXL picture** (starter *SDXL image generation*, 1024x1024, 25 steps, your prompt). The PNG is a picture that matches the prompt (not noise or a flat colour), the console
+   has no error. The same recipe (seed, sampler, scheduler, guidance) in ComfyUI gives the same composition. Then 1536x1536: the decode falls back to tiles with a log line instead of failing.
+2. **SDXL LoRA** (starter *SDXL LoRA*, your dataset, about 30 steps). Loss is finite and does not climb; *Save now* writes a file within a step or two; the finished adapter, put
+   into *Adapter Stack* of the picture app at strength 0.8, changes the picture (strength 0 equals none).
+3. **Anima picture** (starter `anima-image`, DiT, Qwen3 and VAE from your ComfyUI folders, 1024x1024, 30 steps, guidance 4, Euler / simple). A picture with the composition ComfyUI
+   gives for the same prompt and seed (not identical pixels; this path was never compared). If it is wrong, the first suspects are the timestep given to the DiT (`s` as is) and
+   the 16-channel latent normalisation. Report peak VRAM of sampling and of the Wan VAE decode (may need the tiled fallback at large sizes).
+4. **RAM ceiling** (a short SDXL LoRA run with `memory.ram_max_mb` 3000): ends as **error** "host memory: the run holds N MB, over its ceiling of 3000 MB", outputs written before are
+   intact; report N against `top`. Then a ceiling just above the real use (peak RES minus the mapped checkpoint): the run completes. The count is `RssAnon + RssShmem`, not RES.
 
-Passed on 2026-11-24 (memory, nf4, features, allocator; results in `docs/internals/acceptance-lab.md`): rerun only to recheck after a change. Still open from that run:
-**determinism** (run `--suites determinism` twice; a FAIL now says at which save the runs part ways, send that line and both `run.log`) and **speed** (the two attention limits were changed;
-a rerun of `--suites speed` should be green). If a scenario dies with SIGSEGV near the end of its profile, send the core backtrace line and rerun; the profiler no longer frees its events.
+## Optional (when it interests you; none of it blocks anything)
 
-For speed numbers with power and a kernel profile (not pass/fail): `python -m perf hwcheck --out perf-bundle ...` as in `docs/manual/performance.md`.
+- **17. Padding default: compare three LoRAs.** Full runs, same seed, dataset and settings with `--pad-fill zero`, `mirror`, `mirror-signal` and `--param buckets.max_shapes=4` (padding is
+  3 % of a canvas on average otherwise). The quick check passed (mirror costs x0.99 of zero). Compare loss at high noise and, more important, generations from the three with the same prompts
+  and seeds: borders, symmetry artifacts, style strength. A symmetry measure helps: correlation of each generation with its horizontal flip, averaged over about 20 seeds. Tell me which
+  default you pick and I set it. For a first look before spending hours: `python -m accept padding-sheet --images <a few images> --canvas 128x128 --count 4 --out sheet.png` (also `--sigma 0.2`).
+- **29. NF4 training arms** (after B): `--param adapter.base_precision=nf4` (and once with `--param adapter.nf4_double_quant=true`), eager and `--set trainer.graph=true`, 100 steps with `--perf`:
+  step time, peak memory, the `quantization` line, loss against native and int8. The accept lab's nf4 suite already passed (662 layers, 3012 MB saved, loss equal to int8's). Risk: `xpu-kernels`
+  older than 0.3 has no NF4 kernel and `auto` falls back to the slow torch chain (a warning says so).
+- **6b. Merge Adapter.** `Merge Adapter` node (Load Model -> Merge Adapter -> Inject Adapter) with a kohya LoRA, strength 1. Task line "Merging <file>"; step-1 loss differs from the unmerged
+  run; strength 0 equals no merge node; another family's LoRA stops with "nothing ... matches".
+- **6d. Auto caption.** On a dataset with uncaptioned images: `--auto-caption --set autocaption.limit=5`, then without the limit (needs `transformers` and network once). Captions written, a rerun says
+  "0 captioned", the caption model's memory is gone before training.
+- **90. Anima speed and memory.** `python -m run anima-lora ... --resolution 512 --steps 50 --graph` against the same without `--graph` (time per step, losses); then 1024 px batch 1 (peak, time per
+  step); one 1024 px picture through `get_family("anima").load_vae(part, device="xpu")` (encode and decode time and peak).
+- **103. Load Model dtype per part.** Denoiser bf16, VAE fp32, text encoders auto: the VRAM readout differs from all-bf16 by about the VAE's size; changing a text encoder's dtype rebuilds a persisted
+  conditioning cache once.
+- **107.2 with a real model.** *Sampling Preview* at 1024x1024: report the extra time per preview and the peak VRAM; with a tight *VRAM budget* the card says once that previews stopped and the run finishes.
+  (Wiring, frames, and same final picture are machine-checked.)
+- **102.1 Windows only.** The server console restores without taking focus on an error, and not again within 30 seconds (classic console and Windows Terminal). Skip while Windows is not used.
 
-## Still manual
+Experiments of the lab (hours each, research questions rather than checks) moved to `docs/experiments-to-run.md`.
 
-Experiments of the lab can be queued: `python -m lab run long.json loraplus.json aligned2.json ema.json more.json loraplus2.json` runs them one after the other. Training states are written every 200 steps, so after a power cut the same command skips what is finished and continues the arm that was cut (TESTING 58 checks this once).
+## Not listed on purpose
 
-## 6b. Merge Adapter
-Add a `Merge Adapter` node (denoiser from Load Model -> Merge Adapter -> Inject Adapter) with a kohya LoRA you have, `strength` 1 (the CLI starters have no switch for it; edit the graph).
-- Task line "Merging <file>"; training starts and the step-1 loss differs from the unmerged run; a LoRA of another family or a wrong key format stops with "nothing ... matches".
-- Strength 0 gives the same step-1 loss as no merge node.
-Pass: all three. Fail: paste the message.
+Machine-checked by `python -m tests.browser` (what a failing run would show is in each file's docstring), or settled by ordinary use, which will hit them far sooner than a checklist:
 
-## 6d. Auto caption
-On a dataset where some images have no caption: `--auto-caption --set autocaption.limit=5` first, then without the limit.
-- Needs `transformers` installed and network once for the model. Task lines "Loading the caption model" and "Captioning"; a `captions:` summary line; the model memory is gone before training (peak not higher than without it).
-- Rerun: "0 captioned ... kept as they were": nothing replaced. Captions look sane in the dataset (and training prompts use them).
-Pass: captions written, resumed, no memory left behind. Fail: paste the console lines.
+| was | now |
+|---|---|
+| 96 start, Settings, Help | `check_pages` (tiles, getting started, recent runs, refused folder on its field, delete history asks twice and is off during a run, help search and sidebar). Not checkable here: `different environment` row |
+| 97 image generation | `check_generation` (picture, recipe chunk, batch seeds, adapter stack, Stop, size refusal) plus Critical C.1 for the real weights |
+| 98, 104 apps editor, field cards | `check_board` (sections, tabs, Place in, Undo, Delete, save/reload, Phone view, File drop-down). Dragging cards by hand is left to use: a bad drag is seen at once |
+| 99, 100 Save now, status, history, queue | `check_runs` |
+| 101 RAM ceiling | `check_runs` (enforced, admission refusal); real use in C.4 |
+| 102.2-102.4 dataset click, console | `check_pages` (the 3000-picture scroll is left to use) |
+| 105 Anima generation | `check_generation` (runs, size rule) plus C.3 |
+| 106 apps own their graph | `check_apps` |
+| 107.1 pictures and resize | `check_editor` |
+| 18 epochs cosine bullet | `check_engine` (a schedule without a length follows the run) |
+| 76 import a console graph, 92 loss chart, 93 Build/Watch | use; report what annoys you when it does |
+| 81 shared weights on the card | answered in `docs/internals/parallel-runs.md` (G1 failed) |
+| 30 padding sheet by eye | folded into 17 |
 
-## 17. Mirror padding: compare two LoRAs
-Three full runs with the same seed, dataset and settings (packing on, `--max-shapes` as you like): `--pad-fill zero`, `--pad-fill mirror` and `--pad-fill mirror-signal` (the strip holds the reflected *clean* sample, noised on its own). With the trainer's defaults padding is small (3 % of a canvas on average), so use `--param buckets.max_shapes=4` to make it matter.
-- The quick check (cost and start) passed in the features suite: mirror x0.99 of zero. Only the full runs are left.
-- Full runs: compare the loss curves (a padded arm should not be lower by a suspicious amount at high noise) and, more importantly, generations from the LoRAs with the same prompts and seeds. Look at borders/edges, symmetry artifacts, and style strength.
-- With a low `--pack` (0.1) the difference should shrink; with a higher one (0.5) it should grow, which tells you padding matters on your data.
-- A symmetry measure helps: the correlation of each generation with its horizontal flip, averaged over about 20 seeds, should be higher for an arm that learned a reflection prior.
-Pass: you pick a default; tell me which, and I will set it.
-
-## 18. Epochs: the one bullet left
-A cosine schedule node with an empty `total_steps` in a run with `--epochs 2` must decay over the whole run (edit the schedule node in the graph). The rest of the item passed.
-
-## 29. NF4 frozen weights
-First, no training (it ran out of memory on 2026-11-24, since fixed: gradients of the dense weights are no longer kept and the cache is emptied between the phases; if it still fails, send the traceback and say whether it died in the dense or the NF4 phase): `python -m accept quant-probe --models <models> --file <checkpoint> --precision nf4 int8 --resolution 512 --out probe` (needs the card; each precision loads the checkpoint again). Send `probe/quant-nf4.md` and `quant-int8.md`: the whole-network error and the table by region show where the quantization hurts (the worst block is named). The training side passed in the nf4 suite (662 layers, 3012 MB saved, peak 3154 MB, loss equal to int8's); what is left: `--param adapter.base_precision=nf4` (once with `--param adapter.nf4_double_quant=true`), eager and `--set trainer.graph=true`, short run with `--perf`: step time, peak memory, the `quantization` line (layers and MB saved), and the loss over 100 steps against native and int8.
-Known risks: the fused dequantizer's first call verifies itself (a few seconds, once); `xpu-kernels` older than 0.3 has no NF4 kernel and `auto` then uses the slow torch chain (a warning says so).
-Pass: the probe finishes and its tables look sane; no out of memory at a batch or resolution that int8 cannot hold; loss within the noise of int8's at the same seed over 100 steps.
-
-## 30. Padding decision by eye (zero, mirror, mirror-signal)
-The sheet was reworked after the first look: it now draws the real bucket (short side fitted, long side cropped, only the rounding slack padded, the sample outlined in red) with four panels per sample: clean, zero, mirror, mirror-signal.
-`python -m accept padding-sheet --images <a few of your dataset images> --canvas 128x128 --count 4 --out sheet.png`; also `--sigma 0.2` for a lower-noise copy. Look at both and tell me whether the panels say anything about which fill you would train on; the default stays zero until item 17 says otherwise.
-
-## 61. Continue your best adapter (about 1.5 hours)
-Put your saved adapter (batch 1, lr 2e-4, 600 steps) into `lab-setup.json` under `loras` as `best`. The template renders it as it is and continues it three ways with a new `--init-adapter` option: 300 more steps at 2e-4, 300 at 5e-5, 600 at 2e-4 (fresh optimizer, 50 step warmup, no region ladder).
-```
-python -m lab template continue-best > more.json
-python -m lab run more.json
-```
-Send the zip. Does more training improve it or damage it? Compare each arm with `best` on the same sheet and check the holdout column of the per-timestep table (above 1 = worse than the base model). If the continuation fails to start with a message about rank or targets, the adapter was trained with other settings than the template's (rank 16 default, all default targets); tell me which.
-
-## 62. Queue run and the cache warning (check while running the above)
-Run two files in one command (for example `python -m lab run aligned2.json more.json`). Each file now runs in its own process; the second file's training should start without the out-of-memory error that chained runs gave. Send the console of any failure. Also: the `oneDNN primitive cache is evicting shapes` warning should no longer appear (the cache floor is 4096 and counts four batch sizes per shape); tell me if it does.
-
-## 65. LoRA+ ratios 2, 4, 8, 12 (about 3 hours for five arms; pick with `--arms`)
-Both 4 and 16 looked good in the first test; this narrows it down on the same recipe, with the baseline rerun for one sheet.
-```
-python -m lab template lora-plus-values > loraplus2.json
-python -m lab run loraplus2.json
-```
-Send the zip. Which ratio gives the best textures without painted or unstable pictures, and is there a visible step between neighbours or only noise?
-
-## 66. After the cleaning: a much lower learning rate (about 1.5 hours)
-Follow-up of 64: the cleaned and frozen 15% plus a cleared 85% that trains at 2e-5 and 4e-6 instead of 2e-4 (your overshoot idea). Same cleaning settings as in 64 (the cleaning is repeated in each arm, about 11 minutes).
-```
-python -m lab template clean-lr > cleanlr.json
-python -m lab run cleanlr.json
-```
-Send the zip. Compare with `best` and `element-15-only` on the same sheet, and the holdout column of the per-timestep table (a lower ratio than `best` = better than the base model there).
-
-## 67. The cleaner with other anchor weights (about 1 hour)
-Result of 64: anchor 5 removed nearly all of the dataset's effect, no anchor kept most of it. The cleaned-only arms with anchor 0.5, 1 and 2 (element) and 1 (component) show where it changes.
-```
-python -m lab template clean-anchor > cleananchor.json
-python -m lab run cleananchor.json
-```
-Send the zip. Look at the portrait and red house pictures against `best` (how much of the base model's look comes back) and at the empty prompt (how much of the dataset's look stays).
-
-## 68. Magnitude cleaning variants (about 1.5 hours; no training in the arms)
-Your verdict on 64: magnitude (the largest 15% of the weights) is the best of the cleaners. Variants: 8% and 30%; 15% counted per layer instead of over the whole adapter (`--clean-scope layer`); ranking by what a weight contributes to the layer's change (`--clean-mode product`); scaling every layer's change back to its old size after the cut (`--clean-rescale`); and the largest singular directions per layer (`--clean-mode singular`).
-```
-python -m lab template clean-magnitude > cleanmag.json
-python -m lab run cleanmag.json
-```
-Send the zip. Which keeps the effect of `best` with the fewest issues? Does `rescale` give back the power without bringing the problems back?
-
-## 69. Which parts of the adapter matter (about 1.5 hours; no training)
-`best` with one part or region removed completely (feed-forward, attn1, attn2, projections, input, middle or output blocks) with 99% of the rest kept.
-```
-python -m lab template clean-parts > cleanparts.json
-python -m lab run cleanparts.json
-```
-Send the zip. Which removal changes the pictures most, and which one removes an issue without losing the effect? That tells which parts to protect or to train less.
-
-## 70. Train without cross-attention and without the sensitive blocks (about 2.5 hours for four trained arms; pick with `--arms`)
-Result of 69: removing attn2, the middle block or the input blocks from your best adapter did not change the loss at all and the pictures got cleaner. This trains with those parts excluded from the start (your best recipe, 600 steps): no attn2; no middle block; both; and both plus input blocks 6-8 and output blocks 0-2. `best` is rendered for the same sheet.
-```
-python -m lab template targets > targets.json
-python -m lab run targets.json
-```
-Send the zip. Do the cleaner pictures hold up when the parts are never trained rather than cut afterwards? The console prints the number of adapted layers; fewer layers should also mean a little faster steps and less memory.
-
-## 71. Staged training in one run (about 5 hours for four trained arms; pick with `--arms`)
-Your plan: train, clean to 8% and freeze, train the rest at a lower rate, clean to 15%, and so on, all in one process. Arms: `8-15-30` (600 steps, then 300 at 5e-5 and 300 at 2e-5, cleaned to 8%, 15%, 30%), `8-15`, `8-slow` (cleaned to 8%, then 600 steps at 2e-5) and `15-30`. `best` is rendered for the same sheet.
-```
-python -m lab template stages > stages.json
-python -m lab run stages.json
-```
-Check on the way: the console prints a "cleaning before step 600 (magnitude)" line at every boundary and the loss does not jump up after it (a short rise while the rate ramps is fine); `<output>/clean` holds one `lora_cleaned_stepN.safetensors` per cleaning. Send the zip. Do the later stages add effect without the problems coming back, and which share and rate are enough? The cleaned adapter of the last cleaning is a better candidate than the last saved step.
-You can also run it by hand: `--stage 600:0.08 --stage 300@5e-5:0.15 --stage 300@2e-5:0.3` with your usual arguments (`--stage` replaces `--steps`).
-
-## 72. A learning rate per part of the network (about 3 hours for four trained arms; pick with `--arms`)
-Your estimate: the middle block is the most sensitive, input blocks 6-8 and output blocks 0-2 the second tier. Arms: `mild`, `tiers`, `strong` (lower and lower rates for those parts, `--lr-region`) and `middle-only`. `best` is rendered for the same sheet.
-```
-python -m lab template block-rates > blockrates.json
-python -m lab run blockrates.json
-```
-Send the zip. Does the loss stay the same while the pictures get cleaner? No warning about an unmatched region should appear at the start of a run (a misspelt prefix is reported there).
-
-## 75. Is a run that was stopped and started again the same run? (about 3 hours: six arms of 600 steps, the lab stops twice)
-The anchor run's baseline was cut and continued from step 400 and gave the best pictures yet. The CPU says a cut run is identical to an uninterrupted one to the last bit (`check_resume`); the first card try (200 steps, cut at 100) agreed for the deterministic arms and differed for the ordinary one, but was too short to compare with the baseline. This version has the baseline's recipe and length.
-```
-python -m lab template resume-proof > resume.json
-python -m lab run resume.json
-```
-The lab trains `full-a`, then trains `cut-400` up to step 400 and **stops itself** (state saved, nothing left running). Start the same `python -m lab run resume.json` again: it continues `cut-400` as a new lab and a new process (close the window first; reboot if you want it as hard as the power cut). It stops once more at `cut-det-400`; start it again. After that the rest trains and the pictures are made. Arms: `full-a`, `full-b` and `cut-400` are ordinary runs (`full-a` repeats the anchor baseline); `full-det-a`, `full-det-b` and `cut-det-400` are the same with deterministic kernels. Drop `full-b` or the `-det` arms from the file if time is short, but keep `full-det-b`: without it a difference of `cut-det-400` proves nothing.
-Send the zip. How to read it: the report's table of adapters against the first arm. Deterministic arms must read `yes` between themselves (the two full ones first: if they differ, the kernels are not deterministic on the card and the cut test says nothing). If `cut-400` is no farther from `full-a` than `full-b` is, a restart changes nothing the ordinary noise does not. Also look at the pictures of the ordinary and the deterministic arms side by side on every prompt: in the first try the deterministic ones looked better on most images, which, if it holds at 600 steps, says the kernels' noise costs quality.
-
-## 81. Can two processes share weights on the card? (`python -m perf ipc`)
-Run `python -m perf ipc --out perf-ipc` on the B580 with nothing else using the card (a few minutes) and send `perf-ipc/ipc.md`. It answers the gates of `docs/internals/parallel-runs.md`: what this torch and driver offer for sharing, whether a device tensor can be handed to another process (G1), used there (G2), and what the borrower sees when the owner frees it (G3); what two processes on one card cost each other (G4, needs no sharing); how long park and reload of 1 GB takes (G5). A failure is an answer, not a bug: it decides whether the shared-weights route is built or parallel runs stay on separate copies. If a gate hangs the card or the driver, say which one.
-
-## 76. Editor: a graph written by a console run
-Write a graph with `python -m run sdxl-lora ... --dump graph.json`, press *Import file* in `/graph` and pick it: the nodes must arrive in columns left to right with no overlap (*Arrange* redoes it once the cards have their real size). Then *Export* and import the exported file again.
-
-## 90. Anima: what no report has covered yet
-`python -m run anima-lora ... --resolution 512 --steps 50 --graph` against the same without `--graph` (time per step, losses), and then 1024 px, batch 1: peak memory and time per step. For one picture at 1024 px through the VAE (`get_family("anima").load_vae(part, device="xpu")`): encode and decode time and peak memory.
-
-## 92. Loss chart: the old focus and the average
-On a real run: the main loss line should fill the middle half of the chart (linear) with the low/mid/high-t thirds in the logarithmic top and bottom quarters, and the hover tooltip leads with an average (the step's own value in parentheses). The *Average* selector in the chart's bar (Mean 10/24/100, EMA 24/100, Median 25) changes both the drawn average line and the tooltip number; the choice is kept per browser. Say which method you want as the default, and whether the tooltip number now tells you where the loss is.
-
-## 93. Editor: Build and Watch
-`/graph` has *Build* (palette, canvas, inspector; nothing below the canvas) and *Watch* (charts, boards and the run list over the whole window). Nothing opens by itself when a run starts; *Watch* shows a green dot while a run is going. The arrow beside the switch opens a second window straight into Watch (`?mode=watch`), so building and watching can sit on two screens. Report what is missing in either window, and whether a run's history belongs in Watch (now) or somewhere else.
-
-## 96. Start page, Settings and Help (about 10 minutes, after item 95)
-
-1. `/` with the finished install: the four tiles show the server, `Arc B580` with its memory, PyTorch `2.12.1+xpu` and the node library as loaded (no red tile); *Getting started* lists only what is really missing and disappears once everything is done. Start a run: the card memory panel shows what it holds, and the run appears under *Recent runs* with its status.
-2. `/settings`: *Python environment* shows the card, PyTorch, `same environment` for the server, and the prompt files you downloaded. Start the server from another environment (or with `VENV_PYTHON` set to one) and the row must say `different environment`. A refused path (for example a ComfyUI folder that does not exist) is marked on its own field. *Delete run history* is disabled while a run is active and asks twice.
-3. `/help`: search for `memory` and `tokenize` marks the matches in place (nothing is hidden) and jumps between them; `/help#nodes-red` opens that entry; the sidebar of Help and Settings highlights the section near the middle of the screen while you scroll, and a click on an entry still puts its title at the top.
-
-## 97. Image generation on the card (about 15 minutes)
-1. Graph editor, new graph from the starter *SDXL image generation* with your checkpoint, a prompt and 1024x1024, 25 steps, batch 1. Run it. A PNG appears in the output folder; its PNG text chunk holds the recipe. Note the time of each node (Sampler, Decode Image) and the peak device memory: the denoiser now stays on the card after sampling while the budget allows (`memory.vram_max_mb`), so the decode starts at once. Set the budget low enough that it cannot hold the denoiser and the VAE (or use a large size): the decode runs out of memory, the denoiser moves to the host (a memory line in the console) and the decode is retried before it falls back to tiles. A second Sampler on the same checkpoint in one graph must not load the denoiser again.
-2. The same recipe through `python -m lab engines` (or ComfyUI with the same seed, sampler, scheduler and guidance): the pictures should agree as they did before the code moved into `engine/generate`.
-3. Batch 4: image `i` must equal what seed + `i` gives alone. Then 1536x1536: the decode should fall back to tiles (a log line) instead of failing.
-4. Adapter Stack: *+ Add adapter* lists the files of the loras folder (subfolders included) with a search box; add one trained LoRA, strength 0.8, run; then strength 0 and then switched off with its box: both must equal the image without the node. Two adapters give a blend, in either order the same picture (up to rounding). The starter's *Adapters* field and the Apps field card use the same list.
-5. Press Stop during sampling: the run ends within a step and no file is written.
-6. Save the starter graph to the library, make an app from it (Apps, new, pick the graph). The tray offers the *Images* view of Preview Image and the fields of Sampler and Encode Prompt: put the prompt, seed, steps and the images on the page, save, switch to use mode, change the prompt and Run. The picture must appear on the page when the run ends and stay until the next run; click it to open it full size.
-
-## 98. Apps editor on a real page (about 10 minutes)
-Open an app made from the image starter (item 97) in `/apps/<name>`, *Edit*: add a *Section*, click it (a dashed outline marks where new cards land) and add the prompt and seed from the tray; add a second tab with `+`, put the Preview Image *Images* view on it; drag and resize cards inside the section; use *Place in* on a card to move it to another tab and *Undo* (Ctrl+Z) to bring it back. Add a heading. Save, reload, *Use*: tabs switch, a run fills the picture on its tab, *Phone view* shows one column. Also: pages saved earlier open on a **finer grid** (half-size steps, nothing moves to the eye); drag a card by its header onto a section (dashed outline while over it) and it lands where you let go; drag it out of the section onto the page and it leaves; *Undo* brings it back; **Delete** removes the selected card (not while typing in a field); a one-line card shows a round ✕ in its corner on hover; a single preview picture fits inside its card; *Phone view* stays blue while it is on. Report anything that jumps, loses a typed value on tab change, or looks wrong in your theme.
-
-## 99. Save now during training (about 10 minutes, a training app with a Save Adapter)
-Use the training app from item 100 (the SDXL LoRA starter wires the saver and the trainer's `ended` output; *Save now* is the first card on the *Run* tab). Run it with a save interval far beyond the step count, wait for a few steps, press *Save now*: the line under the button goes `Sent…`, then `Done`, and an adapter file `<name>_step<NNNNNN>.safetensors` (step zero-padded to six digits) appears in the saver's folder within a step or two, not after the run; the saver's *Last file* line and *Saved* card name it. Then (1) press it twice in a row: two files at two steps; (2) on a graph without a Save Adapter the button is disabled and says `a Save Adapter node` is needed; (3) start a run, restart the server while it trains, reload the app page and press *Save now* again: it must still work (the run is a child process and its command inbox survives); (4) before a run starts and after it ended the button is disabled (`Available while a run is going.`). Report the delay between press and file, and anything the trainer did differently after a save (loss spike, slower step).
-
-## 100. Training app: status, results, history and queue (about 15 minutes, a real training graph)
-Make an app from the SDXL LoRA starter (Apps, new, pick the graph): the first page has three tabs, *Run*, *Charts*, *Runs*. Run a few steps and watch:
-1. *Run*: the trainer's *Status* line goes Preparing, then `Training · step N of M · x s/step`, then `Finished at step N`; *Saved* shows the newest adapter file and how many were written; *Model* (Load Model) says what the checkpoint was split into; *Result* keeps the last step and loss after the run ends.
-2. *Runs*: the finished run is listed with the values it was given. Change the learning rate or the step count on *Run*, run again, then press *Run again* on the first row: the page must show the first run's values again (nothing starts). Report values that do not come back.
-3. While a run trains, press *Add to queue*: the second run shows under *Waiting runs* (numbered). Cancel one of two: it disappears and shows as stopped in the history. Let one start by itself when the first ends (needs memory to be free): the page should switch to following it without a reload.
-4. Stop a training mid-run, then look at *Runs*: stopped, with the values; an error run shows its message in red.
-Report anything that blanks, jumps or lags in the cards, and any status sentence that stays stale after the run ends.
-
-## 101. Host RAM ceiling `memory.ram_max_mb` (about 20 minutes, a real child process)
-Needs the server running from the project's own Python (the sandbox's is too old to start a child). In an App or the graph editor set `memory.ram_max_mb` and run a short training:
-1. **Enforced**: set a ceiling clearly below what the run needs (try 3000 MB with the SDXL model; `top` shows the python child's RES). The run must end as **error** with "host memory: the run holds N MB, over its ceiling of 3000 MB", not as a plain stop, and the adapter/outputs written before that must be intact. Note how long after crossing the ceiling it stops (it ends at the next safe point; a model load in progress is not interrupted). Report N against what `top` showed.
-2. **Counted right**: with a ceiling just above the real use (peak RES minus the mapped checkpoint is about right) the run must complete; if it stops although `top` shows less, send the numbers: the count is `RssAnon + RssShmem`, not RES.
-3. **Admission**: set a ceiling above the machine's RAM: the start is refused at once (409, "host memory: ... the machine can give ..."). Start one run with a ceiling of about 60% of the RAM, then a second the same: the second waits as *planned* (queue card) and starts when the first ends.
-4. `auto` (the default) must behave exactly as before.
-
-## 102. Server console comes back on an error; dataset click (about 5 minutes, Windows)
-1. Start the server with `run_server_windows.bat` (classic console, then once more inside Windows Terminal), minimise its window, and cause an error (start a run with a model path that does not exist, or a graph that fails). The window must restore **without taking keyboard focus**. Minimise it again and cause another error within 30 seconds: it must stay minimised (the reveal is throttled); after 30 seconds it comes back again. Report which terminal restored and which did not.
-2. `/datasets`: a plain click on a picture only outlines it and shows its caption in the side panel, no tick in the corner. Clicking the corner box, Ctrl/Shift-click or *Select all* ticks (picture dims, box filled). A plain click on one picture and then the corner box of another must tick **only the second**; a plain click and then Ctrl-click gives both.
-3. The in-page console (the floating *System console*): minimise it, then cause an error with any page (a graph with a missing required input: *Graph invalid*). It must open by itself on the error line; opened and left open it stays as it is.
-4. `/datasets` with a big library (a few thousand pictures): scroll fast to the end and back. Cards fill in as you stop; a picture that cannot load shows a dashed *not loaded* card after three retries instead of an empty one.
-
-## 103. Load Model dtype per part (about 10 minutes)
-Open an SDXL checkpoint in Load Model, *Dtype* group: set the denoiser to bf16 and the VAE to fp32, the text encoders left on auto, and train or generate a few steps. The VRAM readout should differ from the all-bf16 run by about the VAE's size, and the conditioning cache (when persisted) must rebuild once after changing a text encoder's dtype. Report anything that still ignores a part's own dtype.
-
-## 104. Apps field cards on a real model folder (about 5 minutes)
-Make an app from the SDXL image starter with your models folder configured. The *File* card of Load Model must be a drop-down of your checkpoints (as on the node), the Prompt and Negative cards a title tab with the text area as the box under it, numbers (steps, cfg, seed) a title tab with the value in the box. Box two number cards (Ctrl-click, *Put them in one box*): inside they become rows, `name: value`. In *Edit*, select a card: *Title colour* tints the tab and outline, *Layout* forces a row or a tab, *Show name* hides the name. Report anything that does not look right at your window size or on the phone view. Then Ctrl-click two cards, press *Put them in one box*, add a tab to the box and move a card into it with *Place in*.
-
-## 105. Anima image generation on the card (about 20 minutes)
-Start the `anima-image` starter (DiT, Qwen3 and VAE files from your ComfyUI folders), run it at 1024x1024, 30 steps, guidance 4, Euler / simple, and compare with the same prompt and seed in ComfyUI (same sampler and scheduler; shift 3). Expect the same composition, not identical pixels (the text path and noise are written to match, but this was never compared). Check: the picture is a picture and not noise or a flat colour; a size that is not a multiple of 16 is refused with a clear message; `dpmpp_2m` and `karras` are refused; peak VRAM during sampling and decoding (the Wan VAE decode may need the tiled fallback at large sizes); an Adapter Stack line with an Anima LoRA changes the picture. If the picture is wrong, the first suspects are the timestep the DiT is given (`s` as is) and the 16-channel latent normalisation.
-
-## 106. Apps own their graph (about 15 minutes)
-1. Apps, *New app*, *Start with: An empty app*, a name: the page opens empty, *Run* is disabled ("no nodes yet"). *Edit graph* saves the app and opens `/graph?app=<name>`: the bar says "Graph of app ... (version 1)", the Library is hidden, the free canvas you had before is not shown. Build something (Nodes palette), the bar says *unsaved changes*; *Save* (or Ctrl+S) makes the next version; close the tab with unsaved changes and the browser asks first.
-2. *Back to the app*, *Edit*, *+ Page from the graph* offers cards for everything the graph has (only while the page has no cards).
-3. New app *Start with: A copy of <library graph>*: change the app's graph in the editor, the library graph does not change; change the library graph, the app does not. Remove a node the page uses in the app's graph, Save: the note counts the cards that lost their target and the app page shows them as orphans.
-4. `/graph` as before (free canvas, library); its left panel lists the apps with a link to each graph. Also check an app made before this change: its graph opens without positions and is arranged on arrival.
-
-## 107. Pictures on nodes, node size, Sampling Preview (about 15 minutes, needs a model)
-1. Run the image starter: the *Preview Image* card shows the picture on the canvas itself (before: only on the Apps page). Drag the corner of the card: the width follows, and the height too for a card with a picture (the picture fills it); double click the corner gives back the default size; the size is saved with the graph. Other nodes change width only.
-2. Add *Sampling Preview*, wire the model's `vae` into it and its `preview` into the Sampler's *preview* input. Run at 1024x1024: the card fills with a growing picture every 5 steps and the last step; the run's speed and the final image are the same as without it. Report the extra time per preview and the peak VRAM. With a tight *VRAM budget* the card should say once that previews stopped and the run must still finish.
-
-## Reading a bundle automatically
-`python -m accept judge <folder with matrix/> speed` judges a bundle that came back from `python -m perf hwcheck` without running anything.
+`python -m accept judge <folder with matrix/> speed` judges a bundle from `python -m perf hwcheck` without running anything.

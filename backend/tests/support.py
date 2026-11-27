@@ -135,6 +135,7 @@ from backend.application.use_cases.app_crud import (
     ListApps,
     SaveApp,
     SaveAppGraph,
+    SaveAppValues,
 )
 from backend.infrastructure.persistence.sqlite import SqliteDatabase
 from backend.infrastructure.settings_store import SqliteSettingsStore
@@ -744,6 +745,7 @@ def build_services(
             list=ListApps(library=app_library),
             delete=DeleteApp(library=app_library),
             save_graph=SaveAppGraph(library=app_library, resolve=resolve_board),
+            save_values=SaveAppValues(library=app_library),
             run=RunApp(library=app_library, start=start_execution),
         ),
         libraries=LibraryServices(

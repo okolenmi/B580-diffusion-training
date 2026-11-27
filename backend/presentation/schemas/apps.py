@@ -32,6 +32,8 @@ class SavedAppOut(BaseModel):
     node_count: int
     created_at: datetime
     updated_at: datetime
+    #: What was set on the page since the last save, in the shape a run takes; the page puts it over the document's values.
+    values: dict[str, Any] = Field(default_factory=dict)
 
 
 class SavedAppSummaryOut(BaseModel):
@@ -51,6 +53,12 @@ class SavedAppListOut(BaseModel):
 
 class DeleteAppOut(BaseModel):
     deleted: bool
+
+
+class AppValuesIn(BaseModel):
+    """``PUT /apps/{name}/values``: the page's current values, in the shape of a run's ``values``."""
+
+    values: dict[str, Any]
 
 
 class AppGraphIn(BaseModel):
@@ -118,7 +126,7 @@ class ResolveOut(BaseModel):
 def saved_app_out(dto) -> SavedAppOut:
     return SavedAppOut(
         name=dto.name, description=dto.description, version=dto.version, graph_hash=dto.graph_hash, doc=dto.doc,
-        card_count=dto.card_count, node_count=dto.node_count, created_at=dto.created_at, updated_at=dto.updated_at,
+        card_count=dto.card_count, node_count=dto.node_count, created_at=dto.created_at, updated_at=dto.updated_at, values=dto.values,
     )
 
 
@@ -151,4 +159,4 @@ def resolve_out(resolution) -> ResolveOut:
     )
 
 
-__all__ = ["AppIn", "SavedAppOut", "SavedAppSummaryOut", "SavedAppListOut", "DeleteAppOut", "AppGraphIn", "AppGraphOut", "AppRunIn", "ModulesIn", "GraphModulesOut", "ResolveIn", "BlockStatusOut", "ResolveOut", "saved_app_out", "saved_app_list_out", "graph_modules_out", "resolve_out"]
+__all__ = ["AppIn", "SavedAppOut", "SavedAppSummaryOut", "SavedAppListOut", "DeleteAppOut", "AppGraphIn", "AppGraphOut", "AppRunIn", "AppValuesIn", "ModulesIn", "GraphModulesOut", "ResolveIn", "BlockStatusOut", "ResolveOut", "saved_app_out", "saved_app_list_out", "graph_modules_out", "resolve_out"]

@@ -6,13 +6,14 @@ answers False).
 
 An app carries a snapshot of its graph inside ``doc["graph"]`` rather than a foreign key into the graph library: deleting or editing a
 library graph must not break an app someone built on it, and "update from graph" is an explicit action (``source_graph`` remembers
-which). ``version`` counts snapshots: it grows when a save changes the graph's hash (``domain/app.graph_hash``), never for layout.
+which). ``version`` counts snapshots: it grows when a save changes the graph's hash (``domain/app.graph_hash``), never for layout. Using an app
+(typing into its fields) is not a save: those values are kept apart (``put_values``) and a save of the document or of its graph discards them.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from ...domain.board import iter_cards
@@ -42,6 +43,8 @@ class SavedApp:
     doc: dict
     created_at: datetime
     updated_at: datetime
+    #: What was set on the page since the last save (``{"nodes": ..., "memory": ...}``); a save makes the document the new baseline and empties it.
+    values: dict = field(default_factory=dict)
 
     @property
     def card_count(self) -> int:
@@ -59,6 +62,11 @@ class AppLibrary(ABC):
     @abstractmethod
     def save(self, name: str, doc: dict, *, graph_hash: str, description: str = "") -> tuple[SavedApp, bool]:
         """Upsert; ``(row, created)``. A first save is version 1; a replace keeps the version unless ``graph_hash`` changed."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def put_values(self, name: str, values: dict) -> bool:
+        """Keep the page's current values beside the document (no version, no ``updated_at``); False when there is no such app."""
         raise NotImplementedError
 
     @abstractmethod

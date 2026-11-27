@@ -41,6 +41,7 @@ export class AppDocument {
     this.app = null;     // {graph, root, style, source_graph, ...}
     this.draft = null;   // stand-in graph the field cards write into: {nodes, memory}
     this.saved = null;   // {layout, graph, exposed} as last saved; null = never
+    this.values = {};    // what was set on the page since the last save, as the server keeps it
   }
 
   /** Load an existing app, or start a new one (`?new=1`, with `&graph=<name>` to begin with a copy of a library graph, empty
@@ -50,6 +51,7 @@ export class AppDocument {
     const t = await api(`/apps/${enc(this.name)}`);
     this.description = t.description || "";
     this.version = t.version;
+    this.values = t.values || {};
     this.app = t.doc;
     this.app.root = refineContainer(this.app.root); // a page saved on the coarse grid opens on the fine one, unchanged to the eye
     this.app.graph = ownGraph(this.app.graph);
@@ -98,8 +100,12 @@ export class AppDocument {
   }
 
   layoutDirty() { return !this.saved || this.saved.layout !== containerKey(this.app.root); }
+  /** The graph (values included) differs from the saved one. Values are kept by themselves while the app is used; this says they are not in the document yet. */
   valuesDirty() { return !this.saved || this.saved.graph !== this.#graphKey(); }
-  isDirty() { return this.layoutDirty() || this.valuesDirty(); }
+  /** Something the author would lose by leaving: the layout. (Values are kept as they are typed.) */
+  isDirty() { return this.layoutDirty(); }
+  /** The saved document differs from the page in any way: the graph editor reads the saved document, so it needs this saved first. */
+  needsSave() { return this.layoutDirty() || this.valuesDirty(); }
   /** The page shows a field the *saved* app does not expose: the one reason a run is refused client-side. */
   exposureChanged() { return !this.saved || this.saved.exposed !== this.#exposedKey(); }
 
@@ -107,6 +113,7 @@ export class AppDocument {
     const out = await api(`/apps/${enc(this.name)}`, { method: "PUT", body: { description: this.description, doc: this.payload() } });
     this.isNew = false;
     this.version = out.version;
+    this.values = {};
     this.markSaved();
     return out;
   }

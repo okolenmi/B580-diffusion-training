@@ -31,8 +31,17 @@ def node_count(page) -> int:
     return page.page.locator("#g2-canvas .g2-node").count()
 
 
+def edit_mode(page) -> None:
+    """The author's buttons (Edit graph, Save, Delete) exist in Edit mode only."""
+    page.page.wait_for_selector("#mode-edit")
+    if not page.page.locator("#btn-graph").is_visible():
+        page.page.click("#mode-edit")
+        page.page.wait_for_selector("#btn-graph", state="visible")
+
+
 def open_app_graph(page, name: str) -> None:
     """From the app's page into its graph in the editor (the Save bar is up when this returns)."""
+    edit_mode(page)
     page.page.wait_for_function("() => !document.querySelector('#btn-graph').disabled")
     for attempt in range(3):  # a click that lands while the page is still drawing itself is lost
         page.page.click("#btn-graph")

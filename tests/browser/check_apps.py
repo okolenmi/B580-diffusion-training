@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from tests.support import check, run
 from .server import ApiError, TestServer
-from .actions import add_number, create_app, node_count, open_app_graph, wait_url
+from . import fixtures
+from .actions import add_number, back_to_app, card, create_app, node_count, open_app_graph, wait_url
 from .session import Chromium
 
 EMPTY_PAGE = {"root": {"columns": 12, "tabs": [{"id": "main", "title": "Main", "blocks": []}]}}
@@ -26,7 +27,7 @@ def empty_app_and_editor_session(server, browser):
     check(node_count(page) == 1, "the free canvas takes a node")
     create_app(page, "alpha")
     check(page.page.locator("#btn-run").is_disabled(), "a new app cannot run before it is saved")
-    page.page.click("#btn-graph")
+    open_app_graph(page, "alpha")
     wait_url(page, "/graph?app=alpha")
     check(page.wait_text("#app-bar-title", "version 1") and page.visible("#app-bar"), "Edit graph opens the app's graph with its bar (version 1)")
     check(node_count(page) == 0, "the canvas holds the app's own (empty) graph, not the free one")
@@ -36,7 +37,7 @@ def empty_app_and_editor_session(server, browser):
     page.page.wait_for_selector("#btn-run")
     page.page.wait_for_timeout(1500)
     check(page.page.locator("#btn-run").is_disabled() and "no nodes yet" in (page.page.get_attribute("#btn-run", "title") or ""), "an app with an empty graph cannot run, and says why")
-    page.page.click("#btn-graph")
+    open_app_graph(page, "alpha")
     wait_url(page, "/graph?app=alpha")
     page.wait_text("#app-bar-title", "version 1")
     add_number(page)
@@ -72,7 +73,7 @@ def copies_stay_independent(server, browser):
     options = page.page.locator("#new-graph option").all_inner_texts()
     check(any("source" in o for o in options), f"the library graph is offered as a start ({options})")
     create_app(page, "beta", start=next(o for o in options if "source" in o))
-    page.page.click("#btn-graph")
+    open_app_graph(page, "beta")
     wait_url(page, "/graph?app=beta")
     check(server.api("GET", "/api/v1/apps/beta")["node_count"] == 2, "the app starts with a copy of the graph (2 nodes)")
     page.page.wait_for_selector("#g2-canvas .g2-node")
@@ -86,10 +87,35 @@ def copies_stay_independent(server, browser):
     check(server.api("GET", "/api/v1/apps/beta")["node_count"] == 3, "changing the library graph leaves the app alone")
 
 
+def values_are_kept(server, browser):
+    """What is typed in use mode is kept at once without a Save and without a new version; Save, Edit graph and Delete belong to Edit mode."""
+    server.api("PUT", "/api/v1/graphs/library/img", fixtures.image_graph(server.home, steps=3, out="kept-out"))
+    page = browser.new_page()
+    create_app(page, "kept", start="A copy of img (7 nodes)")
+    open_app_graph(page, "kept")
+    back_to_app(page, "kept")
+    version = server.api("GET", "/api/v1/apps/kept")["version"]
+    check(not page.visible("#btn-save") and not page.visible("#btn-graph") and not page.visible("#btn-delete"), "in Use mode there is no Save, Edit graph or Delete")
+    box = card(page, "Steps").locator("input").first
+    box.fill("7")
+    box.press("Tab")
+    kept = server.wait_for("the value to be kept", lambda: (server.api("GET", "/api/v1/apps/kept").get("values") or {}).get("nodes"), 15)
+    check(any(v.get("steps") == 7 for v in kept.values()), f"a value typed in Use mode is kept by itself ({kept})")
+    check(server.api("GET", "/api/v1/apps/kept")["version"] == version, "and it makes no new version")
+    page.goto("/apps/kept", settle_ms=1500)
+    check(card(page, "Steps").locator("input").first.input_value() == "7", "after a reload the page shows what was typed")
+    page.page.click("#mode-edit")
+    check(page.visible("#btn-save") and page.visible("#btn-graph") and page.visible("#btn-delete"), "Edit mode brings Save, Edit graph and Delete")
+    page.page.click("#btn-save")
+    page.page.wait_for_function("() => !document.querySelector('#btn-save').classList.contains('is-dirty')")
+    stored = server.api("GET", "/api/v1/apps/kept")
+    check(not stored["values"] and stored["version"] == version + 1, f"Save publishes the values into the document and starts again from it (version {stored['version']})")
+
+
 def cards_lose_their_target(server, browser):
     page = browser.new_page()
     create_app(page, "gamma", start="An empty app")
-    page.page.click("#btn-graph")
+    open_app_graph(page, "gamma")
     wait_url(page, "/graph?app=gamma")
     add_number(page)
     page.page.click("#app-save")
@@ -128,7 +154,7 @@ def app_without_positions(server, browser):
 
 def main():
     with TestServer() as server, Chromium(server.url) as browser:
-        for part in (empty_app_and_editor_session, copies_stay_independent, cards_lose_their_target, app_without_positions):
+        for part in (empty_app_and_editor_session, copies_stay_independent, values_are_kept, cards_lose_their_target, app_without_positions):
             print(f"\n{part.__name__}")
             try:
                 part(server, browser)

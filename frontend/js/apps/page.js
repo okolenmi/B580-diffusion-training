@@ -21,6 +21,7 @@ import { el, showMessage } from "../lib/dom.js";
 import { errText } from "../lib/errors.js";
 import { log } from "../lib/log.js";
 import { AppDocument } from "./document.js";
+import { ValueKeeper } from "./value_keeper.js";
 import { RunTracker } from "./run_tracker.js";
 import { CardSelection } from "./selection.js";
 import { Toolbar } from "./toolbar.js";
@@ -72,6 +73,12 @@ export class AppPage {
       hooks: { displays: () => this.view && this.view.refreshDisplays(), state: () => this.updateState() },
       notify: (msg, kind) => log(msg, kind),
     });
+    this.keeper = new ValueKeeper({
+      name,
+      values: () => valuesPayload({ blocks: this.doc.rootBlocks(), graph: this.doc.draft }, statusByBlock(this.resolution), { keepCleared: true }),
+      enabled: () => !!this.doc.app && !this.doc.isNew,
+      onError: (err) => log(`The values on the page could not be kept: ${errText(err)}`, "warn"),
+    });
     this.mode = "use";
     this.resolution = null;
     this.resolveSeq = 0;
@@ -94,6 +101,7 @@ export class AppPage {
       el("toolbar").hidden = true;
       return;
     }
+    this.#putBackValues();
     this.#buildView();
     this.view.setModules(this.resolution.modules);
     this.view.setContainer(this.doc.app.root, this.doc.draft);
@@ -106,6 +114,15 @@ export class AppPage {
     await this.tracker.adopt();
     await this.tracker.refresh();
     this.updateState();
+  }
+
+  /** What was typed here last time goes over the document's values, for the cards the page has. */
+  #putBackValues() {
+    const kept = this.doc.values;
+    if (!kept || !Object.keys(kept).length) return;
+    applyValues({ blocks: this.doc.rootBlocks(), graph: this.doc.draft }, kept);
+    this.keeper.known(kept);
+    this.scheduleResolve(0);
   }
 
   #buildView() {
@@ -232,7 +249,7 @@ export class AppPage {
       this.renderInspector();
       this.renderTray();
     }
-    if (reason === "value") this.scheduleResolve(600);
+    if (reason === "value") { this.scheduleResolve(600); this.keeper.touch(); }
     if (reason !== "value") this.history.record(JSON.stringify(this.doc.app.root), { merge: reason === "text" });
     if (reason === "layout") this.renderInspector();
     this.updateState();
@@ -364,6 +381,7 @@ export class AppPage {
     showMessage("page-error", "");
     try {
       const out = await this.doc.save();
+      this.keeper.known({});
       history.replaceState(null, "", `/apps/${encodeURIComponent(this.doc.name)}`);
       this.describePage();
       this.updateState();
@@ -385,9 +403,9 @@ export class AppPage {
 
   /** The app's own graph in the graph editor (app mode). What is on the page is saved first: the editor reads the saved app. */
   async openGraphEditor() {
-    if (this.doc.isNew || this.doc.isDirty()) {
+    if (this.doc.isNew || this.doc.needsSave()) {
       await this.save();
-      if (this.doc.isNew || this.doc.isDirty()) return; // the save said why it did not work
+      if (this.doc.isNew || this.doc.needsSave()) return; // the save said why it did not work
     }
     location.href = `/graph?app=${encodeURIComponent(this.doc.name)}`;
   }
@@ -430,6 +448,7 @@ export class AppPage {
     const changed = applyValues({ blocks: this.doc.rootBlocks(), graph: this.doc.draft }, values);
     this.view.setContainer(this.doc.app.root, this.doc.draft);
     this.scheduleResolve(0);
+    this.keeper.touch();
     this.updateState();
     log(changed ? `Values of run #${run.execution_id} are on the page: ${changed} changed.` : `The page already has the values of run #${run.execution_id}.`, "info");
   }

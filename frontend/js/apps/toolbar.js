@@ -70,7 +70,7 @@ export class Toolbar {
 
     const bits = [];
     if (doc.isNew) bits.push("not saved yet");
-    else if (dirty) bits.push(doc.layoutDirty() && doc.valuesDirty() ? "unsaved layout and values" : doc.layoutDirty() ? "unsaved layout" : "unsaved values");
+    else if (dirty) bits.push("unsaved layout");
     el("bd-state").textContent = bits.join(" · ");
   }
 }

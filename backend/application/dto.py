@@ -258,6 +258,7 @@ class SavedAppDTO:
     node_count: int
     created_at: datetime
     updated_at: datetime
+    values: dict
 
 
 @dataclass(frozen=True, slots=True)
@@ -284,6 +285,7 @@ def to_saved_app_dto(saved: SavedApp) -> SavedAppDTO:
         node_count=saved.node_count,
         created_at=saved.created_at,
         updated_at=saved.updated_at,
+        values=dict(saved.values),
     )
 
 

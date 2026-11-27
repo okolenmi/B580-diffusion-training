@@ -179,6 +179,22 @@ def preview_housekeeping() -> None:
         check(left == 3, f"only the newest few pictures of a node are kept ({left})")
 
 
+def preview_names() -> None:
+    """A picture shown on a page never takes the address of a different one: the same prompt and seed from another model, adapter or setting is another file."""
+    from engine.generate.recipe import Image, Recipe
+    with tempfile.TemporaryDirectory() as raw:
+        folder = ArtifactFolder(raw)
+
+        def name(recipe: Recipe, **meta) -> str:
+            return folder.put("n_aaaaaa", [Image(recipe, torch.zeros(3, 8, 8, dtype=torch.uint8), {"recipes": [recipe.seed], **meta})])[0]
+
+        base = Recipe(prompt="p", seed=1)
+        names = {name(base, model="a.safetensors", adapters=[]), name(base, model="b.safetensors", adapters=[]), name(replace(base, cfg=3.0), model="a.safetensors", adapters=[]),
+                 name(base, model="a.safetensors", adapters=[{"file": "x", "strength": 1}])}
+        check(len(names) == 4, f"model, setting and adapter each give another file ({len(names)} of 4)")
+        check(name(base, model="a.safetensors", adapters=[]) in names, "and the same picture again keeps its own name")
+
+
 def refusals() -> None:
     with tempfile.TemporaryDirectory() as raw:
         tmp = Path(raw)
@@ -237,5 +253,6 @@ if __name__ == "__main__":
     run_graph()
     sampling_preview()
     preview_housekeeping()
+    preview_names()
     refusals()
     print("\ndone")

@@ -30,7 +30,7 @@ from .use_cases.browse_assets import BrowseAssets
 from .use_cases.install_packages import GetInstall, StartInstall
 from .use_cases.inspect_environment import DescribeRequirements, InspectEnvironment, TokenizerSetup
 from .use_cases.delete_graph import DeleteGraph
-from .use_cases.app_crud import DeleteApp, GetApp, ListApps, SaveApp, SaveAppGraph
+from .use_cases.app_crud import DeleteApp, GetApp, ListApps, SaveApp, SaveAppGraph, SaveAppValues
 from .use_cases.graph_modules import DescribeGraphModules, ResolveBoard
 from .use_cases.run_app import RunApp
 from .use_cases.delete_graph_executions import DeleteGraphExecutions
@@ -168,6 +168,7 @@ class AppServices:
     list: ListApps
     delete: DeleteApp
     save_graph: SaveAppGraph
+    save_values: SaveAppValues
     run: RunApp
 
 

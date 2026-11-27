@@ -66,11 +66,13 @@
                 <button id="btn-stop" class="btn btn-danger btn-small" hidden>&#9632; Stop</button>
                 <span class="bd-state" id="bd-state"></span>
                 <span class="app-spacer"></span>
-                <button id="btn-graph" class="btn btn-secondary btn-small"
-                        title="Open this app's own graph in the graph editor (the app is saved first)">Edit graph</button>
-                <button id="btn-save" class="btn btn-secondary btn-small"
-                        title="Saves the layout and the values as they are now; a changed graph makes a new version">Save</button>
-                <button id="btn-delete" class="btn btn-kill btn-small">Delete</button>
+                <span class="bd-edit-group" role="group" aria-label="Author actions">
+                    <button id="btn-graph" class="btn btn-secondary btn-small"
+                            title="Open this app's own graph in the graph editor (the app is saved first)">Edit graph</button>
+                    <button id="btn-save" class="btn btn-secondary btn-small"
+                            title="Publishes the layout and the values as they are now; a changed graph makes a new version. Values typed while using the app are kept without this.">Save</button>
+                    <button id="btn-delete" class="btn btn-kill btn-small">Delete</button>
+                </span>
             </div>
             <div class="error-box" id="page-error" role="alert" hidden></div>
             <details class="app-issues" id="issues" hidden>

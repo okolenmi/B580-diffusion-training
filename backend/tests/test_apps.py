@@ -405,6 +405,23 @@ status_, _, body = asgi_request(app, f"{API}/nope/graph", method="PUT", json_bod
 check(status_ == 404, "replacing the graph of an unknown app is 404")
 put("train basic", before["doc"])  # later sections start from the document as it was
 
+version_now = asgi_request(app, f"{API}/train%20basic")[2]["version"]
+typed = {"nodes": {SC: {"steps": 7}}, "memory": {"vram_max_mb": 5000}}
+status_, _, _ = asgi_request(app, f"{API}/train%20basic/values", method="PUT", json_body={"values": typed})
+shown = asgi_request(app, f"{API}/train%20basic")[2]
+check(status_ == 204 and shown["values"] == typed and shown["version"] == version_now,
+      f"what is typed on the page is kept beside the document without a new version (got {status_} {shown.get('values')})")
+status_, _, body = asgi_request(app, f"{API}/train%20basic/values", method="PUT", json_body={"values": {"nodes": [1]}})
+check(status_ == 422 and body["error"]["code"] == "invalid_query", "values of another shape are refused")
+status_, _, body = asgi_request(app, f"{API}/nope/values", method="PUT", json_body={"values": typed})
+check(status_ == 404, "values for an unknown app are 404")
+put("train basic", before["doc"])
+check(asgi_request(app, f"{API}/train%20basic")[2]["values"] == {}, "saving the document makes it the baseline: the kept values are gone")
+asgi_request(app, f"{API}/train%20basic/values", method="PUT", json_body={"values": typed})
+asgi_request(app, f"{API}/train%20basic/graph", method="PUT", json_body={"graph": owned})
+check(asgi_request(app, f"{API}/train%20basic")[2]["values"] == {}, "so does saving the graph from the graph editor")
+put("train basic", before["doc"])
+
 status_, _, body = asgi_request(app, f"{BOARDS}/modules", method="POST", json_body={"graph": {
     "format": 3, "nodes": [{"uid": W1, "class_name": "WidgetNode", "params": {"steps": 4}}], "edges": []}})
 check(status_ == 200 and body["nodes"][0]["displays"][0]["stream"] == f"node:{W1}"

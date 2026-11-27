@@ -65,6 +65,12 @@ the parameter, a field that is wired from another node or not exposed by a card 
 same `StartGraphExecution` as the editor's Run and records its **origin**: `{app, version, values}`, returned as `origin` on every execution summary
 (`null` for runs not started from an app).
 
+**Kept values.** Using an app is not saving it. What is typed on the page goes (a moment after the last change, and when the page is closed) to
+`PUT /api/v1/apps/{name}/values`, body `{values}` in the shape of a run's `values` (a cleared field is `null`); `GET /apps/{name}` returns it as `values`
+and the page puts it over the document's values for the cards it has. It never makes a version and does not touch `updated_at`. A save of the document
+(`PUT /apps/{name}`, Save in edit mode) or of its graph (the graph editor) makes the document the new baseline and empties it. Save, Edit graph and Delete
+are shown in edit mode only.
+
 ## Actions
 
 An **action card** (`ref.kind: "action"`, scope `node`, name = the action) is a button for something a node declared in `ACTIONS` (`graph.ActionModule`): "Save now" on the
@@ -108,12 +114,13 @@ bars, scalars, memory) and **Runs** (history, queue); a tab nothing belongs on i
 | `PUT /api/v1/apps/{name}` | upsert `{description, doc}`: 201 first save, 200 replace; 422 `app_invalid` |
 | `GET /api/v1/apps/{name}` | one app with `doc`, `version`, `graph_hash`; 404 `app_not_found` |
 | `DELETE /api/v1/apps/{name}` | `{deleted: true}`; 404 |
+| `PUT /api/v1/apps/{name}/values` | body `{values}`: 204; what the page holds, kept beside the document (no version); 422 `invalid_query`, 404 |
 | `PUT /api/v1/apps/{name}/graph` | body `{graph}`: replaces the app's graph, page, style and description stay: `{app, orphaned_cards}` (the cards whose target the new graph no longer has); a changed run makes the next version, a moved node does not; 404 `app_not_found`, 422 `invalid_query` |
 | `POST /api/v1/apps/{name}/run` | body `{values, memory_overrides?, mode?}` (`auto` default, `parallel`, `queue`): 201 execution summary; 422 `app_invalid` / `graph_invalid`, 409 `graph_execution_active` / `memory_unavailable` |
 | `POST /api/v1/boards/modules` | body `{graph}`: per node its fields and live displays, and the graph's own: what a card can bind to |
 | `POST /api/v1/boards/resolve` | body `{doc, graph?}` (an App document, or a flat board with the graph beside it): per card `ok`, `wired`, `missing_node`, `missing_module`, `unknown_class`, plus the graph's validation issues; 422 `board_invalid` |
 
-| `GET /api/v1/artifacts/{path}` | a PNG a node left for the page (`Preview Image` and `Sampling Preview` write them under `artifacts/<node uid>/`, newest 48 kept per node); 404 `artifact_not_found` for anything else, a path leaving the folder included |
+| `GET /api/v1/artifacts/{path}` | a PNG a node left for the page (`Preview Image` and `Sampling Preview` write them under `artifacts/<node uid>/`, newest 48 kept per node, named by recipe and a digest of model, adapters and settings so a new picture never takes an old picture's address); 404 `artifact_not_found` for anything else, a path leaving the folder included |
 
 An `image` display module (`DisplayModule(kind="image", value_key=...)`) names the report key that holds `[{path, seed, width, height}]`; the page draws the pictures of the newest frame.
 

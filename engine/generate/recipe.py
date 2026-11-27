@@ -49,11 +49,11 @@ class ImageStore:
         self.directory.mkdir(parents=True, exist_ok=True)
         self.entries: list[dict] = []
 
-    def save(self, image: Image) -> Path:
+    def save(self, image: Image, stem: str | None = None) -> Path:
         from PIL import Image as PILImage
         from PIL.PngImagePlugin import PngInfo
 
-        path = self.directory / f"{image.recipe.stem}.png"
+        path = self.directory / f"{stem or image.recipe.stem}.png"
         info = PngInfo()
         info.add_text("lab", json.dumps(image.meta, sort_keys=True))
         info.add_text("parameters", f"{image.recipe.prompt}\nNegative prompt: {image.recipe.negative}\nSteps: {image.recipe.steps}, Sampler: {image.recipe.sampler}, "

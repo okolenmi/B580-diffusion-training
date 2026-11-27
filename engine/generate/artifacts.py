@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +12,8 @@ from .recipe import Image, ImageStore
 
 
 class ArtifactFolder:
-    """Pictures a running graph shows. A name follows the recipe, so the same recipe overwrites its own file."""
+    """Pictures a running graph shows. A name holds the recipe and a digest of everything that made the picture (model and adapters
+    included), so a picture never overwrites a different one and a page that caches by address cannot show an old picture."""
 
     KEEP = 48
 
@@ -20,9 +24,14 @@ class ArtifactFolder:
         """Writes the images under ``owner`` (a node uid); the paths come back relative to the folder, as the page asks for them."""
         folder = self.root / owner
         store = ImageStore(folder)
-        paths = [f"{owner}/{store.save(image).name}" for image in images]
+        paths = [f"{owner}/{store.save(image, self.stem(image)).name}" for image in images]
         self._prune(folder, keep=max(self.KEEP, len(images)))
         return paths
+
+    @staticmethod
+    def stem(image: Image) -> str:
+        made = json.dumps([asdict(image.recipe), image.meta.get("model"), image.meta.get("adapters")], sort_keys=True, default=str)
+        return f"{image.recipe.stem}_{hashlib.md5(made.encode()).hexdigest()[:8]}"
 
     def put_view(self, owner: str, name: str, pixels: Any) -> str:
         """One plain picture (uint8 ``(3, H, W)``) under ``owner`` named ``name``; what a live preview writes at every look."""

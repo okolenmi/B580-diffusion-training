@@ -4,6 +4,8 @@ Contract over ``services.apps`` (``docs/contracts/apps.md``):
 
 * ``GET/PUT/DELETE /api/v1/apps[/{name}]`` -- the library (PUT: 201 first save, 200 replace; 422 ``app_invalid`` lists every problem).
   A save whose graph snapshot changed makes the next ``version``; a layout change alone does not;
+* ``PUT /api/v1/apps/{name}/values`` -- the values on the page, kept beside the document without making a version; the next save of the document or of
+  its graph discards them (the document is the new baseline);
 * ``PUT /api/v1/apps/{name}/graph`` -- replace the graph the app owns (the graph editor's Save in app mode); page, style and description
   stay, and the answer lists the cards whose target the new graph no longer has;
 * ``POST /api/v1/apps/{name}/run`` -- run the app's graph with the values typed into it. Only fields the app exposes may be set; the
@@ -27,6 +29,7 @@ from ..schemas import (
     AppGraphOut,
     AppIn,
     AppRunIn,
+    AppValuesIn,
     DeleteAppOut,
     ExecutionSummaryOut,
     SavedAppListOut,
@@ -68,6 +71,13 @@ def get_app(name: str, apps: AppServices = Depends(apps_of)):
 @router.delete("/{name}", response_model=DeleteAppOut, responses={404: _ERROR_404})
 def delete_app(name: str, apps: AppServices = Depends(apps_of)):
     return DeleteAppOut(deleted=apps.delete.execute(name).deleted)
+
+
+@router.put("/{name}/values", status_code=204, responses={404: _ERROR_404})
+def save_app_values(name: str, body: AppValuesIn, apps: AppServices = Depends(apps_of)):
+    """What the page holds right now; the app's document and version stay as they are."""
+    apps.save_values.execute(name, body.values)
+    return Response(status_code=204)
 
 
 @router.put("/{name}/graph", response_model=AppGraphOut, responses={404: _ERROR_404, 422: {"description": "invalid_query"}})

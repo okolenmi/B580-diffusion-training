@@ -45,12 +45,13 @@ export function setFieldValue(doc, ref, value) {
  * every field block the page places. A cleared field is sent as null so the
  * server clears it too (the saved graph may hold a value the person just
  * emptied); a graph-memory field that is unset is left out, because the
- * server merges memory settings rather than clearing them.
+ * server merges memory settings rather than clearing them. `keepCleared` sends it as null too: that is for the page's own copy of what
+ * it shows, which must remember that the field was emptied.
  *
  * `statuses` (block id -> status from /resolve) filters out blocks the
  * server would refuse: wired fields and orphans.
  */
-export function valuesPayload(doc, statuses = {}) {
+export function valuesPayload(doc, statuses = {}, { keepCleared = false } = {}) {
   const nodes = {};
   const memory = {};
   for (const b of leafCards(doc.blocks)) {
@@ -59,7 +60,7 @@ export function valuesPayload(doc, statuses = {}) {
     if (st && st !== "ok") continue;
     const v = getFieldValue(doc, b.ref);
     if (b.ref.scope === "graph") {
-      if (v !== undefined) memory[b.ref.name.split(".", 2)[1]] = v;
+      if (v !== undefined || keepCleared) memory[b.ref.name.split(".", 2)[1]] = v === undefined ? null : v;
     } else {
       (nodes[b.ref.node] = nodes[b.ref.node] || {})[b.ref.name] = v === undefined ? null : v;
     }

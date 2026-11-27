@@ -8,6 +8,8 @@ the frontend cannot render never reaches the table -- while whether a card's *ta
 
 from __future__ import annotations
 
+import json
+
 from ...domain.app import graph_hash, normalize_app_doc, validate_app_doc
 from ..dto import (
     DeleteAppResult,
@@ -19,7 +21,7 @@ from ..dto import (
     to_saved_app_summary,
 )
 from ..errors import AppInvalidError, AppNotFoundError, InvalidQueryError
-from ..limits import MAX_APP_DESCRIPTION
+from ..limits import MAX_APP_DESCRIPTION, MAX_APP_VALUES
 from ..ports.app_library import AppLibrary, normalize_app_name
 from .graph_modules import STATUS_OK, STATUS_WIRED, ResolveBoard
 from .save_graph import normalize_graph_payload
@@ -48,6 +50,23 @@ class SaveApp:
         stored["graph"] = normalize_graph_payload(stored["graph"])
         saved, created = self._library.save(clean, stored, graph_hash=graph_hash(stored["graph"]), description=description)
         return SaveAppResult(app=to_saved_app_dto(saved), created=created)
+
+
+class SaveAppValues:
+    """Keep what a person typed into an app's page, so that opening the page again shows it. Using an app is not publishing it: no version, no new document."""
+
+    def __init__(self, library: AppLibrary) -> None:
+        self._library = library
+
+    def execute(self, name: str, values: dict) -> None:
+        clean = _clean_name(name)
+        unknown = [key for key in values if key not in ("nodes", "memory")]
+        if unknown or any(not isinstance(values.get(key, {}), dict) for key in ("nodes", "memory")):
+            raise InvalidQueryError("values must be {\"nodes\": {...}, \"memory\": {...}}")
+        if len(json.dumps(values)) > MAX_APP_VALUES:
+            raise InvalidQueryError(f"values must be at most {MAX_APP_VALUES} bytes")
+        if not self._library.put_values(clean, values):
+            raise AppNotFoundError(f"no saved app named {clean!r}")
 
 
 class GetApp:

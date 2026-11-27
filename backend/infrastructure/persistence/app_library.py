@@ -13,7 +13,7 @@ from datetime import datetime
 from ...application.ports.app_library import AppLibrary, SavedApp
 from .sqlite import SqliteDatabase
 
-_COLUMNS = "name, description, version, graph_hash, doc, created_at, updated_at"
+_COLUMNS = "name, description, version, graph_hash, doc, created_at, updated_at, values_json"
 
 
 def _row_to_saved(row) -> SavedApp:
@@ -25,6 +25,7 @@ def _row_to_saved(row) -> SavedApp:
         doc=json.loads(row["doc"]),
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
+        values=json.loads(row["values_json"]) if row["values_json"] else {},
     )
 
 
@@ -44,13 +45,18 @@ class SqliteAppLibrary(AppLibrary):
             created = cursor.rowcount > 0
             if not created:
                 conn.execute(
-                    "UPDATE apps SET description = ?, doc = ?, updated_at = ?, "
+                    "UPDATE apps SET description = ?, doc = ?, updated_at = ?, values_json = NULL, "
                     "version = CASE WHEN graph_hash != ? THEN version + 1 ELSE version END, graph_hash = ? "
                     "WHERE name = ?",
                     (description, payload, now, graph_hash, graph_hash, name),
                 )
             row = conn.execute(f"SELECT {_COLUMNS} FROM apps WHERE name = ?", (name,)).fetchone()
         return _row_to_saved(row), created
+
+    def put_values(self, name: str, values: dict) -> bool:
+        with self._db.connection() as conn:
+            cursor = conn.execute("UPDATE apps SET values_json = ? WHERE name = ?", (json.dumps(values), name))
+        return cursor.rowcount > 0
 
     def get(self, name: str) -> SavedApp | None:
         with self._db.connection() as conn:

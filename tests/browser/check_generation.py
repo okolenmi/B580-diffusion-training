@@ -16,7 +16,7 @@ from PIL import Image
 
 from tests.support import check
 from . import fixtures
-from .actions import back_to_app, card_text, create_app, open_app_graph, open_tab, wait_card
+from .actions import back_to_app, card, card_text, create_app, open_app_graph, open_tab, wait_card
 from .check_runs import executions, idle, stop_all, training_app
 from .server import ApiError, TestServer
 from .session import Chromium
@@ -77,6 +77,34 @@ def picture_on_the_page(server, browser):
     check("/artifacts/" in popup.value.url, "a click opens the picture in full size")
 
 
+def a_changed_setting_shows_a_new_picture(server, browser):
+    """Same prompt and seed, another setting (a model change does the same through the file name): the card must not keep showing the first picture."""
+    server.api("PUT", "/api/v1/graphs/library/img", fixtures.image_graph(server.home, steps=3, prompt="a test", seed=3, out="again-images"))
+    page = browser.new_page()
+    create_app(page, "again", start="A copy of img (7 nodes)")
+    open_app_graph(page, "again")
+    back_to_app(page, "again")
+    source = lambda: page.page.evaluate("() => document.querySelector('#board img')?.src || ''")  # noqa: E731
+    page.page.click("#btn-run")
+    page.page.wait_for_function("() => { const i = document.querySelector('#board img'); return !!i && i.naturalWidth > 0; }", timeout=90000)
+    first = source()
+    idle(server)
+    box = card(page, "Guidance").locator("input").first
+    box.fill("2.5")
+    box.press("Tab")
+    page.page.wait_for_timeout(700)
+    page.page.click("#btn-run")
+    try:
+        page.page.wait_for_function("(old) => { const i = document.querySelector('#board img'); return !!i && i.src !== old && i.naturalWidth > 0; }", arg=first, timeout=90000)
+        changed = True
+    except Exception:  # noqa: BLE001
+        changed = False
+    check(changed, "after another guidance value the card shows the new picture, not the one before")
+    idle(server)
+    names = sorted(p.name for p in (server.home / "again-images").glob("*.png"))
+    check(len(names) >= 1, f"the output folder holds the pictures ({len(names)})")
+
+
 def batch_and_seeds(server, browser):
     generate(server, fixtures.image_graph(server.home, steps=3, seed=5, batch=4, out="batch"))
     batch = pngs(server, "batch")
@@ -133,7 +161,7 @@ def anima_rules(server, browser):
 
 def main():
     with TestServer() as server, Chromium(server.url) as browser:
-        for part in (picture_on_the_page, batch_and_seeds, adapter_stack, stop_while_sampling, anima_rules):
+        for part in (picture_on_the_page, a_changed_setting_shows_a_new_picture, batch_and_seeds, adapter_stack, stop_while_sampling, anima_rules):
             print(f"\n{part.__name__}")
             try:
                 part(server, browser)

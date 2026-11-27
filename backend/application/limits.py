@@ -73,6 +73,7 @@ MAX_APP_NAME = 120
 """Ceiling on a saved app's name."""
 
 MAX_APP_DESCRIPTION = 1000
+MAX_APP_VALUES = 262_144
 """Ceiling on a saved app's description."""
 
 

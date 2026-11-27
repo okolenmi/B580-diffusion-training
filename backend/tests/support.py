@@ -72,6 +72,7 @@ from backend.application.use_cases import (
     DeleteGraphExecutions,
     DescribeRequirements,
     GetGraph,
+    GetExecutionLog,
     GetExecutionMetrics,
     GetGraphExecution,
     GetSettings,
@@ -108,6 +109,7 @@ from backend.infrastructure.graph.memory_fields import memory_fields_resolver
 from backend.domain.graph import GraphDefinition
 from backend.infrastructure.graph.runtime import ContractGraphRuntime
 from backend.infrastructure.graph_event_stream import ExecutionEventTail
+from backend.infrastructure.execution_logs import FileExecutionLogs
 from backend.infrastructure.execution_metrics import FileExecutionMetrics
 from backend.infrastructure.graph_task_gateway import InProcessGraphTaskGateway
 from backend.infrastructure.memory_peak_store import SqlitePeakStore
@@ -767,6 +769,7 @@ def build_services(
             list_executions=ListGraphExecutions(executions=graph_executions),
             get_execution=GetGraphExecution(executions=graph_executions),
             execution_metrics=GetExecutionMetrics(executions=graph_executions, metrics=execution_metrics),
+            execution_log=GetExecutionLog(executions=graph_executions, logs=FileExecutionLogs(graph_scratch)),
             rename_execution=RenameGraphExecution(executions=graph_executions),
             send_action=SendExecutionAction(
                 executions=graph_executions, catalog=contract_catalog, channel=FileCommandChannel(graph_scratch)),

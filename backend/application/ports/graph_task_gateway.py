@@ -115,6 +115,10 @@ class GraphTaskGateway(ABC):
         """True only for a live process that is one of our graph children."""
         raise NotImplementedError
 
+    def exit_status(self, pid: int) -> str | None:
+        """How a child that is gone ended, in words ("killed by signal 9 (SIGKILL) ..."), or None when unknown (adopted after a restart, or still alive)."""
+        return None
+
     @abstractmethod
     def find_running_all(self, execution_id: ExecutionId) -> list[int]:
         """Every live child claiming ``execution_id``, ascending by pid.

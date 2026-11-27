@@ -172,6 +172,30 @@ class SubprocessGraphTaskGateway(GraphTaskGateway):
                 return False
         return match
 
+    #: What a signal usually means for a graph child; the signal alone sends a reader nowhere.
+    _SIGNAL_HINTS = {
+        signal.SIGKILL: "usually the kernel's out-of-memory killer: the host ran out of RAM",
+        signal.SIGSEGV: "a crash in native code, often the GPU driver or a kernel library",
+        signal.SIGABRT: "the process aborted itself, often a native library or the driver after a fatal error",
+        signal.SIGBUS: "a memory-mapped file went away or was truncated while in use",
+        signal.SIGTERM: "something asked it to terminate",
+    }
+
+    def exit_status(self, pid: int) -> str | None:
+        with self._lock:
+            proc = self._procs.get(pid)
+        code = proc.poll() if proc is not None else None
+        if code is None:
+            return None
+        if code >= 0:
+            return f"exit code {code}"
+        try:
+            sig = signal.Signals(-code)
+        except ValueError:
+            return f"killed by signal {-code}"
+        hint = self._SIGNAL_HINTS.get(sig)
+        return f"killed by signal {sig.value} ({sig.name})" + (f": {hint}" if hint else "")
+
     def _cmdline_marker_match(self, pid: int) -> bool | None:
         return cmdline_mentions(pid, CMDLINE_MARKER)
 

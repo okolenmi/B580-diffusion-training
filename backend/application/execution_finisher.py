@@ -45,8 +45,9 @@ class ExecutionFinisher:
         *,
         abandoned: bool = False,
         stopped: bool = False,
+        exit_note: str | None = None,
     ) -> None:
-        """Terminal write for one watched run. ``stopped``: a stop was requested for it.
+        """Terminal write for one watched run. ``stopped``: a stop was requested for it; ``exit_note``: how the child's process ended, when known.
 
         Three sources of truth about how it ended, in priority order, and
         the order is the whole point:
@@ -95,8 +96,8 @@ class ExecutionFinisher:
                         "the execution log"
                         if abandoned else
                         "execution process exited without reporting an "
-                        "outcome (crashed, or a device fault killed it) -- "
-                        "see the execution log"
+                        "outcome (crashed, or a device fault killed it)"
+                        + (f": {exit_note}" if exit_note else "") + " -- see the execution log"
                     )),
                 )
                 self._writer.commit(execution, expected=GraphStatus.RUNNING)

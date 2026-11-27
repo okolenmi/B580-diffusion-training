@@ -14,6 +14,7 @@ from tests.support import check
 from . import fixtures
 from .check_runs import executions, idle, stop_all
 from .server import TestServer
+from .session import Chromium
 
 
 def start_run(server, dataset: str, steps: int, name: str) -> int:
@@ -65,6 +66,23 @@ def machine_loses_power(server, dataset) -> None:
     check(True, "and a new run can start")
 
 
+def child_killed(server, dataset, browser) -> None:
+    """A child the kernel kills (the out-of-memory killer sends SIGKILL): the row says how it died, the log is reachable, the start page shows both."""
+    run_id = start_run(server, dataset, 400, "killed")
+    for pid in server.children():
+        os.kill(pid, signal.SIGKILL)
+    server.wait_for("the row to turn terminal", lambda: _status(server, run_id) not in ("running", "queued", "planned"), 40)
+    row = next(e for e in executions(server) if e["execution_id"] == run_id)
+    check(row["status"] == "error" and "signal 9 (SIGKILL)" in row["error"] and "out-of-memory" in row["error"], f"the row names the signal and what it usually means ({row['error'][:160]!r})")
+    log = server.http("GET", f"/api/v1/graphs/executions/{run_id}/log")
+    check(log[0] == 200 and "text/plain" in log[1], f"the run's log is served as text ({log[0]} {log[1]})")
+    page = browser.new_page()
+    page.goto("/", settle_ms=1500)
+    page.page.locator(".run-more summary").first.click()
+    check(page.visible(".run-error") and "SIGKILL" in page.text(".run-error") and page.visible(".run-error-links a"), "the start page opens the error and a link to the full log from the failed run")
+    check(server.http("GET", "/api/v1/graphs/executions/9999/log")[0] == 404, "a log that does not exist is a 404")
+
+
 def _alive(pid: int) -> bool:
     try:
         os.kill(pid, 0)
@@ -74,12 +92,13 @@ def _alive(pid: int) -> bool:
 
 
 def main() -> None:
-    with TestServer() as server:
+    with TestServer() as server, Chromium(server.url) as browser:
         dataset = fixtures.toy_dataset(server.home)
         for name, part in (("clean stop", lambda: survives(server, dataset, "clean stop", signal.SIGTERM)),
                            ("crash", lambda: survives(server, dataset, "crash", signal.SIGKILL)),
                            ("finishes while down", lambda: finishes_while_down(server, dataset)),
-                           ("power cut", lambda: machine_loses_power(server, dataset))):
+                           ("power cut", lambda: machine_loses_power(server, dataset)),
+                           ("killed child", lambda: child_killed(server, dataset, browser))):
             print(f"\n{name}")
             try:
                 part()

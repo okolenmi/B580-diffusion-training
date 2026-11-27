@@ -35,6 +35,7 @@ from .use_cases.graph_modules import DescribeGraphModules, ResolveBoard
 from .use_cases.run_app import RunApp
 from .use_cases.delete_graph_executions import DeleteGraphExecutions
 from .use_cases.get_graph import GetGraph
+from .use_cases.get_execution_log import GetExecutionLog
 from .use_cases.get_execution_metrics import GetExecutionMetrics
 from .use_cases.get_graph_execution import GetGraphExecution
 from .use_cases.get_settings import GetSettings
@@ -139,6 +140,8 @@ class GraphServices:
     get_execution: GetGraphExecution
     #: What a run (live or finished) reported to its monitors: the curves of a past run.
     execution_metrics: GetExecutionMetrics
+    #: What a run's process printed (kept for runs that failed or were stopped).
+    execution_log: GetExecutionLog
     stop_execution: StopGraphExecution
     #: A page asks a node of a live run to act (Save now); delivered through the run's command inbox.
     send_action: SendExecutionAction

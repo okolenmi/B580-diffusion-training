@@ -138,6 +138,14 @@ class TestServer:
         except OSError:
             return ""
 
+    def http(self, method: str, path: str) -> tuple[int, str]:
+        """Status and content type of a plain request (for answers that are not JSON)."""
+        try:
+            with urllib.request.urlopen(urllib.request.Request(self.url + path, method=method), timeout=30) as response:
+                return response.status, response.headers.get("content-type", "")
+        except urllib.error.HTTPError as error:
+            return error.code, error.headers.get("content-type", "")
+
     def api(self, method: str, path: str, body=None, *, timeout: float = 30.0):
         data = None if body is None else json.dumps(body).encode()
         request = urllib.request.Request(self.url + path, data=data, method=method, headers={"Content-Type": "application/json"} if data else {})

@@ -28,6 +28,7 @@ from ..application.use_cases import (
     DeleteGraphExecutions,
     DescribeRequirements,
     GetGraph,
+    GetExecutionLog,
     GetExecutionMetrics,
     GetGraphExecution,
     GetSettings,
@@ -50,6 +51,7 @@ from ..application.use_cases import (
 )
 from ..infrastructure.server_restart import ExecServerRestarter
 from ..infrastructure.file_artifact_store import FileArtifactStore
+from ..infrastructure.execution_logs import FileExecutionLogs
 from ..infrastructure.file_command_channel import FileCommandChannel
 from ..infrastructure.image_libraries import FsImageLibraries
 from ..infrastructure.file_asset_store import FileSystemAssetStore
@@ -154,6 +156,7 @@ def _graphs(infra: Infrastructure, kit: GraphKit) -> GraphServices:
         list_executions=ListGraphExecutions(executions=executions),
         get_execution=GetGraphExecution(executions=executions),
         execution_metrics=GetExecutionMetrics(executions=executions, metrics=kit.metrics),
+        execution_log=GetExecutionLog(executions=executions, logs=FileExecutionLogs(kit.scratch_dir)),
         rename_execution=RenameGraphExecution(executions=executions),
         send_action=SendExecutionAction(
             executions=executions, catalog=catalog, channel=FileCommandChannel(kit.scratch_dir)

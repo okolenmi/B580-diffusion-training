@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, Query, Response
+from fastapi.responses import PlainTextResponse
 
 from ...application.limits import DEFAULT_EXECUTION_PAGE_SIZE
 from ...application.services import ApplicationServices
@@ -173,6 +174,19 @@ def get_execution(
 ):
     """Full row: lifecycle, per-node results, submission snapshot."""
     return execution_out(services.graphs.get_execution.execute(execution_id))
+
+
+@router.get(
+    "/executions/{execution_id}/log",
+    response_class=PlainTextResponse,
+    responses={404: _ERROR_404},
+)
+def execution_log(
+    execution_id: int,
+    services: ApplicationServices = Depends(get_services),
+):
+    """The end of what the run's process printed (a traceback is there); only runs that failed or were stopped keep one."""
+    return PlainTextResponse(services.graphs.execution_log.execute(execution_id))
 
 
 @router.get(

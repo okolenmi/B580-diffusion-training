@@ -105,10 +105,17 @@ function runRow(run) {
   const label = run.name || `Run #${run.execution_id}`;
   const stamp = Date.parse(run.finished_at || run.started_at || run.created_at);
   const took = run.started_at && run.finished_at ? fmtDuration(Date.parse(run.finished_at) - Date.parse(run.started_at)) : null;
-  return h("div", { class: "run-row" },
+  const row = h("div", { class: "run-row" },
     h("span", { class: "run-name", title: label }, label),
     h("span", { class: "run-when" }, took ? `${took} · ${fmtRel(stamp)}` : fmtRel(stamp)),
     h("span", { class: `status-badge status-${BADGE[run.status] || "idle"}` }, run.status));
+  if (run.status !== "error" && run.status !== "stopped") return row;
+  // What went wrong stays one click away: the message the run ended with, and the process's own output while the server still keeps it.
+  const logLink = h("a", { href: `/api/v1/graphs/executions/${run.execution_id}/log`, target: "_blank", rel: "noopener" }, "Full log");
+  return h("details", { class: "run-more" },
+    h("summary", {}, row),
+    h("pre", { class: "run-error" }, run.error || "Stopped by request."),
+    h("div", { class: "run-error-links" }, logLink));
 }
 
 function recentRuns() {

@@ -2,7 +2,7 @@
 
 Sampling Preview builds one and wires it into a Sampler. Every few steps the first image's estimate is shrunk (a decode at full size
 needs more memory than a card holding the denoiser may have to spare) and decoded, and the result goes to ``show``. When the decode
-does not fit, previews stop for the rest of the run and ``note`` says so: a preview must never end the run it watches.
+does not fit, or fails in any other way, previews stop for the rest of the run and ``note`` says so: a preview must never end the run it watches.
 """
 
 from __future__ import annotations
@@ -35,10 +35,9 @@ class SamplingPreview:
         try:
             pixels = self.decode(self.shrunk(estimate[:1]))
         except Exception as error:
-            if not is_out_of_memory(error):
-                raise
             self.stopped = True
-            self.note("Sampling Preview: the card has no room to decode a preview beside the model; previews stop for this run")
+            self.note("Sampling Preview: the card has no room to decode a preview beside the model; previews stop for this run" if is_out_of_memory(error)
+                      else f"Sampling Preview stopped for this run: {type(error).__name__}: {error}")
             self.finish()
             return
         self.show(pixels[0], step, total)

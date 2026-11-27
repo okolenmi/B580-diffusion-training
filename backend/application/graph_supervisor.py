@@ -489,7 +489,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         try:
             with self._lock:
                 stopped = execution_id in self._stop_requested
-            self._finisher.finish(execution_id, saw_outcome, outcome_error, abandoned=abandoned, stopped=stopped)
+            self._finisher.finish(execution_id, saw_outcome, outcome_error, abandoned=abandoned, stopped=stopped, exit_note=self._gateway.exit_status(pid))
         finally:
             self._release(execution_id, pid)
 

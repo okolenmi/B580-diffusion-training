@@ -30,6 +30,13 @@ keys of `StepFinished.metrics`: `loss`, `lr`, `step_ms`, memory and timing keys.
 display modules (`MODULES` of a node class, in the catalog) name the keys they draw. The editor's Monitor panel
 (`frontend/js/graph/monitor.js`) shows the modules of every node of the open graph that has some.
 
+### What a run printed
+
+`GET /api/v1/graphs/executions/{id}/log` returns the end (at most 200 KB) of the child process's console output as `text/plain`; 404 for an unknown run or one with no log.
+Only runs that ended `error` or `stopped` keep it (the newest `GRAPH_FAILED_LOG_KEEP`, on disk as `backend/data/graph_executions/execution_<id>.log`); a finished run's is removed.
+A child that died without reporting an outcome gets its exit status in the row's `error`: `killed by signal 9 (SIGKILL): usually the kernel's out-of-memory killer ...`, `exit code N`.
+The start page lists such runs expandable, with that text and a link to the full log.
+
 ### Frames of a past run
 
 `GET /api/v1/graphs/executions/{id}/monitor` lists the streams a run reported on; `GET .../monitor/{stream}` returns that stream's

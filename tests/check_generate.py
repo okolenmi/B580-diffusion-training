@@ -156,6 +156,15 @@ def sampling_preview() -> None:
     big(1, 5, torch.zeros(1, 4, 16, 16))
     big(2, 5, torch.zeros(1, 4, 16, 16))
     check(big.stopped and len(notes) == 1 and closed == [True] and shown == [3, 10], "when the decode does not fit, previews stop for the run, once, and the decoder is dropped")
+    broken_notes, broken_shown = [], []
+
+    def explode(latents):
+        raise RuntimeError("the decoder broke")
+
+    broken = SamplingPreview(every=1, size=64, spatial_factor=8, decode=explode, show=lambda p, step, total: broken_shown.append(step), note=broken_notes.append)
+    broken(1, 5, torch.zeros(1, 4, 4, 4))
+    broken(2, 5, torch.zeros(1, 4, 4, 4))
+    check(broken.stopped and not broken_shown and len(broken_notes) == 1 and "the decoder broke" in broken_notes[0], "any other failure of a preview also only stops previews, and says why")
 
 
 def preview_housekeeping() -> None:

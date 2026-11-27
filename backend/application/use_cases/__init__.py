@@ -24,6 +24,7 @@ from .inspect_environment import (
 from .delete_graph import DeleteGraph
 from .delete_graph_executions import DeleteGraphExecutions
 from .get_graph import GetGraph
+from .get_execution_log import GetExecutionLog
 from .get_execution_metrics import GetExecutionMetrics
 from .get_graph_execution import GetGraphExecution
 from .get_settings import GetSettings
@@ -67,6 +68,8 @@ __all__ = [
     "DeleteGraph",
     "DeleteGraphExecutions",
     "GetGraph",
+    "GetExecutionLog",
+    "GetExecutionLog",
     "GetExecutionMetrics",
     "GetGraphExecution",
     "GetSettings",

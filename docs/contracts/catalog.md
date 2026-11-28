@@ -33,6 +33,8 @@ Python: `graph/catalog.py`.
   "events_in":  [ EventPortInfo ],
   "events_out": [ EventPortInfo ],
   "modules": [ DisplayModuleInfo ],
+  "default_addons": [ "LivePreviewAddon" ],   // addon kinds the editor adds with the node when it is taken from the palette (starters list theirs)
+  "live_frames": [ "image" ],                // kinds of live frame the node can show: a node upstream sends them only when a node downstream lists the kind
   "actions": [ {name, label, event, doc, confirm, needs, needs_label} ],   // what a page may ask of the node while it runs (contracts/apps.md)
   "reads_settings": [ "device.default" ],
   "settings": [ SettingSpec ],            // contributed by this class

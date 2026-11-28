@@ -118,6 +118,7 @@ async function boot() {
 
   const addAt = (className, point) => {
     const { uid } = doc.addNode(className, { x: point.x, y: point.y });
+    for (const kind of shapes.info(className)?.default_addons || []) doc.addAddon(uid, kind);
     canvas.select([uid]);
     return uid;
   };

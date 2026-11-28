@@ -8,14 +8,14 @@ from typing import Any
 import torch
 
 from engine.devices import resolve_device, resolve_dtype
-from engine.generate.preview import SamplingPreview
+from engine.generate.preview import LivePreview
 from engine.generate.recipe import Recipe
 from engine.generate.sampling import SAMPLERS, SigmaSchedule
 from engine.generate.scheme import scheme_for
 from engine.handles import Latents, PromptEncoding
 from families.api.parts import DenoiserPart
 from ..family_lookup import family_of
-from graph import DisplayModule, Group, Node, Port
+from graph import AddonSlot, DisplayModule, Group, Node, Port
 from nodes.model.merges import apply_merges
 from .shelf_access import shelf_of
 
@@ -23,7 +23,9 @@ from .shelf_access import shelf_of
 class SamplerNode(Node):
     DISPLAY_NAME = "Sampler"
     CATEGORY = "Generation"
-    READS_SETTINGS = ("device.default", "precision.denoiser")
+    READS_SETTINGS = ("device.default", "precision.denoiser", "precision.vae")
+    ADDON_SLOTS = (AddonSlot("preview", LivePreview, doc="A live look at the picture while it forms (the Live preview addon)."),)
+    DEFAULT_ADDONS = ("LivePreviewAddon",)
     GROUPS = (Group("image", "Image"), Group("sampling", "Sampling"))
     INPUTS = {
         "denoiser": Port("denoiser", DenoiserPart, doc="From Load Model, optionally through Adapter Stack or Merge Adapter."),
@@ -39,8 +41,6 @@ class SamplerNode(Node):
         "width": Port("width", int, required=False, default=1024, minimum=64, maximum=2048, step=8, unit="px", group="image"),
         "height": Port("height", int, required=False, default=1024, minimum=64, maximum=2048, step=8, unit="px", group="image"),
         "batch": Port("batch", int, required=False, default=1, minimum=1, maximum=16, group="image"),
-        "preview": Port("preview", SamplingPreview, required=False,
-                        doc="From Sampling Preview: shows the picture forming while this samples."),
         "eps_scale": Port("eps_scale", float, required=False, default=1.0, minimum=1.0, step=0.01, advanced=True,
                           doc="Epsilon scaling: the guided prediction is divided by this, since sampling errors make it a little too large.", group="sampling"),
     }
@@ -83,20 +83,23 @@ class SamplerNode(Node):
             apply_merges(family, loaded, part.merges, lambda: self.context.env.service("models"), self.context.task)
             loaded.eval()
 
+        preview = self.addons.one("preview")
+        if preview is not None:
+            preview.begin(family)
         denoiser = shelf.acquire(key, load, prepare)
         try:
-            latents = self._sample(denoiser, encoding, recipes, first, device, scheme, family.latent_spec, inputs.get("preview"))
+            latents = self._sample(denoiser, encoding, recipes, first, device, scheme, family.latent_spec, preview)
         finally:
             shelf.done(key, denoiser)
             del denoiser
-            if inputs.get("preview") is not None:
-                inputs["preview"].finish()
+            if preview is not None:
+                preview.finish()
         adapters = [{"file": m.file, "strength": m.strength} for m in part.merges]
         return {"latents": Latents(latents, recipes, {"model": part.source.path.rsplit("/", 1)[-1], "adapters": adapters,
                                                       "recipes": [asdict(r) for r in recipes]})}
 
     def _sample(self, denoiser: Any, encoding: PromptEncoding, recipes: tuple[Recipe, ...], first: Recipe, device: str,
-                scheme: Any, spec: Any, preview: SamplingPreview | None = None) -> torch.Tensor:
+                scheme: Any, spec: Any, preview: LivePreview | None = None) -> torch.Tensor:
         size, batch = (first.height, first.width), len(recipes)
         positive = encoding.condition(size, batch).to(device)
         negative = encoding.condition(size, batch, negative=True).to(device)
@@ -113,7 +116,7 @@ class SamplerNode(Node):
 
         cfg = 1.0 if first.prompt == first.negative else first.cfg  # equal prompts predict equal noise: the second pass would change nothing
         with torch.no_grad(), self.context.task("Sampling", total=total):
-            peek = (lambda index, estimate: preview(index + 1, total, estimate)) if preview is not None else None
+            peek = (lambda index, estimate: preview(index + 1, total, estimate)) if preview is not None and preview.active else None
             latents = scheme.sample(recipes, lambda r: spec.noise_shape(r.height, r.width), network, cfg, device, peek)
         self.context.report(f"node:{self.uid}", {"step": total, "total": total})
         return latents

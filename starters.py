@@ -367,6 +367,7 @@ def _image_graph(b: _Builder, o: SdxlImageOptions, output: str, *, encoder_wires
     b.add("prompt", "EncodePromptNode", prompt=o.prompt, negative=o.negative)
     b.add("sampler", "SamplerNode", seed=o.seed, steps=o.steps, cfg=o.cfg, sampler=o.sampler, scheduler=o.scheduler,
           width=o.width, height=o.height, batch=o.batch)
+    b.addon("sampler", "preview", "LivePreviewAddon")
     b.add("decode", "DecodeImageNode")
     b.add("preview", "PreviewImageNode")
     b.add("save", "SaveImageNode", directory=output)

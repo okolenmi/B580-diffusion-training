@@ -79,6 +79,18 @@ class GraphDoc:
     def edges_to(self, uid: str) -> list[Edge]:
         return [e for e in self.edges if e.to_node == uid]
 
+    def downstream(self, uid: str) -> list[str]:
+        """Every node reached from ``uid`` by following wires forward, nearest first (the node itself is not in it)."""
+        seen: dict[str, None] = {}
+        queue = [uid]
+        while queue:
+            here = queue.pop(0)
+            for edge in self.edges:
+                if edge.from_node == here and edge.to_node not in seen and edge.to_node != uid:
+                    seen[edge.to_node] = None
+                    queue.append(edge.to_node)
+        return list(seen)
+
     def for_run(self) -> GraphDoc:
         """The document without presentation: layouts and views never reach a run."""
         nodes = tuple(NodeSpec(n.uid, n.class_name, n.params, n.title, {}, n.addons) for n in self.nodes)

@@ -220,14 +220,14 @@ body.mode-watch .ed-executions[open] .ed-list { max-height: none; }
 /* ---- the picture a node made, on the node ---- */
 .g2-preview { padding: 6px 8px; border-top: 1px solid var(--border); }
 .g2-preview .bd-images { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
-.g2-preview .bd-images.is-single { grid-template-columns: 1fr; }
-.g2-preview .bd-image img { max-height: 420px; object-fit: contain; }
-.g2-preview .bd-empty { font-size: 11px; opacity: .6; padding: 8px 0; text-align: center; }
-/* a card that was made taller than it is: the picture takes the room */
+/* the room is kept before the first picture, so the cards below do not end up under it when it arrives */
+.g2-preview .bd-empty { grid-column: 1 / -1; font-size: 11px; opacity: .6; aspect-ratio: 1; max-height: 420px; width: 100%; display: grid; place-items: center; border: 1px dashed var(--border); border-radius: 6px; box-sizing: border-box; }
+.g2-node.stretched .g2-preview .bd-empty { aspect-ratio: auto; max-height: none; flex: 1; }
+/* a card of its own height shows the picture at the width of the card, the height following the image; one made taller than that gives the room to the picture */
 .g2-node.stretched .g2-preview { flex: 1 1 auto; min-height: 0; display: flex; }
 .g2-node.stretched .g2-preview .bd-images { flex: 1; min-height: 0; display: flex; }
-.g2-node.stretched .g2-preview .bd-image { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
-.g2-node.stretched .g2-preview .bd-image img { flex: 1; min-height: 0; height: 0; max-height: none; }
+.g2-node.stretched .g2-preview .bd-images.is-single .bd-image { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; }
+.g2-node.stretched .g2-preview .bd-images.is-single .bd-image img { flex: 1; min-height: 0; height: 0; max-height: none; aspect-ratio: auto; }
 .g2-grip { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; cursor: nwse-resize; touch-action: none;
            background: linear-gradient(135deg, transparent 50%, var(--text-dim) 50%, var(--text-dim) 58%, transparent 58%, transparent 72%, var(--text-dim) 72%, var(--text-dim) 80%, transparent 80%);
            opacity: .55; border-bottom-right-radius: var(--radius); }

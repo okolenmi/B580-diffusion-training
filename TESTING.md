@@ -54,7 +54,7 @@ pick the graph) with your checkpoint and datasets.
   step); one 1024 px picture through `get_family("anima").load_vae(part, device="xpu")` (encode and decode time and peak).
 - **103. Load Model dtype per part.** Denoiser bf16, VAE fp32, text encoders auto: the VRAM readout differs from all-bf16 by about the VAE's size; changing a text encoder's dtype rebuilds a persisted
   conditioning cache once.
-- **107.2 with a real model.** *Sampling Preview* at 1024x1024: report the extra time per preview and the peak VRAM; with a tight *VRAM budget* the card says once that previews stopped and the run finishes.
+- **107.2 with a real model.** the Sampler's *Live preview* addon at 1024x1024, on SDXL and on Anima: with `latent2rgb` the Preview Image card shows a blurry version of the final picture (same colours and layout, not noise or wrong hues) every 2 steps: report the extra time per step. With `vae` (VAE wired to the addon): report the extra time per preview and the peak VRAM; with a tight *VRAM budget* the card says once that previews stopped and the run finishes.
   (Wiring, frames, and same final picture are machine-checked.)
 - **102.1 Windows only.** The server console restores without taking focus on an error, and not again within 30 seconds (classic console and Windows Terminal). Skip while Windows is not used.
 

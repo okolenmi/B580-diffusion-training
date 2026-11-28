@@ -2,7 +2,7 @@
 
     python -m tests.check_generate
 
-Covers the live sampling preview (a node wired into the sampler, and its refusal to end a run), the two sampling schemes (noise prediction and rectified flow), the adapter list syntax, the preview pictures a page shows, the starter graph (every wire resolves), the run from prompt to PNG files (shape, seeds,
+Covers the Live preview addon of the Sampler (what it shows through Preview Image, where it stays silent, and its refusal to end a run), the two sampling schemes (noise prediction and rectified flow), the adapter list syntax, the preview pictures a page shows, the starter graph (every wire resolves), the run from prompt to PNG files (shape, seeds,
 the recipe inside each file, stopping), and that the same recipe gives the same pixels alone or in a batch.
 """
 
@@ -21,7 +21,6 @@ from dataclasses import replace
 
 import torch
 
-from engine.generate.preview import SamplingPreview
 from graph import GraphRunner, NodeRegistry
 from graph.node import Environment
 from nodes.model.adapter_stack import adapter_rows, parse_stack
@@ -116,55 +115,144 @@ def run_graph() -> None:
         check(stopped.stopped and not list(shutil_out.glob("*.png")), f"a stop request ends sampling and writes nothing ({stopped.error})")
 
 
-def sampling_preview() -> None:
-    from graph.document import Edge, NodeSpec
+def live_preview() -> None:
+    """The Live preview addon of the Sampler: it shows through the Preview Image stream, only where something shows it, and never ends a run."""
+    from graph.document import AddonSpec
 
     with tempfile.TemporaryDirectory() as raw:
         tmp = Path(raw)
         doc = graph(tmp, prompt="a red fox", seed=7, steps=4)
-        sampler = next(spec.uid for spec in doc.nodes if spec.class_name == "SamplerNode")
-        source = next(spec.uid for spec in doc.nodes if spec.title == "model")
-        watching = replace(doc, nodes=doc.nodes + (NodeSpec("n_zzzzzz", "SamplingPreviewNode", {"every": 2, "size": 64}),),
-                           edges=doc.edges + (Edge(source, "vae", "n_zzzzzz", "vae"), Edge("n_zzzzzz", "preview", sampler, "preview")))
-        validation, outcome, trace = execute(watching, artifacts=tmp / "art")
-        check(validation.ok and outcome.ok, f"a sampler with a Sampling Preview wired in runs ({[i.message for i in validation.errors][:2]} {outcome.error})")
-        looks = [f for s, f in trace.frames if s == "node:n_zzzzzz" and "images" in f]
-        check([f["step"] for f in looks] == [2, 4], f"it shows every second step and the last ({[f['step'] for f in looks]})")
+        sampler = next(spec for spec in doc.nodes if spec.class_name == "SamplerNode")
+        preview = next(spec.uid for spec in doc.nodes if spec.class_name == "PreviewImageNode")
+        check(any(a.kind == "LivePreviewAddon" and a.enabled for a in sampler.addons), "the image starter has the Live preview addon on its sampler")
+        validation, outcome, trace = execute(doc, artifacts=tmp / "art")
+        check(validation.ok and outcome.ok, f"a sampler with the addon runs ({[i.message for i in validation.errors][:2]} {outcome.error})")
+        looks = [f for s, f in trace.frames if s == f"node:{preview}" and f.get("live")]
+        check([f["step"] for f in looks] == [2, 4], f"Preview Image gets a look every second step and the last ({[f['step'] for f in looks]})")
         files = [tmp / "art" / f["images"][0]["path"] for f in looks]
-        check(all(f.is_file() for f in files) and len({f.name for f in files}) == 2, "each look is its own picture file under the node's folder")
-        check(all(f["images"][0]["width"] <= 64 and f["images"][0]["height"] <= 64 for f in looks), "a look is no larger than the size asked for")
-        check(len(list((tmp / "out").glob("*.png"))) == 1, "the finished image is still written")
-        (tmp / "plain").mkdir()
-        _, plain, quiet = execute(graph(tmp / "plain", prompt="a red fox", seed=7, steps=4), artifacts=tmp / "art2")
-        check(plain.ok and not [1 for s, f in quiet.frames if s == "node:n_zzzzzz"], "without the node nothing changes")
+        check(all(f.is_file() and f.suffix == ".jpg" for f in files) and len({f.name for f in files}) == 1,
+              "one live file under the node's own folder, rewritten for each look")
+        check(len({f["images"][0]["v"] for f in looks}) == 2, "each look has its own version, so a page never keeps an older picture")
+        check(looks[0]["images"][0]["width"] == 8 and looks[0]["images"][0]["height"] == 8, "a latent2rgb look is as small as the latents")
+        final = [f for s, f in trace.frames if s == f"node:{preview}" and not f.get("live") and "images" in f]
+        check(len(final) == 1 and final[0]["images"][0]["path"].endswith(".png"), "the finished image then arrives in the same stream")
+        check(len(list((tmp / "out").glob("*.png"))) == 1, "and is still written")
+
+        (tmp / "off").mkdir()
+        off = graph(tmp / "off", prompt="a red fox", seed=7, steps=4)
+        off = replace(off, nodes=tuple(replace(n, addons=tuple(replace(a, enabled=False) for a in n.addons)) for n in off.nodes))
+        _, plain, quiet = execute(off, artifacts=tmp / "art2")
+        check(plain.ok and not [1 for s, f in quiet.frames if f.get("live")], "with the addon off nothing is shown")
+        (tmp / "unwatched").mkdir()
+        unwatched = graph(tmp / "unwatched", prompt="a red fox", seed=7, steps=4)
+        unwatched = replace(unwatched, nodes=tuple(n for n in unwatched.nodes if n.class_name != "PreviewImageNode"),
+                            edges=tuple(e for e in unwatched.edges if e.to_node != preview))
+        _, nobody, silent = execute(unwatched, artifacts=tmp / "art3")
+        check(nobody.ok and not [1 for s, f in silent.frames if f.get("live")] and not list((tmp / "art3").rglob("*.jpg")),
+              "with no Preview Image downstream nothing is decoded or written")
+        _, blind, noted = execute(graph(tmp, prompt="a red fox", seed=7, steps=4))
+        check(blind.ok and any(s == "warning" and "nothing is shown" in f["message"] for s, f in noted.frames), "a run with nowhere to put pictures says so and goes on")
+
+        vae = replace(sampler, addons=tuple(replace(a, params={**a.params, "method": "vae", "size": 64}) for a in sampler.addons))
+        wired = replace(doc, nodes=tuple(vae if n.uid == sampler.uid else n for n in doc.nodes))
+        _, bad, notes = execute(wired, artifacts=tmp / "art4")
+        check(bad.ok and any(s == "warning" and "needs a VAE" in f["message"] for s, f in notes.frames), "the vae method without a VAE wired says so; the run still finishes")
+
+
+def live_preview_parts() -> None:
+    """The decoders and the cadence of ``LivePreview``, without a graph."""
+    from engine.generate.preview import LatentRGB, LivePreview, PreviewUnavailable, VAEPreview
+
+    factors = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+    rgb = LatentRGB(factors, (0.0, 0.0, 0.0)).decode(torch.tensor([[[[1.0]], [[-1.0]]]]))
+    check(rgb.dtype == torch.uint8 and rgb.shape == (3, 1, 1) and rgb[:, 0, 0].tolist() == [255, 0, 128],
+          f"latent2rgb maps [-1, 1] to bytes with a clamp ({rgb[:, 0, 0].tolist()})")
+    raises(ValueError, lambda: LatentRGB(factors).decode(torch.zeros(1, 4, 2, 2)), "a projection for another channel count is refused")
+
+    from families.anima.latents import LATENTS as ANIMA
+    from families.sdxl.latents import LATENTS as SDXL
+    check(all(len(spec.rgb) == spec.channels and all(len(row) == 3 for row in spec.rgb) and len(spec.rgb_bias) == 3 for spec in (SDXL, ANIMA)),
+          "each family's colour projection has a row of three per latent channel")
 
     shown, notes, closed = [], [], []
-    def decode(latents):
-        if latents.shape[-1] > 4:
-            raise RuntimeError("XPU out of memory")
-        return torch.zeros(1, 3, 8, 8, dtype=torch.uint8)
-    preview = SamplingPreview(every=3, size=32, spatial_factor=8, decode=decode, show=lambda p, step, total: shown.append(step),
-                              note=notes.append, close=lambda: closed.append(True))
-    preview(1, 10, torch.zeros(2, 4, 4, 4))
-    preview(3, 10, torch.zeros(2, 4, 4, 4))
-    preview(10, 10, torch.zeros(2, 4, 4, 4))
-    check(shown == [3, 10], f"a preview is made every N steps and at the end ({shown})")
-    check(preview.shrunk(torch.zeros(1, 4, 128, 96)).shape[-2:] == (4, 3), "latents are shrunk until their decode is about the size asked for")
-    check(preview.shrunk(torch.zeros(1, 4, 2, 2)).shape[-2:] == (2, 2), "small latents are left as they are")
-    big = SamplingPreview(every=1, size=1024, spatial_factor=8, decode=decode, show=lambda p, step, total: shown.append(step),
-                          note=notes.append, close=lambda: closed.append(True))
+
+    class Counting:
+        def decode(self, latents):
+            return torch.zeros(3, 2, 2, dtype=torch.uint8)
+
+        def close(self):
+            closed.append(True)
+
+    live = LivePreview(every=3, choose=lambda family: Counting(), show=lambda p, step, total: shown.append(step), note=notes.append)
+    check(not live.active, "nothing is active before the sampler begins")
+    live.begin(None)
+    for step in (1, 3, 9, 10):
+        live(step, 10, torch.zeros(2, 4, 4, 4))
+    check(shown == [3, 9, 10], f"a look every N steps and at the end ({shown})")
+    live.finish()
+    check(closed == [True] and not live.active, "finish drops the decoder")
+
+    def refuse(family):
+        raise PreviewUnavailable("no projection")
+
+    refused = LivePreview(every=1, choose=refuse, show=lambda *a: shown.append(-1), note=notes.append)
+    refused.begin(None)
+    check(not refused.active and notes == ["Live preview: no projection"], "an unavailable preview says why and stays off")
+    watching = LivePreview(every=1, choose=lambda family: None, show=lambda *a: shown.append(-1), note=notes.append)
+    watching.begin(None)
+    check(not watching.active and len(notes) == 1, "with nobody watching it is off without a word")
+
+    codec_loads, released = [], []
+
+    class Codec:
+        def decode(self, latents):
+            if latents.shape[-1] > 4:
+                raise RuntimeError("XPU out of memory")
+            return torch.zeros(1, 3, 8, 8, dtype=torch.uint8)
+
+    def load():
+        codec_loads.append(True)
+        return Codec()
+
+    vae = VAEPreview(size=32, spatial_factor=8, load=load, release=released.append)
+    check(vae.shrunk(torch.zeros(1, 4, 128, 96)).shape[-2:] == (4, 3), "latents are shrunk until their decode is about the size asked for")
+    check(vae.shrunk(torch.zeros(1, 4, 2, 2)).shape[-2:] == (2, 2), "small latents are left as they are")
+    check(not codec_loads, "the VAE is not loaded before the first look")
+    vae.decode(torch.zeros(1, 4, 4, 4))
+    vae.decode(torch.zeros(1, 4, 4, 4))
+    vae.close()
+    check(len(codec_loads) == 1 and len(released) == 1, "it is loaded once and released at the end")
+
+    stopped, stop_notes = [], []
+    big = LivePreview(every=1, choose=lambda family: VAEPreview(size=1024, spatial_factor=8, load=Codec, release=lambda c: stopped.append(1)),
+                      show=lambda *a: stopped.append("shown"), note=stop_notes.append)
+    big.begin(None)
     big(1, 5, torch.zeros(1, 4, 16, 16))
     big(2, 5, torch.zeros(1, 4, 16, 16))
-    check(big.stopped and len(notes) == 1 and closed == [True] and shown == [3, 10], "when the decode does not fit, previews stop for the run, once, and the decoder is dropped")
-    broken_notes, broken_shown = [], []
+    check(not big.active and len(stop_notes) == 1 and "room" in stop_notes[0] and stopped == [1],
+          "when the decode does not fit, previews stop for the run, once, and the decoder is released")
 
     def explode(latents):
         raise RuntimeError("the decoder broke")
 
-    broken = SamplingPreview(every=1, size=64, spatial_factor=8, decode=explode, show=lambda p, step, total: broken_shown.append(step), note=broken_notes.append)
+    class Broken(Counting):
+        decode = staticmethod(explode)
+
+    broken_notes = []
+    broken = LivePreview(every=1, choose=lambda family: Broken(), show=lambda *a: None, note=broken_notes.append)
+    broken.begin(None)
     broken(1, 5, torch.zeros(1, 4, 4, 4))
     broken(2, 5, torch.zeros(1, 4, 4, 4))
-    check(broken.stopped and not broken_shown and len(broken_notes) == 1 and "the decoder broke" in broken_notes[0], "any other failure of a preview also only stops previews, and says why")
+    check(not broken.active and len(broken_notes) == 1 and "the decoder broke" in broken_notes[0], "any other failure also only stops previews, and says why")
+
+
+def live_file() -> None:
+    """The live picture is one JPEG per node, replaced whole, so a page that fetches it never reads half a file."""
+    with tempfile.TemporaryDirectory() as raw:
+        folder = ArtifactFolder(raw)
+        first = folder.put_live("n_aaaaaa", torch.zeros(3, 8, 8, dtype=torch.uint8))
+        second = folder.put_live("n_aaaaaa", torch.full((3, 8, 8), 255, dtype=torch.uint8))
+        check(first == second and (Path(raw) / first).is_file() and not list(Path(raw).rglob("*.part.*")), "the same file is replaced and no temporary one is left")
 
 
 def preview_housekeeping() -> None:
@@ -251,7 +339,9 @@ if __name__ == "__main__":
     flow_scheme()
     adapter_list()
     run_graph()
-    sampling_preview()
+    live_preview()
+    live_preview_parts()
+    live_file()
     preview_housekeeping()
     preview_names()
     refusals()

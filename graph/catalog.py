@@ -75,6 +75,8 @@ def node_info(cls: type[Node]) -> dict:
                     "doc": g.doc} for g in cls.GROUPS],
         "events_in": [event_port_info(n, p) for n, p in cls.EVENTS_IN.items()],
         "events_out": [event_port_info(n, p) for n, p in cls.EVENTS_OUT.items()],
+        "default_addons": list(cls.DEFAULT_ADDONS),
+        "live_frames": list(cls.LIVE_FRAMES),
         "addon_slots": [{"name": s.name, "socket": s.socket, "many": s.many, "doc": s.doc} for s in slots_of(cls)],
         "modules": [m.as_dict() for m in cls.MODULES],
         "actions": [a.as_dict() for a in cls.ACTIONS],

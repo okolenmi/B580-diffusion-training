@@ -1,4 +1,4 @@
-"""Pictures on nodes, node size and the Sampling Preview node (TESTING 107), on the tiny image starter in the graph editor of an app. A real server and
+"""Pictures on nodes, node size and the live preview inside Preview Image (TESTING 107), on the tiny image starter in the graph editor of an app. A real server and
 Chromium; no model is needed.
 
     python -m tests.browser.check_editor
@@ -15,14 +15,13 @@ from .check_runs import idle, stop_all
 from .server import ROOT, TestServer
 from .session import Chromium
 
-PREVIEW_UID = "n_hhhhhh"
-
-
-def with_sampling_preview(graph: dict, every: int = 2) -> dict:
-    graph["nodes"].append({"uid": PREVIEW_UID, "class_name": "SamplingPreviewNode", "params": {"every": every}})
-    graph["edges"] += [{"from_node": "n_aaaaaa", "from_port": "vae", "to_node": PREVIEW_UID, "to_port": "vae"},
-                       {"from_node": PREVIEW_UID, "from_port": "preview", "to_node": "n_dddddd", "to_port": "preview"}]
-    return graph
+SEEN = """() => { window.__seen = {texts: [], images: new Set(), live: 0};
+  new MutationObserver(() => {
+    const card = [...document.querySelectorAll('.g2-node')].find((n) => n.querySelector('.g2-preview'));
+    const chip = card && card.querySelector('.bd-live:not([hidden])');
+    if (chip) { window.__seen.live++; if (!window.__seen.texts.includes(chip.textContent)) window.__seen.texts.push(chip.textContent); }
+    const img = card && card.querySelector('.g2-preview img'); if (img && window.__seen.live) window.__seen.images.add(img);
+  }).observe(document.body, {subtree: true, childList: true, characterData: true, attributes: true}); }"""
 
 
 def app_in_editor(server, browser, name: str, graph: dict):
@@ -125,28 +124,34 @@ def pixels(path):
         return image.convert("RGB").tobytes()
 
 
-def sampling_preview(server, browser):
-    plain = fixtures.image_graph(server.home, steps=10, out="sp-plain")
-    previewed = with_sampling_preview(fixtures.image_graph(server.home, steps=10, out="sp-with"))
-    before = set(p.name for p in (ROOT / "artifacts").rglob("*") if p.is_file()) if (ROOT / "artifacts").exists() else set()
-    page = app_in_editor(server, browser, "sp", previewed)
-    check(node_count(page) == 8, "the Sampling Preview node is wired into the app's graph")
+def live_preview(server, browser):
+    """The Sampler's Live preview addon shows the forming picture in the Preview Image card itself; the finished image arrives in the same card."""
+    plain = fixtures.image_graph(server.home, steps=10, out="lp-plain")
+    for node in plain["nodes"]:
+        for addon in node.get("addons", []):
+            addon["enabled"] = False
+    page = app_in_editor(server, browser, "lp", fixtures.image_graph(server.home, steps=10, out="lp-with"))
+    page.page.evaluate(SEEN)
     run_in_editor(server, page)
-    card = page.page.locator(".g2-node", has=page.page.locator(".g2-head", has_text="Sampling Preview")).first
-    page.page.wait_for_function("() => { const i = [...document.querySelectorAll('.g2-node')].find(n => n.textContent.includes('Sampling Preview'))?.querySelector('.g2-preview img'); return !!i && i.naturalWidth > 0; }", timeout=20000)
-    check(True, "the Sampling Preview card fills with a picture during the run")
-    frames = sorted(p.name for p in (ROOT / "artifacts").rglob("*") if p.is_file() and p.name not in before and PREVIEW_UID in str(p))
-    check(len(frames) == 5, f"a frame every 2 steps of 10 and the last one: 5 pictures ({len(frames)})")
+    page.page.wait_for_function("() => { const i = document.querySelector('.g2-node .g2-preview img'); return !!i && i.naturalWidth > 0 && i.src.endsWith('.png'); }", timeout=20000)
+    seen = page.page.evaluate("() => ({texts: window.__seen.texts, images: window.__seen.images.size, live: window.__seen.live})")
+    check(seen["live"] > 0 and any(t.startswith("preview ") for t in seen["texts"]), f"the card said which step its live picture is ({seen['texts']})")
+    check(seen["images"] == 1, f"live pictures and the finished image are shown by one and the same picture element ({seen['images']})")
+    card = preview_card(page)
+    height = page.page.evaluate("(s) => document.querySelector(s).getBoundingClientRect().height", ".g2-node .g2-preview img")
+    check(height > 60, f"the card grew to show the picture, not a link to it (picture {height:.0f}px high)")
+    check(not page.page.locator(".g2-node .g2-preview .bd-live:visible").count(), "once the image is final the live marker is gone")
+    check(card.locator("a").count() == 0, "a single picture is not wrapped in a link")
     server.api("POST", "/api/v1/graphs/run", {"graph": plain, "mode": "auto"})
     idle(server)
-    a = sorted((server.home / "sp-with").rglob("*.png"))
-    b = sorted((server.home / "sp-plain").rglob("*.png"))
-    check(len(a) == 1 and len(b) == 1 and pixels(a[0]) == pixels(b[0]), "the final picture is the same with and without the preview node")
+    a, b = sorted((server.home / "lp-with").rglob("*.png")), sorted((server.home / "lp-plain").rglob("*.png"))
+    check(len(a) == 1 and len(b) == 1 and pixels(a[0]) == pixels(b[0]), "the final picture is the same with and without the addon")
+    
 
 
 def main() -> None:
     with TestServer() as server, Chromium(server.url) as browser:
-        for part in (picture_and_size, sampling_preview, text_fields):
+        for part in (picture_and_size, live_preview, text_fields):
             print(f"\n{part.__name__}")
             try:
                 part(server, browser)

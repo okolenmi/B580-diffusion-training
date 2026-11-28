@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from .recipe import Image, ImageStore
+
+
+LIVE_NAME = "live.jpg"
 
 
 class ArtifactFolder:
@@ -33,15 +37,20 @@ class ArtifactFolder:
         made = json.dumps([asdict(image.recipe), image.meta.get("model"), image.meta.get("adapters")], sort_keys=True, default=str)
         return f"{image.recipe.stem}_{hashlib.md5(made.encode()).hexdigest()[:8]}"
 
-    def put_view(self, owner: str, name: str, pixels: Any) -> str:
-        """One plain picture (uint8 ``(3, H, W)``) under ``owner`` named ``name``; what a live preview writes at every look."""
+    def put_live(self, owner: str, pixels: Any) -> str:
+        """The newest look at a picture still forming (uint8 ``(3, H, W)``) as the one file ``live.jpg`` under ``owner``. It is written whole and then moved into
+        place, so a page never reads half a file; if it cannot be moved (a reader holds it) this look is skipped, the next replaces it."""
         from PIL import Image as PILImage
 
         folder = self.root / owner
         folder.mkdir(parents=True, exist_ok=True)
-        PILImage.fromarray(pixels.permute(1, 2, 0).numpy()).save(folder / f"{name}.png")
-        self._prune(folder, keep=self.KEEP)
-        return f"{owner}/{name}.png"
+        part = folder / "live.part.jpg"
+        PILImage.fromarray(pixels.permute(1, 2, 0).numpy()).save(part, quality=80)
+        try:
+            os.replace(part, folder / LIVE_NAME)
+        except OSError:
+            part.unlink(missing_ok=True)
+        return f"{owner}/{LIVE_NAME}"
 
     @staticmethod
     def _prune(folder: Path, keep: int) -> None:

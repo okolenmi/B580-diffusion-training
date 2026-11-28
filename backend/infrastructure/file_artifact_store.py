@@ -6,7 +6,7 @@ from pathlib import Path
 
 from ..application.ports.artifact_store import ArtifactStore
 
-_SERVED = {".png"}
+_SERVED = {".png", ".jpg"}
 
 
 class FileArtifactStore(ArtifactStore):

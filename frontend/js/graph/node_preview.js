@@ -1,7 +1,7 @@
 /* ---------------------------------------------------------------------------
    graph/node_preview.js -- the picture a node made, drawn on the node itself.
 
-   A node whose class declares an `image` display (Preview Image, Sampling Preview) shows the newest frame of its own stream
+   A node whose class declares an `image` display (Preview Image: the picture forming while a sampler upstream runs, then the finished images) shows the newest frame of its own stream
    `node:<uid>` under its fields. The element is made once per node and kept, so a node that redraws itself (a param changed)
    puts the same element back and the picture does not flash; the stream is joined while the node exists and released when it goes.
    --------------------------------------------------------------------------- */

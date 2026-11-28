@@ -24,6 +24,8 @@ class LatentSpec:
     mean: tuple[float, ...] = ()   # per-channel offset and spread, applied after shift and scale when given
     std: tuple[float, ...] = ()
     grid: int = 1                  # the network needs latent sides divisible by this (a transformer's patch size)
+    rgb: tuple[tuple[float, ...], ...] = ()  # one (r, g, b) row per channel: a linear guess of the picture from the latents, for live previews
+    rgb_bias: tuple[float, ...] = ()
 
     @property
     def pixel_multiple(self) -> int:

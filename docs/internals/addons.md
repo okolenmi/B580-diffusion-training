@@ -29,4 +29,13 @@ events whose emitter's scope chain contains its own scope, with no wire. An expl
 
 1. Pick the slot interface from a host that declares it (or add a slot to a host: one `AddonSlot` and a call to `self.addons`).
 2. Write the `Addon` subclass: `DISPLAY_NAME`, `SLOT`, its ports and groups, and `build(**inputs)` returning the collaborator (`self.host` is the host context).
-3. It is discovered with the nodes (`NodeRegistry`); the editor lists it in the host's Addons tab. Cover it in `tests/check_addons.py`.
+3. To have it on by default, list its class name in the host's `DEFAULT_ADDONS`: the editor adds it with the node (starters add theirs explicitly).
+4. It is discovered with the nodes (`NodeRegistry`); the editor lists it in the host's Addons tab. Cover it in `tests/check_addons.py`.
+
+## Live frames: a node showing what a node upstream is making
+
+`Node.LIVE_FRAMES` lists the kinds of live frame a node can show (Preview Image: `"image"`). While a node runs, its context answers
+`live_consumers(kind)` with the nodes downstream that list the kind, and `send_live(kind, frame)` reports the frame on each one's `node:<uid>`
+stream. So the Live preview addon of the Sampler (`nodes/generate/live_preview.py`) decodes nothing when no Preview Image is downstream, needs
+no wire to it, and the finished image arrives on the same stream afterwards. A frame with `live: true` is a look at a picture still forming:
+`step`, `total`, and one file replaced at every look, told apart by `v`.

@@ -38,8 +38,9 @@ class PreviewImageNode(Node):
     CATEGORY = "Output"
     INPUTS = {"images": Port("images", Images)}
     OUTPUTS = {"images": Port("images", Images, doc="The images, unchanged, so a preview can sit in front of Save Image.")}
+    LIVE_FRAMES = ("image",)  # a Sampler upstream shows the picture forming here (its Live preview addon); the finished images then replace it
     MODULES = (DisplayModule("images", "image", "Images", value_key="images", size=(6, 6),
-                             doc="The images of the latest run, newest first."),)
+                             doc="The picture while it forms, then the images of the latest run, newest first."),)
 
     def build(self, **inputs) -> dict[str, Any]:
         self.validate_inputs(inputs)

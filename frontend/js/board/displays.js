@@ -18,6 +18,7 @@ import {
   barsOf, chartRows, decimate, formatDuration, formatValue, lineOf, progressOf,
   referenceLines, resultOf, rowsToCsv, scalarOf, seriesFor, textOf,
 } from "./series.js";
+import { PictureSwap } from "./picture_swap.js";
 import { COUNTS, ViewWindow, rowsForWindow } from "./view.js";
 
 /** Points a chart is asked to draw. More than the plot has pixels for is
@@ -303,37 +304,84 @@ function progressDisplay({ module, state }) {
 
 /* ---- images -------------------------------------------------------------- */
 
-/** The pictures of the newest frame: `module.value_key` holds `[{path, seed, width, height}]`, paths relative to /api/v1/artifacts. */
+const artifactUrl = (item) => `/api/v1/artifacts/${item.path.split("/").map(encodeURIComponent).join("/")}${item.v ? `?v=${encodeURIComponent(item.v)}` : ""}`;
+
+/**
+ * The pictures of the newest frame: `module.value_key` holds `[{path, seed, width, height, v?}]`, paths relative to /api/v1/artifacts.
+ * A frame with `live: true` is a preview of a picture still forming (`step` of `total`): one file rewritten for each frame, told apart by `v`.
+ * The finished images arrive in the same stream and take the place of the preview. One picture is one <img> kept for good and fed through
+ * a PictureSwap, so a stream of previews never rebuilds the DOM or reloads a picture that is already loading.
+ */
 function imageDisplay({ module, state }) {
   const root = div("bd-images");
-  let shown = null;
+  let single = null; // {frame, img, chip, swap} while one picture is shown
+  let key = null;    // what the grid shows, to leave it alone when nothing changed
+
+  const asSingle = () => {
+    if (single) return single;
+    root.replaceChildren();
+    key = null;
+    const frame = div("bd-image bd-picture");
+    const img = document.createElement("img");
+    img.alt = "";
+    const chip = div("bd-live");
+    chip.hidden = true;
+    const cap = div("bd-image-cap");
+    frame.append(img, chip, cap);
+    root.append(frame);
+    root.classList.add("is-single");
+    single = { frame, img, chip, cap, swap: new PictureSwap(img), link: null };
+    return single;
+  };
+
+  const showOne = (item, frame) => {
+    const one = asSingle();
+    const live = frame.live === true;
+    if (item.width && item.height) one.img.style.aspectRatio = `${item.width} / ${item.height}`;
+    one.frame.classList.toggle("is-live", live);
+    one.chip.hidden = !live;
+    if (live) one.chip.textContent = frame.total ? `preview ${frame.step}/${frame.total}` : "preview";
+    one.cap.textContent = live ? "" : `${item.seed !== undefined ? `seed ${item.seed} · ` : ""}${item.width}×${item.height}`;
+    one.swap.show(artifactUrl(item));
+  };
+
+  const showGrid = (items) => {
+    const next = items.map((i) => i.path).join("|");
+    if (!single && next === key) return;
+    single?.swap.destroy();
+    single = null;
+    key = next;
+    root.replaceChildren();
+    root.classList.remove("is-single");
+    for (const item of items) {
+      const link = document.createElement("a");
+      link.className = "bd-image";
+      link.href = artifactUrl(item);
+      link.target = "_blank";
+      link.rel = "noopener";
+      const img = document.createElement("img");
+      img.loading = "lazy";
+      img.src = link.href;
+      img.alt = `seed ${item.seed ?? ""}`;
+      link.append(img, div("bd-image-cap", `${item.seed !== undefined ? `seed ${item.seed} · ` : ""}${item.width}\u00d7${item.height}`));
+      root.append(link);
+    }
+  };
+
   return {
     el: root,
     update() {
-      const list = state.latestFrame && state.latestFrame[module.value_key];
+      const frame = state.latestFrame || {};
+      const list = frame[module.value_key];
       const items = Array.isArray(list) ? list.filter((i) => i && typeof i.path === "string") : [];
-      const key = items.map((i) => i.path).join("|");
-      if (key === shown) return;
-      shown = key;
-      root.replaceChildren();
-      if (!items.length) { root.append(div("bd-empty", "No pictures yet")); return; }
-      root.classList.toggle("is-single", items.length === 1);
-      for (const item of items) {
-        const link = document.createElement("a");
-        link.className = "bd-image";
-        link.href = `/api/v1/artifacts/${item.path.split("/").map(encodeURIComponent).join("/")}`;
-        link.target = "_blank";
-        link.rel = "noopener";
-        const img = document.createElement("img");
-        img.loading = "lazy";
-        img.src = link.href;
-        img.alt = `seed ${item.seed ?? ""}`;
-        const cap = div("bd-image-cap", `${item.seed !== undefined ? `seed ${item.seed} · ` : ""}${item.width}×${item.height}`);
-        link.append(img, cap);
-        root.append(link);
+      if (!items.length) {
+        if (single || key !== "") { single?.swap.destroy(); single = null; key = ""; root.classList.remove("is-single"); root.replaceChildren(div("bd-empty", "No pictures yet")); }
+        return;
       }
+      if (items.length === 1) showOne(items[0], frame);
+      else showGrid(items);
     },
-    destroy() {},
+    destroy() { single?.swap.destroy(); },
   };
 }
 

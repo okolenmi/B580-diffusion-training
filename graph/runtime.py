@@ -228,6 +228,10 @@ class _Execution:
         self.addons_built.extend(made)
         return True
 
+    def live_consumers(self, uid: str, kind: str) -> tuple[str, ...]:
+        """The nodes below ``uid`` whose class takes live frames of ``kind``."""
+        return tuple(n for n in self.doc.downstream(uid) if kind in getattr(self.classes.get(self.doc.node(n).class_name), "LIVE_FRAMES", ()))
+
     def announce(self, state: str) -> None:
         self.runner._run_frame(state, self.error)
 
@@ -244,7 +248,8 @@ class _Execution:
                 self.results.append(NodeResult(uid, True, {}, None, 0.0, "skipped"))
                 return True
         inputs, addon_wired, slot_wired = runner._gather(self.doc, uid, self.validation, self.outputs_by)
-        node_context = self.context.scoped(uid, cls.READS_SETTINGS, cls.__name__, upstream)
+        node_context = self.context.scoped(uid, cls.READS_SETTINGS, cls.__name__, upstream,
+                                           consumers=lambda kind, uid=uid: self.live_consumers(uid, kind))
         runner._state(uid, "running", {})
         started = time.monotonic()
         try:

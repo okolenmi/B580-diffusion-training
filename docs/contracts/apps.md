@@ -120,7 +120,7 @@ bars, scalars, memory) and **Runs** (history, queue); a tab nothing belongs on i
 | `POST /api/v1/boards/modules` | body `{graph}`: per node its fields and live displays, and the graph's own: what a card can bind to |
 | `POST /api/v1/boards/resolve` | body `{doc, graph?}` (an App document, or a flat board with the graph beside it): per card `ok`, `wired`, `missing_node`, `missing_module`, `unknown_class`, plus the graph's validation issues; 422 `board_invalid` |
 
-| `GET /api/v1/artifacts/{path}` | a PNG a node left for the page (`Preview Image` and `Sampling Preview` write them under `artifacts/<node uid>/`, newest 48 kept per node, named by recipe and a digest of model, adapters and settings so a new picture never takes an old picture's address); 404 `artifact_not_found` for anything else, a path leaving the folder included |
+| `GET /api/v1/artifacts/{path}` | a PNG or JPEG a node left for the page (`Preview Image` writes them under `artifacts/<node uid>/`: finished PNGs, newest 48 kept, named by recipe and a digest of model, adapters and settings so a new picture never takes an old picture's address, and the one `live.jpg` of the Sampler's live preview, replaced whole at each look and told apart by the `v` the frame carries); 404 `artifact_not_found` for anything else, a path leaving the folder included |
 
 An `image` display module (`DisplayModule(kind="image", value_key=...)`) names the report key that holds `[{path, seed, width, height}]`; the page draws the pictures of the newest frame.
 

@@ -9,6 +9,7 @@ import inspect
 import threading
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
@@ -129,13 +130,16 @@ class ExecutionContext:
         self.uid: str = ""
         self._upstream: dict[str, Completion] = {}
         self._reported: Completion | None = None
+        self._consumers: Callable[[str], tuple[str, ...]] = lambda kind: ()
 
     def should_cancel(self) -> bool:
         return self.cancel_event is not None and self.cancel_event.is_set()
 
     def scoped(self, uid: str, reads: tuple[str, ...], owner: str,
-               upstream: dict[str, Completion] | None = None) -> ExecutionContext:
+               upstream: dict[str, Completion] | None = None,
+               consumers: Callable[[str], tuple[str, ...]] | None = None) -> ExecutionContext:
         clone = copy.copy(self)
+        clone._consumers = consumers or (lambda kind: ())
         clone.uid = uid
         clone.settings = self._settings.view(reads, owner)
         clone._upstream = dict(upstream or {})
@@ -163,6 +167,17 @@ class ExecutionContext:
     def report(self, stream: str, frame: dict) -> None:
         if self.reporter is not None:
             self.reporter.report(stream, frame)
+
+    def live_consumers(self, kind: str) -> tuple[str, ...]:
+        """The nodes anywhere downstream of this one (by any chain of wires) that show live frames of ``kind`` (their class's ``LIVE_FRAMES``)."""
+        return self._consumers(kind)
+
+    def send_live(self, kind: str, frame: dict) -> int:
+        """Report a live frame on the display stream of every consumer of ``kind``; how many there were. A frame is for a display, never a result."""
+        targets = self.live_consumers(kind)
+        for uid in targets:
+            self.report(f"node:{uid}", frame)
+        return len(targets)
 
     def task(self, title: str, total: int | None = None) -> Task:
         return Task(self, title, total)
@@ -206,6 +221,11 @@ class Node(ABC):
     EVENTS_IN: ClassVar[dict[str, EventIn]] = {}
     EVENTS_OUT: ClassVar[dict[str, EventOut]] = {}
     ADDON_SLOTS: ClassVar[tuple[AddonSlot, ...]] = ()
+    #: Addon kinds the editor adds to a new node of this class (the person can turn them off or remove them). A graph file lists its addons explicitly,
+    #: so this changes nothing for graphs that exist.
+    DEFAULT_ADDONS: ClassVar[tuple[str, ...]] = ()
+    #: Kinds of live frames this node's display takes from producers upstream (``context.send_live``): a node that shows pictures says ``("image",)``.
+    LIVE_FRAMES: ClassVar[tuple[str, ...]] = ()
     MODULES: ClassVar[tuple[DisplayModule, ...]] = ()
     ACTIONS: ClassVar[tuple[ActionModule, ...]] = ()
     READS_SETTINGS: ClassVar[tuple[str, ...]] = ()

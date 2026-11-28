@@ -135,7 +135,7 @@ def queue_and_stop(server, browser, page):
     check(page.page.locator("#btn-stop").is_visible(), "Stop is offered while the run goes")
     page.page.click("#btn-stop")
     check(server.wait_for("the first run to stop", lambda: [e for e in executions(server) if e["execution_id"] == first_id and e["status"] == "stopped"], 60), "Stop ends the run")
-    check(wait_card(page, "Run status", f"#{first_id + 1} ", 60) and "RUNNING" in card_text(page, "Run status"), f"the waiting run starts by itself and the page follows it without a reload ({card_text(page, 'Run status')!r}; runs {[(e['execution_id'], e['status']) for e in executions(server)][:4]})")
+    check(wait_card(page, "Run status", f"#{first_id + 1} ", 60) and "RUNNING" in card_text(page, "Run status"), f"the waiting run starts by itself and the page follows it without a reload ({card_text(page, 'Run status')!r}; runs {[(e['execution_id'], e['status'], (e.get('error') or '')[:160]) for e in executions(server)][:4]})")
     page.page.click("#btn-stop")
     idle(server)
     open_tab(page, "Runs")

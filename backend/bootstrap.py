@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .application.ports.clock import Clock
+from .application.ports.journal import Journal
 from .application.ports.monitor_bus import MonitorBus
 from .application.graph_supervisor import GraphExecutionSupervisor
 from .application.services import ApplicationServices
@@ -49,6 +50,8 @@ class Container:
     # ExecutionContext wiring). Subscribing goes through
     # ``services.monitor.subscribe`` -- see docs 08 S-04.
     monitor_bus: MonitorBus
+    #: What the consoles show; the entry point attaches the server's own log to it.
+    journal: Journal
 
 
 def build_container(settings: Settings) -> Container:
@@ -64,4 +67,5 @@ def build_container(settings: Settings) -> Container:
         graph_supervisor=kit.supervisor,
         services=services,
         monitor_bus=infra.monitor_bus,
+        journal=infra.journal,
     )

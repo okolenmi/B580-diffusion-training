@@ -11,6 +11,8 @@ from ..infrastructure.clock import SystemClock
 from ..infrastructure.events.callback_event_bus import CallbackEventBus
 from ..infrastructure.file_asset_store import FileSystemAssetStore
 from ..infrastructure.graph.contract_catalog import model_environment
+from ..application.journal_listener import JournalListener
+from ..infrastructure.file_journal import FileJournal
 from ..infrastructure.monitor_bus import SharedMonitorBus
 from ..infrastructure.persistence.graph_execution_repository import (
     SqliteGraphExecutionRepository,
@@ -49,6 +51,7 @@ class Infrastructure:
     executions: SqliteGraphExecutionRepository
     device_probe: CachedDeviceProbe
     monitor_bus: SharedMonitorBus
+    journal: FileJournal
 
     @classmethod
     def build(cls, settings: Settings) -> "Infrastructure":
@@ -56,6 +59,9 @@ class Infrastructure:
         database.initialize()
 
         event_bus = CallbackEventBus()
+        # Beside the database; the listener files every run's beginning and end from the first event on.
+        journal = FileJournal(database.path.parent / "journal.jsonl")
+        event_bus.subscribe(JournalListener(journal))
         clock = SystemClock()
 
         # Settings first: the workspace layout resolves its override tier through the store, and the store resolves
@@ -91,4 +97,5 @@ class Infrastructure:
             # One bus per process: the runtime hands it to MonitorNode through ExecutionContext, the SSE endpoint
             # reads the same instance (M6).
             monitor_bus=SharedMonitorBus(),
+            journal=journal,
         )

@@ -254,3 +254,53 @@ body.has-rail { padding-left: var(--rail-w); }
     }
     .rail-tip { display: none; } /* hover-only affordance on touch widths */
 }
+
+/* ---- 5. Console lines: time, who, what ------------------------------------ */
+
+.fconsole-filter {
+    margin-left: auto;
+    background: var(--bg, #06090e);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    padding: 2px 4px;
+}
+.fconsole-text-btn {
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    padding: 2px 7px;
+    cursor: pointer;
+}
+.fconsole-text-btn:hover { background: var(--border); color: var(--text); }
+.fconsole-filter + .fconsole-text-btn { margin-left: 2px; }
+.fconsole-head .fconsole-btn { margin-left: 0; }
+
+.fconsole .console-line { display: flex; gap: 8px; margin-bottom: 2px; align-items: baseline; }
+.fconsole .cl-time { flex: none; opacity: 0.55; font-size: 11px; }
+.fconsole .cl-src { flex: none; min-width: 3.6em; opacity: 0.7; font-size: 11px; }
+.fconsole .cl-text { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+
+/* Warnings and errors that came in while the console was docked. */
+.fconsole-fab[data-unread]:not([data-unread=""])::after {
+    content: attr(data-unread);
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
+    border-radius: 9px;
+    background: var(--red);
+    color: #fff;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 700;
+    line-height: 18px;
+    text-align: center;
+}

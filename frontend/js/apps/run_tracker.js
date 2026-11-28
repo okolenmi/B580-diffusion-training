@@ -25,8 +25,7 @@ export class RunTracker {
   /** Start a run; rejects with the server's refusal, which the page words. */
   async start(values, mode) {
     const exec = await api(`/apps/${enc(this.name)}/run`, { method: "POST", body: { values, mode } });
-    const waiting = exec.status === "planned";
-    this.notify(waiting ? `Run #${exec.execution_id} is waiting its turn.` : `Run #${exec.execution_id} started from "${this.name}".`, "success");
+    const waiting = exec.status === "planned"; // the console tells the run's life: the server's journal
     if (!(waiting && this.active)) {
       this.execution = { ...exec, done: 0, total: 0 };
       this.schedulePoll(400);
@@ -41,7 +40,6 @@ export class RunTracker {
     if (!this.execution) return;
     const id = this.execution.execution_id;
     await api(`/graphs/executions/${id}/stop`, { method: "POST" });
-    this.notify(`Run #${id} stopped.`, "warn");
     this.schedulePoll(200);
     this.refresh();
   }
@@ -50,7 +48,6 @@ export class RunTracker {
   async cancel(id) {
     try {
       await api(`/graphs/executions/${id}/stop`, { method: "POST" });
-      this.notify(`Run #${id} cancelled.`, "warn");
     } finally {
       await this.refresh();
     }

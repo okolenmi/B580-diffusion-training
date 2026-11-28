@@ -108,6 +108,7 @@ class GraphKit:
             memory_ledger=memory_ledger,
             peak_store=peak_store,
             monitor_bus=infra.monitor_bus,
+            journal=infra.journal,
             scratch_dir=scratch_dir,
             make_tail=ExecutionEventTail,
         )

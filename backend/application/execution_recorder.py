@@ -12,6 +12,7 @@ from ..domain.graph import GraphDefinition, NodeResult
 from ..domain.modules import GRAPH_STREAM, node_stream_id, run_stream_id
 from ..domain.value_objects import ExecutionId, GraphStatus
 from .ports.graph_task_stream import EventKind
+from .ports.journal import Journal
 from .ports.peak_store import PeakStore
 from .event_publisher import EventPublisher
 from .lifecycle_writer import ExecutionLifecycleWriter
@@ -26,12 +27,13 @@ class ExecutionRecorder:
     """Applies the records a watcher reads from a run's event file. Every method contains its own failures: a record that cannot be applied costs that record, never the run's supervision."""
 
     def __init__(self, *, executions: GraphExecutionRepository, writer: ExecutionLifecycleWriter, events: EventPublisher, clock: Clock,
-                 monitor_bus=None, peak_store: PeakStore | None = None, max_record_attempts: int = 3) -> None:
+                 monitor_bus=None, journal: Journal | None = None, peak_store: PeakStore | None = None, max_record_attempts: int = 3) -> None:
         self._executions = executions
         self._writer = writer
         self._events = events
         self._clock = clock
         self._monitor_bus = monitor_bus
+        self._journal = journal
         # None only in tests that do not exercise peaks: a run whose peaks are not recorded still runs.
         self._peak_store = peak_store
         # Separate from the poll bound: a failed poll can simply be repeated, a failed *record* cannot (see record_node).
@@ -58,7 +60,7 @@ class ExecutionRecorder:
                 if not catch_up:
                     self.record_node(execution_id, event.payload)
             elif kind is EventKind.MONITOR:
-                self.republish_monitor(execution_id, event.payload)
+                self.republish_monitor(execution_id, event.payload, catch_up)
             elif kind is EventKind.MEMORY:
                 self.record_peak(execution_id, event.payload)
                 self.republish_memory(execution_id, event.payload)
@@ -161,7 +163,7 @@ class ExecutionRecorder:
                 "result itself is stored", node_id, execution_id,
             )
 
-    def republish_monitor(self, execution_id: ExecutionId, payload: dict) -> None:
+    def republish_monitor(self, execution_id: ExecutionId, payload: dict, catch_up: bool = False) -> None:
         """Put a child's monitor report onto this server's own bus.
 
         The child's bus is unreachable -- a per-process deque of asyncio
@@ -169,10 +171,12 @@ class ExecutionRecorder:
         mid-run work, including its history, because the file the watcher
         replays *is* the history.
         """
+        stream, data = str(payload.get("monitor_id", "")), dict(payload.get("data") or {})
+        if stream == "warning" and self._journal is not None and data.get("message") and not catch_up:
+            self._journal.add("warn", f"run #{execution_id}", str(data["message"]))
         if self._monitor_bus is None:
             return
         try:
-            stream, data = str(payload.get("monitor_id", "")), dict(payload.get("data") or {})
             self._monitor_bus.report(stream, data)
             self._monitor_bus.report(run_stream_id(execution_id, stream), data)
         except Exception:  # noqa: BLE001 -- telemetry must not abort the run

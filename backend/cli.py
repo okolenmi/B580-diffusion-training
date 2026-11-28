@@ -20,6 +20,7 @@ from pathlib import Path
 from .bootstrap import build_container
 from .infrastructure.console_reveal import ConsoleReveal
 from .infrastructure.console_reveal import install as install_console_reveal
+from .infrastructure.journal_log_handler import install as install_journal_handler
 from .infrastructure.planned_runs_pump import PlannedRunsPump
 from .config import Settings
 from .presentation.app import create_app
@@ -82,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
         settings = replace(settings, **overrides)
 
     container = build_container(settings)
+    container.journal.add("info", "server", "server started")
     # The frontend ships with the repo (not with the user's project
     # root): one directory above this package.
     static_dir = Path(__file__).resolve().parent.parent / "frontend"
@@ -102,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
     # reveal has to be attached to its loggers afterwards.
     config = uvicorn.Config(app, host=settings.host, port=settings.port, log_level="info", access_log=access_log)
     install_console_reveal(ConsoleReveal.for_this_process())
+    install_journal_handler(container.journal)
     uvicorn.Server(config).run()
     return 0
 

@@ -28,6 +28,7 @@ from pathlib import Path
 from ..domain.graph import GraphDefinition, NodeResult
 from ..domain.value_objects import ExecutionId, GraphStatus
 from .memory_admission import LedgerSource
+from .ports.journal import Journal
 from .ports.graph_task_stream import EventKind
 from .ports.peak_store import PeakStore
 from .child_stopper import ChildStopper
@@ -55,6 +56,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         memory_ledger: LedgerSource | None = None,
         peak_store: PeakStore | None = None,
         monitor_bus=None,
+        journal: Journal | None = None,
         scratch_dir: Path,
         poll_interval: float = 0.1,
         stop_grace: float = 15.0,
@@ -77,7 +79,7 @@ class GraphExecutionSupervisor(ExecutionLauncher):
         self._make_tail = make_tail
         self._recorder = ExecutionRecorder(
             executions=executions, writer=writer, events=events, clock=clock, monitor_bus=monitor_bus,
-            peak_store=peak_store, max_record_attempts=max_record_attempts,
+            journal=journal, peak_store=peak_store, max_record_attempts=max_record_attempts,
         )
         self._stopper = ChildStopper(gateway=gateway, grace=stop_grace)
         self._finisher = ExecutionFinisher(

@@ -250,6 +250,13 @@ class BoardInvalidError(ApplicationError):
     status_code = 422
 
 
+class JournalUnavailableError(ApplicationError):
+    """The container was built without a journal."""
+
+    code = "journal_unavailable"
+    status_code = 503
+
+
 class AppsUnavailableError(ApplicationError):
     """The container was built without the app services."""
 

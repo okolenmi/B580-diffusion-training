@@ -30,6 +30,7 @@ from .use_cases.browse_assets import BrowseAssets
 from .use_cases.install_packages import GetInstall, StartInstall
 from .use_cases.inspect_environment import DescribeRequirements, InspectEnvironment, TokenizerSetup
 from .use_cases.delete_graph import DeleteGraph
+from .use_cases.journal import ReadJournal, WriteJournal
 from .use_cases.app_crud import DeleteApp, GetApp, ListApps, SaveApp, SaveAppGraph, SaveAppValues
 from .use_cases.graph_modules import DescribeGraphModules, ResolveBoard
 from .use_cases.run_app import RunApp
@@ -185,6 +186,14 @@ class MonitorServices:
 
 
 @dataclass(frozen=True, slots=True)
+class JournalServices:
+    """What the server and the pages told the person (the console of every page)."""
+
+    read: ReadJournal
+    write: WriteJournal
+
+
+@dataclass(frozen=True, slots=True)
 class ApplicationServices:
     # settings / assets domains (M3)
     settings: SettingsServices
@@ -212,3 +221,5 @@ class ApplicationServices:
     apps: AppServices | None = None
     # The pictures nodes leave for pages. None answers every artifact request with 404.
     artifacts: ArtifactStore | None = None
+    # The journal behind the consoles; the routes answer 503 ``journal_unavailable`` while this is None.
+    journal: JournalServices | None = None

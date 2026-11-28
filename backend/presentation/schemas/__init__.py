@@ -12,3 +12,4 @@ from .memory import *  # noqa: F401,F403
 from .executions import *  # noqa: F401,F403
 from .graphs import *  # noqa: F401,F403
 from .apps import *  # noqa: F401,F403
+from .journal import *  # noqa: F401,F403

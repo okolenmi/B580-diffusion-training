@@ -6,19 +6,23 @@
      * the floating system console: a single resizable + draggable window
        that follows you across tabs, minimizable into a FAB at the bottom
        right corner. Its geometry and minimized state persist in
-       localStorage, so all tabs agree on it.
+       localStorage, so all tabs agree on it. What it shows is the
+       server's journal (console/), the same on every page and across
+       reloads.
 
    Contract with pages:
-     * load this module FIRST (before the page's view module), so
-       #console-output exists by the time anything logs. Views keep
-       writing into #console-output / .console-line -- unchanged.
+     * load this module FIRST (before the page's view module): it starts
+       the journal client that log() writes through.
      * body gets the `has-rail` class; layout offset is pure CSS
        (shell.css), pages never hardcode rail dimensions.
      * active rail item is derived from location.pathname -- no page
        passes anything.
 
-   No imports: this file must run standalone on every page.
+   Imports: only the console's own modules, which need nothing of any page.
 --------------------------------------------------------------------------- */
+
+import { ConsoleView } from "./console/console_view.js";
+import { CONSOLE_ATTENTION, journal } from "./console/journal_client.js";
 
 /* ---- icons (inline SVG: no font, no sprite fetch, no build step) -------- */
 
@@ -163,13 +167,7 @@ function saveGeometry(state) {
 }
 
 function logShell(message, kind = "info") {
-  const out = document.getElementById("console-output");
-  if (!out) return;
-  const line = document.createElement("div");
-  line.className = `console-line ${kind}`;
-  line.textContent = message;
-  out.appendChild(line);
-  out.scrollTop = out.scrollHeight;
+  journal.write(kind, message);
 }
 
 function mountConsole() {
@@ -178,12 +176,14 @@ function mountConsole() {
     `<div class="fconsole" id="fconsole" role="log" aria-label="System console">
        <div class="fconsole-head" id="fconsole-head">
          <span class="fconsole-title">System console</span>
+         <select class="fconsole-filter" id="fconsole-filter" aria-label="Show"></select>
+         <button class="fconsole-text-btn" id="fconsole-copy" type="button" title="Copy the lines shown">Copy</button>
+         <button class="fconsole-text-btn" id="fconsole-clear" type="button"
+                 title="Hide what is shown now; the history stays on the server">Clear</button>
          <button class="fconsole-btn" id="fconsole-min" type="button"
                  aria-label="Minimize console">–</button>
        </div>
-       <div class="console-lines" id="console-output">
-         <div class="console-line info">Ready.</div>
-       </div>
+       <div class="console-lines" id="console-output"></div>
      </div>
      <button class="fconsole-fab" id="fconsole-fab" type="button"
              aria-label="Show system console" hidden>${ICONS.terminal}</button>`,
@@ -193,6 +193,13 @@ function mountConsole() {
   const head = document.getElementById("fconsole-head");
   const minBtn = document.getElementById("fconsole-min");
   const fab = document.getElementById("fconsole-fab");
+
+  const view = new ConsoleView(
+    { lines: document.getElementById("console-output"), filter: document.getElementById("fconsole-filter"),
+      clear: document.getElementById("fconsole-clear"), copy: document.getElementById("fconsole-copy") },
+    { isOpen: () => !win.hidden, onUnread: (n) => { fab.dataset.unread = n ? String(Math.min(n, 99)) : ""; } },
+  );
+  journal.subscribe((batch, info) => view.add(batch, info));
 
   const state = Object.assign(
     { w: 440, h: 250, x: null, y: null, min: true },
@@ -237,12 +244,11 @@ function mountConsole() {
     state.min = false;
     apply();
     persist();
-    document.getElementById("console-output").scrollTop = 1e9;
+    view.seen();
   };
   fab.addEventListener("click", open);
   // An error line opens the docked console; an open one is left alone.
-  window.addEventListener("console:attention", // fired by lib/log.js (this file has no imports)
-     () => { if (state.min) open(); });
+  window.addEventListener(CONSOLE_ATTENTION, () => { if (state.min) open(); });
 
   /* drag by the header (the minimize button stays clickable).
      Start from the element's LIVE position, not persisted state: stored
@@ -299,3 +305,4 @@ function mountConsole() {
 
 mountRail();
 mountConsole();
+journal.start();

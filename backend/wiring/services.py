@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sys
 
+from ..application.services import JournalServices
+from ..application.use_cases.journal import ReadJournal, WriteJournal
 from ..application.use_cases.app_crud import DeleteApp, GetApp, ListApps, SaveApp, SaveAppGraph, SaveAppValues
 from ..application.use_cases.run_app import RunApp
 from ..application.services import (
@@ -85,6 +87,7 @@ def build_services(infra: Infrastructure, kit: GraphKit) -> ApplicationServices:
         memory_ledger=kit.memory_ledger,
         monitor=MonitorServices(subscribe=SubscribeMonitor(bus=infra.monitor_bus)),
         artifacts=FileArtifactStore(infra.layout.artifacts_dir),
+        journal=JournalServices(read=ReadJournal(infra.journal), write=WriteJournal(infra.journal)),
         apps=_apps(kit),
     )
 

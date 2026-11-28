@@ -253,8 +253,7 @@ export class Runs {
       }
       return;
     }
-    if (ev.type === "graph_execution_failed" && ev.error) this.onNote(`Run #${ev.execution_id} failed: ${ev.error}`, "error");
-    if (ev.type === "graph_execution_finished") this.onNote(`Run #${ev.execution_id} finished (${ev.nodes} nodes).`, "success");
+    // How a run began and ended is told in the console by the server's journal, once for every page.
     if (this._queued) return;
     this._queued = true;
     setTimeout(() => { this._queued = false; this.refresh(); }, 200);

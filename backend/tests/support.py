@@ -100,7 +100,11 @@ from backend.application.use_cases import (
     ValidateGraph,
 )
 from backend.domain.events import DomainEvent
+from backend.application.journal_listener import JournalListener
+from backend.application.services import JournalServices
+from backend.application.use_cases.journal import ReadJournal, WriteJournal
 from backend.infrastructure.events.callback_event_bus import CallbackEventBus
+from backend.infrastructure.file_journal import FileJournal
 from backend.infrastructure.file_asset_store import FileSystemAssetStore
 from backend.infrastructure.graph.contract_catalog import ContractNodeCatalog
 from backend.infrastructure.graph.next_starters import NextStarters
@@ -624,6 +628,8 @@ def build_services(
     # Unconditional: a caller that passes only ``graph_executions``
     # still needs the path defined (the old nested assignment left it
     # unbound and the first use raised NameError).
+    journal = FileJournal(project_root / "test-journal.jsonl")
+    events.subscribe(JournalListener(journal))
     graph_scratch = project_root / "test-graph-scratch"
     execution_metrics = FileExecutionMetrics(graph_scratch)
     # The test twin of bootstrap's peak store (MEM-04 #2): one store per
@@ -681,6 +687,7 @@ def build_services(
             memory_ledger=memory_ledger,
             peak_store=peak_store,
             monitor_bus=monitor_bus,
+            journal=journal,
             scratch_dir=graph_scratch,
             make_tail=ExecutionEventTail,
         )
@@ -737,6 +744,7 @@ def build_services(
             inspect=InspectAsset(assets=assets),
         ),
         artifacts=FileArtifactStore(project_root / "artifacts"),
+        journal=JournalServices(read=ReadJournal(journal), write=WriteJournal(journal)),
         apps=AppServices(
             describe=describe_modules,
             resolve=resolve_board,

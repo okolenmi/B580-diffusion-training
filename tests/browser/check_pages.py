@@ -147,13 +147,42 @@ def console_on_error(server, browser, dataset):
     check(page.visible("#fconsole"), "an open console stays as it is on the next error")
 
 
+def console_is_kept(server, browser):
+    """The console is the server's journal: a line stays after a reload, shows on other pages, and a run that failed says why without anyone being on its page."""
+    page = browser.new_page()
+    page.goto("/settings", settle_ms=1200)
+    server.api("POST", "/api/v1/journal", {"level": "warn", "text": "Disk almost full (kept-line)"})
+    page.page.wait_for_function("() => document.querySelector('#fconsole-fab')?.dataset.unread === '1'", timeout=10000)
+    check(True, "a warning that arrives while the console is docked is counted on its button")
+    page.page.click("#fconsole-fab")
+    check(page.wait_text("#fconsole", "kept-line"), "and is in the console when it is opened")
+    other = browser.new_page()
+    other.goto("/datasets", settle_ms=1500)
+    other.page.click("#fconsole-fab")
+    check(other.wait_text("#fconsole", "kept-line"), "another page, opened later, shows the same line (nothing was lost to the reload)")
+    graph = fixtures.image_graph(server.home, steps=3, width=68, out="doomed")  # a size the sampler refuses when the run is under way
+    server.api("POST", "/api/v1/graphs/run", {"graph": graph, "mode": "auto"})
+    idle(server)
+    told = other.wait_text("#fconsole", "multiple of 8", 30)
+    check(told, "a failed run is told in the console with its reason, on a page that did not start it" + ("" if told else f" (the journal holds {[e['text'] for e in server.api('GET', '/api/v1/journal?after=0')['entries']][-6:]}, the page shows {other.text('#console-output')[-300:]!r})"))
+    other.page.select_option("#fconsole-filter", "errors")
+    shown = other.page.locator("#console-output .console-line").all_inner_texts()
+    check(shown and not any("kept-line" in t or "server started" in t for t in shown) and any("multiple of 8" in t for t in shown), f"the filter keeps only errors ({shown})")
+    other.page.click("#fconsole-clear")
+    check("Nothing to show" in other.text("#console-output"), "Clear hides what is shown")
+    other.goto("/", settle_ms=1500)
+    if other.visible("#fconsole-fab"):
+        other.page.click("#fconsole-fab")
+    check("Nothing to show" in other.text("#console-output"), "and stays cleared after a reload")
+
+
 DATASET: list[str] = []
 
 
 def main() -> None:
     with TestServer() as server, Chromium(server.url) as browser:
         DATASET.append(fixtures.toy_dataset(server.home))
-        for part in (every_page_loads, start_page, settings_page, help_page, lambda s, b: datasets_grid(s, b, DATASET[0]), lambda s, b: console_on_error(s, b, DATASET[0])):
+        for part in (every_page_loads, start_page, settings_page, help_page, lambda s, b: datasets_grid(s, b, DATASET[0]), lambda s, b: console_on_error(s, b, DATASET[0]), console_is_kept):
             name = getattr(part, "__name__", "part")
             print(f"\n{name if name != '<lambda>' else 'datasets_grid / console_on_error'}")
             try:

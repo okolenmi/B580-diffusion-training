@@ -31,6 +31,7 @@ Hardware results are not guessed here: `TESTING.md` (root) lists what still has 
 
 - Event-trigger buttons in views (they need a control channel).
 - Block swap (denoiser blocks held on the host; Anima may need it, SDXL does not): no setting, no family block layout, no engine code (`internals/memory.md`, "Open").
+- Keeping a run's models loaded for the next run (an app waiting for its next image): every run is its own child process, so its denoiser shelf, VAE, encoders and kernel caches end with it (the page cache keeps the weight files warm, nothing more). Needs a standby worker that takes the next graph, accounted in the memory ledger and given up when the room is wanted; designed, not started (project doc `claude/warm-worker-design.md`).
 - Weights shared between processes: measured not possible with plain torch (`internals/parallel-runs.md`); every run holds its own copy.
 - Custom kernels for the frozen-weight path beyond what `xpu-kernels` provides (`internals/kernels.md`, `internals/capturable-attention.md`).
 

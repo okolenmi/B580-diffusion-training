@@ -193,7 +193,7 @@ g.selected > .g2-edge, .g2-edge.selected { stroke: var(--accent); stroke-width: 
 .inst-bar :is(#instance-title, #app-bar-title) { flex: 1; }
 #app-save.is-dirty { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 body.is-app-edit #library-section { display: none; }
-body.is-instance :is(.g2-canvas, #graph-settings, #inspector) :is(input, select, textarea, button) { pointer-events: none; opacity: 0.8; }
+body.is-instance :is(.g2-canvas, .gs-overlay, #inspector) :is(input, select, textarea, button) { pointer-events: none; opacity: 0.8; }
 body.is-instance .ed-palette .ed-scroll { opacity: 0.5; pointer-events: none; }
 
 /* ---- Build / Watch: one job at a time gets the whole window ---- */

@@ -149,9 +149,46 @@ def live_preview(server, browser):
     
 
 
+def settings_gear(server, browser):
+    """The graph's settings sit behind a gear in the corner of the canvas: an overlay with the settings, a dot for what differs from the default, Esc and a click outside close it."""
+    page = app_in_editor(server, browser, "gear", fixtures.image_graph(server.home, steps=3, out="gear-out"))
+    p = page.page
+    check(p.locator(".ed-right", has_text="Graph settings").count() == 0, "the settings are no longer a section of the right panel")
+    gear = p.locator(".gs-gear")
+    check(gear.is_visible() and p.locator(".gs-overlay").is_hidden(), "the gear is in sight and the overlay is closed")
+    corner = p.evaluate("() => { const c = document.querySelector('#g2-canvas').getBoundingClientRect(), g = document.querySelector('.gs-gear').getBoundingClientRect(); return [c.right - g.right, g.top - c.top]; }")
+    check(corner[0] < 30 and corner[1] < 30, f"the gear sits in the top right corner of the canvas ({corner})")
+    gear.click()
+    check(p.locator(".gs-overlay").is_visible(), "the gear opens the overlay")
+    box = p.evaluate("() => { const o = document.querySelector('.gs-overlay').getBoundingClientRect(), c = document.querySelector('#g2-canvas').getBoundingClientRect(); return o.bottom <= c.bottom + 1 && o.right <= c.right + 1 && o.left >= c.left; }")
+    check(box, "the overlay lies inside the canvas")
+    check(p.locator(".gs-overlay .gs-doc").count() > 0, "each setting says what it does in words under its control")
+    p.locator(".gs-overlay summary", has_text="Device").click()
+    select = p.locator(".gs-overlay .gs-row", has_text="Denoiser precision").locator("select")
+    base = int(p.locator(".gs-gear-dot").inner_text()) if p.locator(".gs-gear-dot").is_visible() else 0
+    check(base == p.locator(".gs-overlay .gs-row.is-changed").count() + 0 or base > 0, f"the settings the graph carries show on the gear ({base})")
+    row = p.locator(".gs-overlay .gs-row", has_text="Denoiser precision")
+    was_changed = row.evaluate("(e) => e.classList.contains('is-changed')")
+    select.select_option("fp16")
+    p.wait_for_timeout(200)
+    now = int(p.locator(".gs-gear-dot").inner_text())
+    check(now == base + (0 if was_changed else 1), f"a changed setting is counted on the gear ({base} -> {now})")
+    row = p.locator(".gs-overlay .gs-row", has_text="Denoiser precision")
+    check(row.evaluate("(e) => e.classList.contains('is-changed')"), "and its row is marked")
+    row.locator(".gs-reset").click()
+    p.wait_for_timeout(200)
+    check(not p.locator(".gs-overlay .gs-row", has_text="Denoiser precision").evaluate("(e) => e.classList.contains('is-changed')"),
+          "Reset puts the default back and clears the mark of that row alone")
+    p.keyboard.press("Escape")
+    check(p.locator(".gs-overlay").is_hidden(), "Esc closes the overlay")
+    gear.click()
+    p.mouse.click(300, 500)
+    check(p.locator(".gs-overlay").is_hidden(), "a click outside closes it")
+
+
 def main() -> None:
     with TestServer() as server, Chromium(server.url) as browser:
-        for part in (picture_and_size, live_preview, text_fields):
+        for part in (picture_and_size, live_preview, settings_gear, text_fields):
             print(f"\n{part.__name__}")
             try:
                 part(server, browser)

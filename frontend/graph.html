@@ -70,7 +70,10 @@
             <button id="app-save" class="btn btn-small" title="Write this graph into the app (Ctrl+S)">Save</button>
             <a id="app-back" class="btn btn-secondary btn-small" href="/apps" title="Back to the app's page">Back to the app</a>
         </div>
-        <div id="g2-canvas" class="ed-canvas g2-canvas"></div>
+        <div class="ed-stage">
+            <div id="g2-canvas" class="ed-canvas g2-canvas"></div>
+            <div id="graph-gear" class="gs-gear-root"></div>
+        </div>
         <details class="ed-section ed-monitor" id="monitor-section">
             <summary class="ed-section-head"><span>Monitor</span></summary>
             <div id="monitor"></div>
@@ -94,10 +97,6 @@
         <div class="ed-section">
             <div class="ed-section-head"><span>Memory</span></div>
             <div id="memory" class="ed-list"><div class="console-line info">Not checked yet.</div></div>
-        </div>
-        <div class="ed-section">
-            <div class="ed-section-head"><span>Graph settings</span></div>
-            <div id="graph-settings" class="gs-list"><div class="console-line info">Loading&hellip;</div></div>
         </div>
         <div class="ed-section ed-inspector-section">
             <div class="ed-section-head"><span>Inspector</span></div>

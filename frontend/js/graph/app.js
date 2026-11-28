@@ -26,7 +26,7 @@ import { InstanceView } from "./instance.js";
 import { Palette, QuickAdd, compatibleClasses } from "./palette.js";
 import { IssuesPanel, MemoryPanel } from "./panels.js";
 import { Runs } from "./runs.js";
-import { SettingsPanel } from "./settings_panel.js";
+import { SettingsGear } from "./settings_gear.js";
 import { ShapeStore } from "./shapes.js";
 import { StarterDialog } from "./starters.js";
 
@@ -172,7 +172,7 @@ async function boot() {
   });
 
   new Palette(el("palette"), el("palette-search"), { shapes, onAdd: addAtCenter }).render();
-  new SettingsPanel(el("graph-settings"), doc, catalog.settings || [], { note: log });
+  new SettingsGear(el("graph-gear"), doc, catalog.settings || [], { note: log });
 
   const issues = new IssuesPanel(el("issues"), { onFocus: (uid) => canvas.focusNode(uid) });
   monitor = new Monitor(el("monitor"), doc, shapes, { live });
